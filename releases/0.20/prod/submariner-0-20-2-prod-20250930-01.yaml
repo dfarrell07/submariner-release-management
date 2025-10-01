@@ -1,0 +1,21 @@
+---
+apiVersion: appstudio.redhat.com/v1alpha1
+kind: Release
+metadata:
+  name: submariner-0-20-2-prod-20250930-01
+  namespace: submariner-tenant
+  labels:
+    release.appstudio.openshift.io/author: 'dfarrell07'
+spec:
+  releasePlan: submariner-release-plan-prod-0-20
+  snapshot: submariner-0-20-sdprc
+  data:
+    releaseNotes:
+      type: RHSA
+      issues:
+        fixed:
+          - id: ACM-22805
+            source: issues.redhat.com
+      cves:
+        - key: CVE-2025-47950
+          component: lighthouse-coredns-0-20
