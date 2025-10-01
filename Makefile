@@ -1,4 +1,4 @@
-.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references apply watch
+.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images apply watch
 
 .DEFAULT_GOAL := help
 
@@ -14,10 +14,13 @@ help:
 
 test: validate-yaml validate-fields validate-data
 
-test-remote: test validate-references
+test-remote: test validate-references validate-bundle-images
 
 validate-references:
 	./scripts/validate-release-references.sh
+
+validate-bundle-images:
+	./scripts/validate-bundle-images.sh
 
 validate-yaml:
 	yamllint .
