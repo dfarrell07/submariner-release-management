@@ -8,43 +8,50 @@ validate_file() {
   echo "Validating data formats in $file..."
 
   # Get advisory type
-  type=$(yq -e '.spec.data.releaseNotes.type' "$file")
+  advisory_type=$(yq '.spec.data.releaseNotes.type' "$file")
 
   # If CVEs exist, validate format
   if yq -e '.spec.data.releaseNotes.cves | length > 0' "$file" &>/dev/null; then
-    # Validate CVE format: CVE-YYYY-NNNNN
-    cves=$(yq -e '.spec.data.releaseNotes.cves[].key' "$file")
-    for cve in $cves; do
+    cve_count=$(yq '.spec.data.releaseNotes.cves | length' "$file")
+
+    for i in $(seq 0 $((cve_count - 1))); do
+      cve=$(yq ".spec.data.releaseNotes.cves[$i].key" "$file")
+      component=$(yq ".spec.data.releaseNotes.cves[$i].component" "$file")
+
+      # Validate CVE format: CVE-YYYY-NNNNN
       if ! [[ "$cve" =~ ^CVE-[0-9]{4}-[0-9]{4,}$ ]]; then
         echo "ERROR: Invalid CVE format '$cve' (expected CVE-YYYY-NNNNN)"
         exit 1
       fi
-    done
 
-    # Validate components have version suffix: -X-Y
-    components=$(yq -e '.spec.data.releaseNotes.cves[].component' "$file")
-    for comp in $components; do
-      if ! [[ "$comp" =~ -[0-9]+-[0-9]+$ ]]; then
-        echo "ERROR: Component '$comp' missing version suffix (expected -X-Y)"
+      # Validate component has version suffix: -X-Y
+      if ! [[ "$component" =~ -[0-9]+-[0-9]+$ ]]; then
+        echo "ERROR: Component '$component' missing version suffix (expected -X-Y)"
         exit 1
       fi
+
+      # Extract version suffix for display
+      version_suffix=$(echo "$component" | grep -oP -- '-[0-9]+-[0-9]+$')
+      echo "  ✓ $cve ($component with suffix $version_suffix)"
     done
   fi
 
   # RHSA must have at least one CVE
-  if [[ "$type" == "RHSA" ]]; then
+  if [[ "$advisory_type" == "RHSA" ]]; then
     if ! yq -e '.spec.data.releaseNotes.cves | length > 0' "$file" &>/dev/null; then
       echo "ERROR: RHSA advisory must have at least one CVE"
       exit 1
     fi
+    echo "  ✓ RHSA has required CVE(s)"
   fi
 
   # If issues exist, validate format
   if yq -e '.spec.data.releaseNotes.issues.fixed | length > 0' "$file" &>/dev/null; then
-    count=$(yq -e '.spec.data.releaseNotes.issues.fixed | length' "$file")
-    for i in $(seq 0 $((count - 1))); do
-      id=$(yq -e ".spec.data.releaseNotes.issues.fixed[$i].id" "$file")
-      source=$(yq -e ".spec.data.releaseNotes.issues.fixed[$i].source" "$file")
+    issue_count=$(yq '.spec.data.releaseNotes.issues.fixed | length' "$file")
+
+    for i in $(seq 0 $((issue_count - 1))); do
+      id=$(yq ".spec.data.releaseNotes.issues.fixed[$i].id" "$file")
+      source=$(yq ".spec.data.releaseNotes.issues.fixed[$i].source" "$file")
 
       if [[ "$source" == "issues.redhat.com" ]]; then
         # Jira format: PROJECT-NNNNN
@@ -52,12 +59,14 @@ validate_file() {
           echo "ERROR: Invalid Jira ID '$id' (expected PROJECT-NNNNN)"
           exit 1
         fi
+        echo "  ✓ $id (Jira format valid)"
       elif [[ "$source" == "bugzilla.redhat.com" ]]; then
         # Bugzilla format: numeric only
         if ! [[ "$id" =~ ^[0-9]+$ ]]; then
           echo "ERROR: Invalid Bugzilla ID '$id' (expected numeric)"
           exit 1
         fi
+        echo "  ✓ $id (Bugzilla format valid)"
       else
         echo "ERROR: Unknown issue source '$source' (expected issues.redhat.com or bugzilla.redhat.com)"
         exit 1
