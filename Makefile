@@ -1,16 +1,18 @@
-.PHONY: help validate validate-remote validate-yaml validate-fields validate-data validate-references
+.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references
+
+.DEFAULT_GOAL := help
 
 help:
 	@echo "Available targets:"
-	@echo "  make validate        - Run local validations (no cluster access needed)"
-	@echo "  make validate-remote - Run all validations including cluster checks (requires oc login)"
+	@echo "  make test            - Run local validations (no cluster access needed)"
+	@echo "  make test-remote     - Run all validations including cluster checks (requires oc login)"
 	@echo "  make validate-yaml   - YAML syntax only"
 	@echo "  make validate-fields - Release CRD fields only"
 	@echo "  make validate-data   - Data formats only"
 
-validate: validate-yaml validate-fields validate-data
+test: validate-yaml validate-fields validate-data
 
-validate-remote: validate validate-references
+test-remote: test validate-references
 
 validate-references:
 	./scripts/validate-release-references.sh
