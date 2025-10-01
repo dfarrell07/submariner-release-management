@@ -9,6 +9,10 @@ validate_file() {
 
   # Get advisory type
   advisory_type=$(yq '.spec.data.releaseNotes.type' "$file")
+  if [[ -z "$advisory_type" || "$advisory_type" == "null" ]]; then
+    echo "ERROR: releaseNotes.type is missing"
+    exit 1
+  fi
 
   # If CVEs exist, validate format
   if yq -e '.spec.data.releaseNotes.cves | length > 0' "$file" &>/dev/null; then
@@ -16,7 +20,16 @@ validate_file() {
 
     for i in $(seq 0 $((cve_count - 1))); do
       cve=$(yq ".spec.data.releaseNotes.cves[$i].key" "$file")
+      if [[ -z "$cve" || "$cve" == "null" ]]; then
+        echo "ERROR: CVE at index $i is missing 'key' field"
+        exit 1
+      fi
+
       component=$(yq ".spec.data.releaseNotes.cves[$i].component" "$file")
+      if [[ -z "$component" || "$component" == "null" ]]; then
+        echo "ERROR: CVE at index $i is missing 'component' field"
+        exit 1
+      fi
 
       # Validate CVE format: CVE-YYYY-NNNNN
       if ! [[ "$cve" =~ ^CVE-[0-9]{4}-[0-9]{4,}$ ]]; then
@@ -51,7 +64,16 @@ validate_file() {
 
     for i in $(seq 0 $((issue_count - 1))); do
       id=$(yq ".spec.data.releaseNotes.issues.fixed[$i].id" "$file")
+      if [[ -z "$id" || "$id" == "null" ]]; then
+        echo "ERROR: Issue at index $i is missing 'id' field"
+        exit 1
+      fi
+
       source=$(yq ".spec.data.releaseNotes.issues.fixed[$i].source" "$file")
+      if [[ -z "$source" || "$source" == "null" ]]; then
+        echo "ERROR: Issue at index $i is missing 'source' field"
+        exit 1
+      fi
 
       if [[ "$source" == "issues.redhat.com" ]]; then
         # Jira format: PROJECT-NNNNN
