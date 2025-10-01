@@ -8,9 +8,23 @@ validate_file() {
   echo "Validating references in $file..."
 
   # Extract values
-  namespace=$(yq -e '.metadata.namespace' "$file")
-  snapshot=$(yq -e '.spec.snapshot' "$file")
-  releaseplan=$(yq -e '.spec.releasePlan' "$file")
+  namespace=$(yq '.metadata.namespace' "$file")
+  if [[ -z "$namespace" || "$namespace" == "null" ]]; then
+    echo "ERROR: metadata.namespace is missing"
+    exit 1
+  fi
+
+  snapshot=$(yq '.spec.snapshot' "$file")
+  if [[ -z "$snapshot" || "$snapshot" == "null" ]]; then
+    echo "ERROR: spec.snapshot is missing"
+    exit 1
+  fi
+
+  releaseplan=$(yq '.spec.releasePlan' "$file")
+  if [[ -z "$releaseplan" || "$releaseplan" == "null" ]]; then
+    echo "ERROR: spec.releasePlan is missing"
+    exit 1
+  fi
 
   # Verify snapshot exists
   if ! oc get snapshot "$snapshot" -n "$namespace" &>/dev/null; then
@@ -22,9 +36,9 @@ validate_file() {
   # Check snapshot test status
   test_status=$(oc get snapshot "$snapshot" -n "$namespace" -o jsonpath='{.metadata.annotations.test\.appstudio\.openshift\.io/status}' 2>/dev/null || echo "")
   if [[ -n "$test_status" ]]; then
-    failed_tests=$(echo "$test_status" | jq -r '.[] | select(.status != "TestPassed") | .scenario' 2>/dev/null || echo "")
-    if [[ -n "$failed_tests" ]]; then
-      echo "  ⚠ Snapshot has failed tests: $failed_tests"
+    failed_count=$(echo "$test_status" | jq '[.[] | select(.status != "TestPassed")] | length' 2>/dev/null || echo "0")
+    if [[ "$failed_count" -gt 0 ]]; then
+      echo "  ⚠ Snapshot has $failed_count failed test(s)"
     else
       test_count=$(echo "$test_status" | jq '. | length' 2>/dev/null)
       echo "  ✓ Snapshot tests: $test_count passed"
@@ -39,8 +53,18 @@ validate_file() {
   echo "  ✓ ReleasePlan found: $releaseplan"
 
   # Verify releasePlan application matches snapshot application
-  rp_app=$(oc get releaseplan "$releaseplan" -n "$namespace" -o jsonpath='{.spec.application}')
-  snap_app=$(oc get snapshot "$snapshot" -n "$namespace" -o jsonpath='{.metadata.labels.appstudio\.openshift\.io/application}')
+  rp_app=$(oc get releaseplan "$releaseplan" -n "$namespace" -o jsonpath='{.spec.application}' 2>/dev/null)
+  if [[ -z "$rp_app" ]]; then
+    echo "ERROR: ReleasePlan '$releaseplan' missing spec.application field"
+    exit 1
+  fi
+
+  snap_app=$(oc get snapshot "$snapshot" -n "$namespace" -o jsonpath='{.metadata.labels.appstudio\.openshift\.io/application}' 2>/dev/null)
+  if [[ -z "$snap_app" ]]; then
+    echo "ERROR: Snapshot '$snapshot' missing application label"
+    exit 1
+  fi
+
   if [[ "$rp_app" != "$snap_app" ]]; then
     echo "ERROR: ReleasePlan application '$rp_app' does not match snapshot application '$snap_app'"
     exit 1
@@ -48,7 +72,12 @@ validate_file() {
   echo "  ✓ Application match: $rp_app"
 
   # Verify target namespace exists
-  target=$(oc get releaseplan "$releaseplan" -n "$namespace" -o jsonpath='{.spec.target}')
+  target=$(oc get releaseplan "$releaseplan" -n "$namespace" -o jsonpath='{.spec.target}' 2>/dev/null)
+  if [[ -z "$target" ]]; then
+    echo "ERROR: ReleasePlan '$releaseplan' missing spec.target field"
+    exit 1
+  fi
+
   if ! oc get namespace "$target" &>/dev/null; then
     echo "ERROR: Target namespace '$target' does not exist"
     exit 1
@@ -56,7 +85,7 @@ validate_file() {
   echo "  ✓ Target namespace exists: $target"
 
   # Verify ReleasePlanAdmission exists in target namespace
-  rpa_name=$(oc get releaseplan "$releaseplan" -n "$namespace" -o jsonpath='{.metadata.labels.release\.appstudio\.openshift\.io/releasePlanAdmission}')
+  rpa_name=$(oc get releaseplan "$releaseplan" -n "$namespace" -o jsonpath='{.metadata.labels.release\.appstudio\.openshift\.io/releasePlanAdmission}' 2>/dev/null)
   if [[ -n "$rpa_name" ]]; then
     if ! oc get releaseplanadmission "$rpa_name" -n "$target" &>/dev/null; then
       echo "ERROR: ReleasePlanAdmission '$rpa_name' not found in namespace '$target'"
