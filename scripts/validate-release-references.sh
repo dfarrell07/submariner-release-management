@@ -40,7 +40,7 @@ validate_file() {
     if [[ "$failed_count" -gt 0 ]]; then
       echo "  ⚠ Snapshot has $failed_count failed test(s)"
     else
-      test_count=$(echo "$test_status" | jq '. | length' 2>/dev/null)
+      test_count=$(echo "$test_status" | jq '. | length' 2>/dev/null || echo "unknown")
       echo "  ✓ Snapshot tests: $test_count passed"
     fi
   fi
