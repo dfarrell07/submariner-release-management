@@ -38,4 +38,37 @@ apply: test-remote
 
 watch:
 	@test -n "$(NAME)" || (echo "ERROR: NAME parameter required. Usage: make watch NAME=submariner-0-20-2-stage-..." && exit 1)
-	oc get release "$(NAME)" -n submariner-tenant -w
+	@echo "Watching Release '$(NAME)' in submariner-tenant namespace..."
+	@echo "Press Ctrl+C to exit"
+	@echo ""
+	@while true; do \
+		clear; \
+		echo "=== Release Status ==="; \
+		oc get release "$(NAME)" -n submariner-tenant -o yaml | yq '.status' 2>/dev/null || echo "No status yet"; \
+		echo ""; \
+		echo "=== Latest Conditions ==="; \
+		oc get release "$(NAME)" -n submariner-tenant -o json 2>/dev/null | jq -r '.status.conditions[]? | "\(.lastTransitionTime) \(.type): \(.status) - \(.reason): \(.message)"' | tail -5 || echo "No conditions yet"; \
+		echo ""; \
+		echo "=== Release Pipeline ==="; \
+		PIPELINE_RUN_FULL=$$(oc get release "$(NAME)" -n submariner-tenant -o jsonpath='{.status.managedProcessing.pipelineRun}' 2>/dev/null); \
+		if [ -n "$$PIPELINE_RUN_FULL" ]; then \
+			echo "PipelineRun: $$PIPELINE_RUN_FULL"; \
+			START_TIME=$$(oc get release "$(NAME)" -n submariner-tenant -o jsonpath='{.status.managedProcessing.startTime}' 2>/dev/null); \
+			echo "Started: $$START_TIME"; \
+			RELEASE_STATUS=$$(oc get release "$(NAME)" -n submariner-tenant -o json 2>/dev/null | jq -r '.status.conditions[] | select(.type == "Released") | .reason' 2>/dev/null); \
+			if [ "$$RELEASE_STATUS" = "Succeeded" ]; then \
+				echo "Status: Succeeded"; \
+			elif [ "$$RELEASE_STATUS" = "Failed" ]; then \
+				echo "Status: Failed"; \
+				FAILURE_MSG=$$(oc get release "$(NAME)" -n submariner-tenant -o json 2>/dev/null | jq -r '.status.conditions[] | select(.type == "Released") | .message' 2>/dev/null); \
+				echo "Message: $$FAILURE_MSG"; \
+			else \
+				echo "Status: Running"; \
+			fi; \
+		else \
+			echo "No pipeline run yet"; \
+		fi; \
+		echo ""; \
+		echo "Last updated: $$(date)"; \
+		sleep 5; \
+	done
