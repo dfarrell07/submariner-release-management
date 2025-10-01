@@ -18,6 +18,7 @@ validate_file() {
 
   if [[ -z "$bundle_image" ]]; then
     echo "WARNING: No operator bundle component found in snapshot"
+    rm -rf "$tmpdir"
     return
   fi
 
@@ -102,14 +103,14 @@ validate_file() {
       echo "  Expected: Component '$csv_component' with SHA $csv_sha"
 
       # Show what snapshot has for this component
-      component_in_snapshot=$(grep -i "$csv_component" "$tmpdir/snapshot_components.txt" || echo "")
+      component_in_snapshot=$(grep -i "$normalized_component" "$tmpdir/snapshot_components.txt" || echo "")
       if [[ -n "$component_in_snapshot" ]]; then
         snapshot_name=$(echo "$component_in_snapshot" | cut -d'|' -f1)
         snapshot_image=$(echo "$component_in_snapshot" | cut -d'|' -f2)
         snapshot_sha=$(echo "$snapshot_image" | grep -oP 'sha256:[a-f0-9]+')
         echo "  Snapshot: $snapshot_name has SHA $snapshot_sha"
       else
-        echo "  Snapshot: No component matching '$csv_component' found"
+        echo "  Snapshot: No component matching '$normalized_component' found"
       fi
 
       errors=$((errors + 1))
