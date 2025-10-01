@@ -20,3 +20,6 @@ jobs:
 
       - name: Release CRD fields
         run: ./scripts/validate-release-fields.sh
+
+      - name: Data formats
+        run: ./scripts/validate-release-data.sh
