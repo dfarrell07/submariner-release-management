@@ -107,7 +107,7 @@ validate_file() {
 
     # Extract component identifier from CSV image path
     # Match common patterns: lighthouse-*, submariner-*, route-agent, nettest, subctl
-    csv_component=$(echo "$csv_image" | grep -oP '(lighthouse-coredns|lighthouse-agent|submariner-gateway|submariner-globalnet|submariner-route-agent|submariner-networkplugin-syncer|submariner-rhel9-operator|nettest|subctl)' | head -1)
+    csv_component=$(echo "$csv_image" | grep -oP '(lighthouse-coredns|lighthouse-agent|submariner-gateway|submariner-globalnet|submariner-route-agent|submariner-networkplugin-syncer|submariner-rhel9-operator|nettest|subctl)' | head -1 || echo "")
 
     if [[ -z "$csv_component" ]]; then
       echo "  ⚠ Cannot identify component from CSV image: $csv_image"
@@ -121,7 +121,7 @@ validate_file() {
     normalized_component=$(echo "$csv_component" | sed 's/-rhel9-operator/-operator/' | sed 's/-rhel9//')
 
     # Find matching snapshot component
-    snapshot_match=$(grep -i "$normalized_component" "$tmpdir/snapshot_components.txt" | grep "$csv_sha" || echo "")
+    snapshot_match=$(grep -i "$normalized_component" "$tmpdir/snapshot_components.txt" | head -1 | grep -F "$csv_sha" || echo "")
 
     if [[ -z "$snapshot_match" ]]; then
       echo "ERROR: CSV image SHA mismatch for component '$csv_component'"
@@ -129,7 +129,7 @@ validate_file() {
       echo "  Expected: Component '$csv_component' with SHA $csv_sha"
 
       # Show what snapshot has for this component
-      component_in_snapshot=$(grep -i "$normalized_component" "$tmpdir/snapshot_components.txt" || echo "")
+      component_in_snapshot=$(grep -i "$normalized_component" "$tmpdir/snapshot_components.txt" | head -1 || echo "")
       if [[ -n "$component_in_snapshot" ]]; then
         snapshot_name=$(echo "$component_in_snapshot" | cut -d'|' -f1)
         snapshot_image=$(echo "$component_in_snapshot" | cut -d'|' -f2)
