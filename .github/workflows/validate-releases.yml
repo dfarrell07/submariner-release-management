@@ -3,6 +3,8 @@ name: Validate Releases
 
 'on':
   push:
+    branches:
+      - main
   pull_request:
 
 jobs:
