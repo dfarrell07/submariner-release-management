@@ -27,17 +27,17 @@ validate_file() {
   tmpdir=$(mktemp -d)
   trap "rm -rf $tmpdir" EXIT
 
-  # Extract all snapshot component SHAs (excluding bundles)
-  echo "$snapshot_json" | jq -r '.spec.components[] | select(.name | contains("bundle") | not) | .containerImage' | \
-    grep -oP 'sha256:[a-f0-9]+' | sort -u > "$tmpdir/snapshot_shas.txt"
+  # Extract snapshot component name->SHA mapping (excluding bundles)
+  echo "$snapshot_json" | jq -r '.spec.components[] | select(.name | contains("bundle") | not) | "\(.name)|\(.containerImage)"' > "$tmpdir/snapshot_components.txt"
 
-  snapshot_sha_count=$(wc -l < "$tmpdir/snapshot_shas.txt")
-  echo "  Snapshot has $snapshot_sha_count component SHAs"
+  snapshot_count=$(wc -l < "$tmpdir/snapshot_components.txt")
+  echo "  Snapshot has $snapshot_count components"
 
   # Extract bundle manifests
   mkdir -p "$tmpdir/manifests"
   if ! oc image extract "$bundle_image" --path=/manifests/:$tmpdir/manifests/ 2>/dev/null; then
     echo "ERROR: Failed to extract bundle image"
+    rm -rf "$tmpdir"
     exit 1
   fi
 
@@ -45,47 +45,86 @@ validate_file() {
   csv_file=$(find "$tmpdir/manifests" -type f -name '*.clusterserviceversion.yaml' | head -1)
   if [[ -z "$csv_file" ]]; then
     echo "ERROR: No ClusterServiceVersion found in bundle"
+    rm -rf "$tmpdir"
     exit 1
   fi
 
   echo "  CSV: $(basename "$csv_file")"
 
-  # Extract all image SHAs from CSV
-  yq -r '
-    [.spec.relatedImages[]?.image,
-     .spec.install.spec.deployments[]?.spec.template.spec.containers[]?.image,
-     .spec.install.spec.deployments[]?.spec.template.spec.initContainers[]?.image
-    ] | .[] | select(. != null)' "$csv_file" 2>/dev/null | \
-    grep -oP 'sha256:[a-f0-9]+' | sort -u > "$tmpdir/csv_shas.txt"
+  # Extract all images from CSV
+  {
+    yq '.spec.relatedImages[].image' "$csv_file" 2>/dev/null
+    yq '.spec.install.spec.deployments[].spec.template.spec.containers[].image' "$csv_file" 2>/dev/null
+    yq '.spec.install.spec.deployments[].spec.template.spec.initContainers[].image' "$csv_file" 2>/dev/null
+  } | sort -u > "$tmpdir/csv_images.txt"
 
-  csv_sha_count=$(wc -l < "$tmpdir/csv_shas.txt")
+  csv_image_count=$(wc -l < "$tmpdir/csv_images.txt")
 
-  if [[ $csv_sha_count -eq 0 ]]; then
-    echo "WARNING: No image SHAs found in CSV"
+  if [[ $csv_image_count -eq 0 ]]; then
+    echo "WARNING: No images found in CSV"
+    rm -rf "$tmpdir"
     return
   fi
 
-  echo "  CSV has $csv_sha_count image SHAs"
+  echo "  CSV has $csv_image_count images"
 
-  # Check for SHAs in CSV that are not in snapshot
-  missing=$(comm -23 "$tmpdir/csv_shas.txt" "$tmpdir/snapshot_shas.txt")
+  # Validate each CSV image matches a snapshot component
+  errors=0
+  while IFS= read -r csv_image; do
+    # Extract SHA from CSV image
+    csv_sha=$(echo "$csv_image" | grep -oP 'sha256:[a-f0-9]+' || echo "")
 
-  if [[ -n "$missing" ]]; then
-    echo "ERROR: CSV references SHAs not found in snapshot:"
-    while IFS= read -r sha; do
-      # Find which CSV image has this SHA
-      img=$(yq -r '
-        [.spec.relatedImages[]?.image,
-         .spec.install.spec.deployments[]?.spec.template.spec.containers[]?.image,
-         .spec.install.spec.deployments[]?.spec.template.spec.initContainers[]?.image
-        ] | .[] | select(. != null)' "$csv_file" 2>/dev/null | grep "$sha" | head -1)
-      echo "    $sha"
-      [[ -n "$img" ]] && echo "      from: $img"
-    done <<< "$missing"
+    if [[ -z "$csv_sha" ]]; then
+      echo "WARNING: CSV image has no SHA digest: $csv_image"
+      continue
+    fi
+
+    # Extract component identifier from CSV image path
+    # Match common patterns: lighthouse-*, submariner-*, route-agent, nettest, subctl
+    csv_component=$(echo "$csv_image" | grep -oP '(lighthouse-coredns|lighthouse-agent|submariner-gateway|submariner-globalnet|submariner-route-agent|submariner-networkplugin-syncer|submariner-rhel9-operator|nettest|subctl)' | head -1)
+
+    if [[ -z "$csv_component" ]]; then
+      echo "WARNING: Cannot identify component from CSV image: $csv_image"
+      continue
+    fi
+
+    # Normalize component name for matching
+    # CSV: "submariner-rhel9-operator" -> snapshot: "submariner-operator-0-20"
+    # CSV: "submariner-route-agent" -> snapshot: "submariner-route-agent-0-20"
+    normalized_component=$(echo "$csv_component" | sed 's/-rhel9-operator/-operator/' | sed 's/-rhel9//')
+
+    # Find matching snapshot component
+    snapshot_match=$(grep -i "$normalized_component" "$tmpdir/snapshot_components.txt" | grep "$csv_sha" || echo "")
+
+    if [[ -z "$snapshot_match" ]]; then
+      echo "ERROR: CSV image SHA mismatch for component '$csv_component'"
+      echo "  CSV:      $csv_image"
+      echo "  Expected: Component '$csv_component' with SHA $csv_sha"
+
+      # Show what snapshot has for this component
+      component_in_snapshot=$(grep -i "$csv_component" "$tmpdir/snapshot_components.txt" || echo "")
+      if [[ -n "$component_in_snapshot" ]]; then
+        snapshot_name=$(echo "$component_in_snapshot" | cut -d'|' -f1)
+        snapshot_image=$(echo "$component_in_snapshot" | cut -d'|' -f2)
+        snapshot_sha=$(echo "$snapshot_image" | grep -oP 'sha256:[a-f0-9]+')
+        echo "  Snapshot: $snapshot_name has SHA $snapshot_sha"
+      else
+        echo "  Snapshot: No component matching '$csv_component' found"
+      fi
+
+      errors=$((errors + 1))
+    fi
+  done < "$tmpdir/csv_images.txt"
+
+  if [[ $errors -gt 0 ]]; then
+    echo ""
+    echo "ERROR: Found $errors image mismatches between CSV and snapshot"
+    rm -rf "$tmpdir"
     exit 1
   fi
 
-  echo "✓ All $csv_sha_count bundle image SHAs exist in snapshot"
+  echo "✓ All $csv_image_count CSV images match snapshot components"
+  rm -rf "$tmpdir"
 }
 
 # Main
