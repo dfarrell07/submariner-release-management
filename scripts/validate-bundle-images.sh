@@ -13,6 +13,10 @@ validate_file() {
   # Get snapshot from cluster
   snapshot_json=$(oc get snapshot "$snapshot" -n "$namespace" -o json)
 
+  # Create temp directory
+  tmpdir=$(mktemp -d)
+  trap "rm -rf $tmpdir" EXIT
+
   # Find operator bundle component (exclude FBC)
   bundle_image=$(echo "$snapshot_json" | jq -r '.spec.components[] | select(.name | (contains("bundle") and (contains("fbc") | not))) | .containerImage' | head -1)
 
@@ -23,10 +27,6 @@ validate_file() {
   fi
 
   echo "  Bundle: $bundle_image"
-
-  # Create temp directory
-  tmpdir=$(mktemp -d)
-  trap "rm -rf $tmpdir" EXIT
 
   # Extract snapshot component name->SHA mapping (excluding bundles)
   echo "$snapshot_json" | jq -r '.spec.components[] | select(.name | contains("bundle") | not) | "\(.name)|\(.containerImage)"' > "$tmpdir/snapshot_components.txt"
