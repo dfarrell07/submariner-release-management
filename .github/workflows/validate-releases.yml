@@ -1,0 +1,22 @@
+---
+name: Validate Releases
+
+'on':
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          url=https://github.com/mikefarah/yq/releases/latest/download
+          sudo wget -qO /usr/bin/yq ${url}/yq_linux_amd64
+          sudo chmod +x /usr/bin/yq
+
+      - name: Release CRD fields
+        run: ./scripts/validate-release-fields.sh
