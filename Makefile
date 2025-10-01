@@ -5,8 +5,8 @@
 help:
 	@echo "Available targets:"
 	@echo "  make test            - Run local validations (no cluster access needed)"
-	@echo "  make test-remote     - Run all validations including cluster checks (requires oc login)"
-	@echo "  make apply FILE=...  - Apply release YAML to cluster (requires oc login)"
+	@echo "  make test-remote     - Run all validations including cluster checks and bundle images (requires oc login)"
+	@echo "  make apply FILE=...  - Validate and apply release YAML to cluster (requires oc login)"
 	@echo "  make watch NAME=...  - Watch release status (requires oc login)"
 	@echo "  make validate-yaml   - YAML syntax only"
 	@echo "  make validate-fields - Release CRD fields only"
@@ -31,11 +31,11 @@ validate-fields:
 validate-data:
 	./scripts/validate-release-data.sh
 
-apply:
+apply: test-remote
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make apply FILE=releases/0.20/stage/..." && exit 1)
 	@test -f "$(FILE)" || (echo "ERROR: File '$(FILE)' not found" && exit 1)
-	oc apply -n submariner-tenant -f $(FILE)
+	oc apply -n submariner-tenant -f "$(FILE)"
 
 watch:
 	@test -n "$(NAME)" || (echo "ERROR: NAME parameter required. Usage: make watch NAME=submariner-0-20-2-stage-..." && exit 1)
-	oc get release $(NAME) -n submariner-tenant -w
+	oc get release "$(NAME)" -n submariner-tenant -w
