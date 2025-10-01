@@ -71,12 +71,13 @@ validate_file() {
 
   # Validate each CSV image matches a snapshot component
   errors=0
+  matched=0
   while IFS= read -r csv_image; do
     # Extract SHA from CSV image
     csv_sha=$(echo "$csv_image" | grep -oP 'sha256:[a-f0-9]+' || echo "")
 
     if [[ -z "$csv_sha" ]]; then
-      echo "WARNING: CSV image has no SHA digest: $csv_image"
+      echo "  ⚠ CSV image has no SHA digest: $csv_image"
       continue
     fi
 
@@ -85,7 +86,7 @@ validate_file() {
     csv_component=$(echo "$csv_image" | grep -oP '(lighthouse-coredns|lighthouse-agent|submariner-gateway|submariner-globalnet|submariner-route-agent|submariner-networkplugin-syncer|submariner-rhel9-operator|nettest|subctl)' | head -1)
 
     if [[ -z "$csv_component" ]]; then
-      echo "WARNING: Cannot identify component from CSV image: $csv_image"
+      echo "  ⚠ Cannot identify component from CSV image: $csv_image"
       continue
     fi
 
@@ -114,6 +115,12 @@ validate_file() {
       fi
 
       errors=$((errors + 1))
+    else
+      # Extract snapshot component name for display
+      snapshot_name=$(echo "$snapshot_match" | cut -d'|' -f1)
+      short_sha=$(echo "$csv_sha" | cut -c1-15)
+      echo "  ✓ $normalized_component: $short_sha matches $snapshot_name"
+      matched=$((matched + 1))
     fi
   done < "$tmpdir/csv_images.txt"
 
@@ -124,7 +131,7 @@ validate_file() {
     exit 1
   fi
 
-  echo "✓ All $csv_image_count CSV images match snapshot components"
+  echo "✓ All $matched CSV images match snapshot components"
   rm -rf "$tmpdir"
 }
 
