@@ -19,7 +19,7 @@ jobs:
           sudo chmod +x /usr/bin/yq
 
       - name: Release CRD fields
-        run: ./scripts/validate-release-fields.sh
+        run: make validate-fields
 
       - name: Data formats
-        run: ./scripts/validate-release-data.sh
+        run: make validate-data
