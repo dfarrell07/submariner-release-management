@@ -1,6 +1,9 @@
-.PHONY: validate validate-yaml validate-fields validate-data
+.PHONY: validate validate-yaml validate-fields validate-data validate-references
 
 validate: validate-yaml validate-fields validate-data
+
+validate-references:
+	./scripts/validate-release-references.sh
 
 validate-yaml:
 	yamllint .
