@@ -37,7 +37,7 @@ validate_file() {
   # Find operator bundle component (exclude FBC)
   bundle_image=$(echo "$snapshot_json" | jq -r '.spec.components[] | select(.name | (contains("bundle") and (contains("fbc") | not))) | .containerImage' | head -1)
 
-  if [[ -z "$bundle_image" ]]; then
+  if [[ -z "$bundle_image" || "$bundle_image" == "null" ]]; then
     echo "WARNING: No operator bundle component found in snapshot"
     rm -rf "$tmpdir"
     return
