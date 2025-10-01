@@ -7,11 +7,28 @@ validate_file() {
   local file=$1
   echo "Validating bundle images in $file..."
 
-  namespace=$(yq -e '.metadata.namespace' "$file")
-  snapshot=$(yq -e '.spec.snapshot' "$file")
+  namespace=$(yq '.metadata.namespace' "$file")
+  if [[ -z "$namespace" || "$namespace" == "null" ]]; then
+    echo "ERROR: metadata.namespace is missing"
+    exit 1
+  fi
+
+  snapshot=$(yq '.spec.snapshot' "$file")
+  if [[ -z "$snapshot" || "$snapshot" == "null" ]]; then
+    echo "ERROR: spec.snapshot is missing"
+    exit 1
+  fi
 
   # Get snapshot from cluster
-  snapshot_json=$(oc get snapshot "$snapshot" -n "$namespace" -o json)
+  if ! snapshot_json=$(oc get snapshot "$snapshot" -n "$namespace" -o json 2>/dev/null); then
+    echo "ERROR: Failed to get snapshot '$snapshot' from namespace '$namespace'"
+    exit 1
+  fi
+
+  if [[ -z "$snapshot_json" ]]; then
+    echo "ERROR: Snapshot query returned empty result"
+    exit 1
+  fi
 
   # Create temp directory
   tmpdir=$(mktemp -d)
@@ -57,7 +74,7 @@ validate_file() {
     yq '.spec.relatedImages[].image' "$csv_file" 2>/dev/null
     yq '.spec.install.spec.deployments[].spec.template.spec.containers[].image' "$csv_file" 2>/dev/null
     yq '.spec.install.spec.deployments[].spec.template.spec.initContainers[].image' "$csv_file" 2>/dev/null
-  } | sort -u > "$tmpdir/csv_images.txt"
+  } | grep -v '^null$' | grep -v '^$' | sort -u > "$tmpdir/csv_images.txt"
 
   csv_image_count=$(wc -l < "$tmpdir/csv_images.txt")
 
@@ -72,12 +89,19 @@ validate_file() {
   # Validate each CSV image matches a snapshot component
   errors=0
   matched=0
+  skipped=0
   while IFS= read -r csv_image; do
+    # Skip empty or null lines
+    if [[ -z "$csv_image" || "$csv_image" == "null" ]]; then
+      continue
+    fi
+
     # Extract SHA from CSV image
     csv_sha=$(echo "$csv_image" | grep -oP 'sha256:[a-f0-9]+' || echo "")
 
     if [[ -z "$csv_sha" ]]; then
       echo "  ⚠ CSV image has no SHA digest: $csv_image"
+      skipped=$((skipped + 1))
       continue
     fi
 
@@ -87,6 +111,7 @@ validate_file() {
 
     if [[ -z "$csv_component" ]]; then
       echo "  ⚠ Cannot identify component from CSV image: $csv_image"
+      skipped=$((skipped + 1))
       continue
     fi
 
@@ -108,8 +133,12 @@ validate_file() {
       if [[ -n "$component_in_snapshot" ]]; then
         snapshot_name=$(echo "$component_in_snapshot" | cut -d'|' -f1)
         snapshot_image=$(echo "$component_in_snapshot" | cut -d'|' -f2)
-        snapshot_sha=$(echo "$snapshot_image" | grep -oP 'sha256:[a-f0-9]+')
-        echo "  Snapshot: $snapshot_name has SHA $snapshot_sha"
+        snapshot_sha=$(echo "$snapshot_image" | grep -oP 'sha256:[a-f0-9]+' || echo "")
+        if [[ -n "$snapshot_sha" ]]; then
+          echo "  Snapshot: $snapshot_name has SHA $snapshot_sha"
+        else
+          echo "  Snapshot: $snapshot_name (no SHA found)"
+        fi
       else
         echo "  Snapshot: No component matching '$normalized_component' found"
       fi
@@ -131,7 +160,11 @@ validate_file() {
     exit 1
   fi
 
-  echo "✓ All $matched CSV images match snapshot components"
+  if [[ $skipped -gt 0 ]]; then
+    echo "✓ Validated $matched images ($skipped skipped)"
+  else
+    echo "✓ All $matched CSV images match snapshot components"
+  fi
   rm -rf "$tmpdir"
 }
 
