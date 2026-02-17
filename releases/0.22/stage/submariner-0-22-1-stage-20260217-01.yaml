@@ -1,0 +1,16 @@
+---
+apiVersion: appstudio.redhat.com/v1alpha1
+kind: Release
+metadata:
+  name: submariner-0-22-1-stage-20260217-01
+  namespace: submariner-tenant
+  labels:
+    release.appstudio.openshift.io/author: 'dfarrell07'
+spec:
+  releasePlan: submariner-release-plan-stage-0-22
+  snapshot: submariner-0-22-20260217-153727-000
+  data:
+    releaseNotes:
+      type: RHBA
+      issues:
+        fixed: []
