@@ -102,6 +102,37 @@ Handles 8 components across 5 repos. Runs 12 automated setup steps and creates p
 
 **After running:** Review commits, validate YAML, push to remote, wait for build (~15-30 min)
 
+## /bundle-image-update
+
+Update bundle component image SHAs from Konflux snapshots
+
+Automates extraction of component SHAs from passing Konflux snapshots, updates bundle config files,
+regenerates bundle manifests, and verifies all SHAs match.
+
+```bash
+/bundle-image-update                              # Auto: latest snapshot, SHA-only
+/bundle-image-update 0.21.2                       # Version bump to 0.21.2
+/bundle-image-update --snapshot submariner-0-21-xxxxx  # Specific snapshot
+```
+
+**Requirements:**
+
+- Must be in `submariner-operator` repository on release branch
+- Must be logged into Konflux cluster
+- Bash 4.0+ (for associative arrays)
+
+**What it does:**
+
+1. Queries Konflux for latest passing snapshot (or uses --snapshot arg)
+2. Extracts 7 component SHAs (8 total with metrics-proxy duplicate)
+3. Updates `config/manager/patches/related-images.deployment.config.yaml`
+4. Runs `make bundle` to regenerate manifests
+5. Updates Dockerfile labels (version bumps only)
+6. Verifies all SHAs match snapshot
+7. Creates single commit with all changes
+
+**After running:** Review commit, push to remote, wait for bundle rebuild (~15-30 min)
+
 ## /konflux-bundle-setup
 
 Automate Konflux bundle setup on new release branches

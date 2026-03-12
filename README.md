@@ -43,6 +43,7 @@ make watch NAME=submariner-0-20-2-stage-20250930-01
 | `/add-team-member`         | Add user to Submariner Konflux RBAC            |
 | `/konflux-ci-fix`          | Fix Konflux CI Enterprise Contract issues      |
 | `/konflux-component-setup` | Automate Konflux component setup on new branch |
+| `/bundle-image-update`     | Update bundle image SHAs from snapshots        |
 | `/konflux-bundle-setup`    | Automate Konflux bundle setup on new branch    |
 | `/create-fbc-release`      | Create FBC releases for all OCP versions       |
 

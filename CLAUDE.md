@@ -40,7 +40,9 @@
 
 ## 7. Update Bundle SHAs
 
-@.agents/workflows/update-bundle-shas.md
+@/bundle-image-update
+
+**Alternative:** @.agents/workflows/update-bundle-shas.md (manual workflow)
 
 ## 8. Create Component Stage Release
 
