@@ -11,7 +11,118 @@ spec:
   snapshot: submariner-0-22-20260326-225632-000
   data:
     releaseNotes:
-      type: RHBA  # Change to RHSA if adding CVEs, RHEA for enhancements
+      type: RHSA
       issues:
-        fixed: []  # Fill with Step 9 workflow
-      cves: []     # Fill with Step 9 workflow (required if type=RHSA)
+        fixed:
+          # CVE Issues (18):
+          - id: ACM-28330
+            source: issues.redhat.com
+          - id: ACM-28332
+            source: issues.redhat.com
+          - id: ACM-28334
+            source: issues.redhat.com
+          - id: ACM-28336
+            source: issues.redhat.com
+          - id: ACM-28338
+            source: issues.redhat.com
+          - id: ACM-28340
+            source: issues.redhat.com
+          - id: ACM-28343
+            source: issues.redhat.com
+          - id: ACM-29328
+            source: issues.redhat.com
+          - id: ACM-29512
+            source: issues.redhat.com
+          - id: ACM-29661
+            source: issues.redhat.com
+          - id: ACM-29662
+            source: issues.redhat.com
+          - id: ACM-29681
+            source: issues.redhat.com
+          - id: ACM-29682
+            source: issues.redhat.com
+          - id: ACM-29683
+            source: issues.redhat.com
+          - id: ACM-29684
+            source: issues.redhat.com
+          - id: ACM-29777
+            source: issues.redhat.com
+          - id: ACM-29801
+            source: issues.redhat.com
+          - id: ACM-30135
+            source: issues.redhat.com
+          # Non-CVE Issues (5):
+          - id: ACM-24731
+            source: issues.redhat.com
+          - id: ACM-24797
+            source: issues.redhat.com
+          - id: ACM-26321
+            source: issues.redhat.com
+          - id: ACM-27273
+            source: issues.redhat.com
+          - id: ACM-28917
+            source: issues.redhat.com
+      cves:
+        # CVE-2025-61726 (ACM-29512,29661,29662,29681,29682,29683,29684)
+        #   Go net/http memory exhaustion - FIXED
+        #   Test: skopeo inspect docker://registry.redhat.io/ubi9/go-toolset
+        #   Output: "version": "1.25.7"
+        #   Required: Go >= 1.25.6 or >= 1.24.12
+        - key: CVE-2025-61726
+          component: lighthouse-agent-0-22
+        - key: CVE-2025-61726
+          component: lighthouse-coredns-0-22
+        - key: CVE-2025-61726
+          component: subctl-0-22
+        - key: CVE-2025-61726
+          component: submariner-gateway-0-22
+        - key: CVE-2025-61726
+          component: submariner-globalnet-0-22
+        - key: CVE-2025-61726
+          component: submariner-operator-0-22
+        - key: CVE-2025-61726
+          component: submariner-route-agent-0-22
+        # CVE-2025-61728 (ACM-29328): Go archive/zip DoS - FIXED
+        #   Test: skopeo inspect docker://registry.redhat.io/ubi9/go-toolset
+        #   Output: "version": "1.25.7"
+        #   Required: Go >= 1.25.6 or >= 1.24.12
+        - key: CVE-2025-61728
+          component: lighthouse-coredns-0-22
+        # CVE-2025-61729 (ACM-29801): Go crypto/x509 - FIXED
+        #   Test: skopeo inspect docker://registry.redhat.io/ubi9/go-toolset
+        #   Output: "version": "1.25.7"
+        #   Required: Go >= 1.25.6 or >= 1.24.12
+        - key: CVE-2025-61729
+          component: subctl-0-22
+        # CVE-2025-68121 (ACM-30135): Go crypto/tls - FIXED
+        #   Test: skopeo inspect docker://registry.redhat.io/ubi9/go-toolset
+        #   Output: "version": "1.25.7"
+        #   Required: Go >= 1.25.6 or >= 1.24.12
+        - key: CVE-2025-68121
+          component: subctl-0-22
+        # CVE-2025-68151 (ACM-29777): CoreDNS DoS - FIXED
+        #   Test: git show v0.22.1:coredns/go.mod | grep 'coredns/coredns'
+        #   Output: github.com/coredns/coredns v1.14.0
+        #   Required: CoreDNS >= 1.14.0
+        - key: CVE-2025-68151
+          component: lighthouse-coredns-0-22
+        # CVE-2026-21441 (ACM-28330,28332,28334,28336,28338,28340,28343)
+        #   urllib3 decompression-bomb (RHEL base image) - FIXED
+        #   Test: podman run registry.redhat.io/ubi9 rpm -q python3-urllib3
+        #   Output: python3-urllib3-1.26.5-6.el9_7.1
+        #   Required: >= 1.26.5-6.el9_7.1 (RHEL 9.7 errata)
+        #   Note: Inherited from UBI9 base, not used by Go code
+        - key: CVE-2026-21441
+          component: lighthouse-agent-0-22
+        - key: CVE-2026-21441
+          component: lighthouse-coredns-0-22
+        - key: CVE-2026-21441
+          component: nettest-0-22
+        - key: CVE-2026-21441
+          component: subctl-0-22
+        - key: CVE-2026-21441
+          component: submariner-gateway-0-22
+        - key: CVE-2026-21441
+          component: submariner-globalnet-0-22
+        - key: CVE-2026-21441
+          component: submariner-route-agent-0-22
