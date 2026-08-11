@@ -34,6 +34,6 @@ All FBC releases running and completed successfully.
 # Verify all releases on cluster
 oc get releases -n submariner-tenant | grep -E "fbc.*(stage|prod)" | sort
 
-# Verify files in repo (expect: 6 at Step 13 stage, 12 at Step 18 after prod added)
+# Verify files in repo (expect: 7 at Step 13 stage, 14 at Step 18 after prod added)
 git ls-tree -r --name-only origin/main releases/fbc/ | grep -E "(stage|prod)" | wc -l
 ```

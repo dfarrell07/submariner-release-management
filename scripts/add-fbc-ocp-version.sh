@@ -115,7 +115,10 @@ echo ""
 
 BRANCH="subm-fbc-configure-${NEW}"
 
-if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+# Query the remote directly. show-ref reads the local remote-tracking ref,
+# which is stale here — only `git fetch origin main` ran above, so a branch
+# created (or deleted) remotely since the last full fetch would be misjudged.
+if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
   echo "❌ Error: Branch $BRANCH already exists on remote"
   echo "   Delete it first: git push origin --delete $BRANCH"
   echo "   Then re-run this script"
@@ -181,7 +184,9 @@ grep -q "overlay/application-submariner-fbc/$NEW-overlay" kustomization.yaml || 
 cd ~/konflux/konflux-release-data/tenants-config
 ./build-single.sh submariner-tenant
 
-COUNT=$(ls auto-generated/cluster/kflux-prd-rh02/tenants/submariner-tenant/*fbc*"${NEW}"*.yaml 2>/dev/null | wc -l)
+# || COUNT=0: a non-matching glob makes ls exit non-zero, which under
+# set -o pipefail would abort before the friendly "found $COUNT" error below.
+COUNT=$(ls auto-generated/cluster/kflux-prd-rh02/tenants/submariner-tenant/*fbc*"${NEW}"*.yaml 2>/dev/null | wc -l) || COUNT=0
 [ "$COUNT" -eq 7 ] || { echo "❌ Error: Expected 7 auto-generated FBC files, found $COUNT"; exit 1; }
 
 cd "$(git rev-parse --show-toplevel)"
@@ -212,16 +217,26 @@ echo "   ✓ Both FBC RPAs updated"
 cd "$(git rev-parse --show-toplevel)"
 git add config/kflux-prd-rh02.0fk9.p1/product/ReleasePlanAdmission/submariner/submariner-fbc-stage.yaml
 git add config/kflux-prd-rh02.0fk9.p1/product/ReleasePlanAdmission/submariner/submariner-fbc-prod.yaml
-git commit -s -m "Add Submariner FBC $NEW_DOT to RPAs"
+COMMIT3_CREATED=false
+if git diff --cached --quiet; then
+  echo "⚠️  RPAs already updated - skipping commit 3"
+else
+  git commit -s -m "Add Submariner FBC $NEW_DOT to RPAs"
+  COMMIT3_CREATED=true
+fi
 
-echo "✅ Commit 3: Added FBC $NEW_DOT to RPAs (2 files)"
-echo ""
+if [ "$COMMIT3_CREATED" = "true" ]; then
+  echo "✅ Commit 3: Added FBC $NEW_DOT to RPAs (2 files)"
+  echo ""
+fi
 
 # ━━━ SUMMARY ━━━
 
 echo "━━━ SUMMARY ━━━"
 echo ""
-echo "✅ Phase 1 complete: 3 commits in konflux-release-data"
+COMMIT_COUNT=2
+[ "$COMMIT3_CREATED" = "true" ] && COMMIT_COUNT=3
+echo "✅ Phase 1 complete: $COMMIT_COUNT commits in konflux-release-data"
 echo "   - 8 overlay files created"
 echo "   - 7 auto-generated manifests built"
 echo "   - 2 RPA files updated"

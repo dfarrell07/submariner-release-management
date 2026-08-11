@@ -23,6 +23,7 @@ STAGE_YAML_ARG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --stage-yaml)
+      [[ $# -lt 2 ]] && { echo "❌ ERROR: --stage-yaml requires a path" >&2; exit 1; }
       STAGE_YAML_ARG="$2"
       shift 2
       ;;
@@ -126,13 +127,31 @@ if [[ "$CVE_COUNT" -gt 0 ]]; then
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Warn before marking complete if no issues were found. Zero issues is
+# plausible (a patch with no Jira coverage) but also the signature of an
+# untriaged Jira backlog — surface it prominently so the operator reviews
+# before pushing the commit.
+_notes_cve=$(jq -r '.cve_topics | length' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
+_notes_non=$(jq -r '.non_cve_topics | length' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
+if [ "$_notes_cve" -eq 0 ] && [ "$_notes_non" -eq 0 ]; then
+  echo "⚠️  WARNING: 0 Jira issues found for $VERSION — Jira may not be triaged yet."
+  echo "   Review before pushing: make review-release-notes VERSION=$VERSION"
+  echo ""
+  [ -n "${AUTORELEASE_PUSH_LOG:-}" ] && \
+    printf '  # WARNING: 0 Jira issues found — verify with: make review-release-notes VERSION=%s\n' \
+      "$VERSION" >> "$AUTORELEASE_PUSH_LOG"
+fi
+
 echo "✅ Release notes workflow complete"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Record completion
 if [ -n "${TRACKER:-}" ]; then
   local_cve_count=$(jq -r '.cve_topics | length' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
-  local_total=$(jq -r '.total_issues // 0' /tmp/release-notes-data.json 2>/dev/null || echo "0")
+  # Total issue count lives in topics.json statistics; data.json has no
+  # total_issues key, so the old read here always recorded 0.
+  local_total=$(jq -r '(.statistics.cve_count + .statistics.non_cve_total)' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
   local_type=$( [ "$local_cve_count" -gt 0 ] && echo "RHSA" || echo "RHBA" )
   data=$(jq -n --arg type "$local_type" --arg total "$local_total" --arg cves "$local_cve_count" \
     '{advisoryType:$type,totalIssues:($total|tonumber),cveCount:($cves|tonumber)}' | jq -c .) || data="{}"

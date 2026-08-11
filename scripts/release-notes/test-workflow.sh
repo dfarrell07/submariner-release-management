@@ -118,11 +118,9 @@ cp "$STAGE_YAML" "$STAGE_YAML.test-backup"
 OUTPUT=$(timeout 30 bash scripts/release-notes/auto-apply.sh 2>&1 || true)
 
 # Check if validation passed (this is the critical test)
-# NOTE: Use grep without -q and redirect to /dev/null to avoid pipefail issues
-echo "$OUTPUT" | grep "Release data validation passed" >/dev/null 2>&1
-VALIDATION_PASSED=$?
-
-if [ "$VALIDATION_PASSED" -eq 0 ]; then
+# grep-in-condition + here-string: no pipe (nothing for set -e/pipefail to abort on),
+# and a no-match runs the else branch instead of killing the script mid-test.
+if grep -q "Release data validation passed" <<< "$OUTPUT"; then
   echo "   ✓ YAML validation passed"
 
   # Verify YAML was actually updated with correct data
@@ -154,7 +152,10 @@ if [ "$VALIDATION_PASSED" -eq 0 ]; then
   mv "$STAGE_YAML.test-backup" "$STAGE_YAML"
 else
   echo "   ✗ FAILED: auto-apply.sh validation failed"
-  echo "$OUTPUT" | grep -E "ERROR|❌" | tail -5
+  # `|| true`: a failure whose output has no ERROR/❌ line (e.g. the overwrite
+  # guard's ⚠️ warning, or a timeout) makes grep exit 1; under pipefail+set -e
+  # that would abort HERE and skip the restore on the next line.
+  grep -E "ERROR|❌" <<< "$OUTPUT" | tail -5 || true
   mv "$STAGE_YAML.test-backup" "$STAGE_YAML"
   exit 1
 fi

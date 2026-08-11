@@ -23,10 +23,11 @@ Safe to re-run — returns the existing tracker if one already exists for that v
 /create-release-tracker 0.24.1                              # Auto-detect Z-stream
 /create-release-tracker 0.24                                # Auto-expands to 0.24.0
 /create-release-tracker 0.24.0 --qe-assignee qe@redhat.com  # Assign QE subtask
-/create-release-tracker 0.24.0 --dry-run                    # Preview (no auth needed)
+/create-release-tracker 0.24.0 --dry-run                    # Preview without creating
 ```
 
-**Requires:** `acli jira auth login --web` (not needed for `--dry-run`), `jq`
+**Requires:** `acli jira auth login --web` (needed even for `--dry-run`, which
+still does a read-only Jira check for an existing tracker), `jq`
 
 **Arguments:** $ARGUMENTS
 

@@ -55,9 +55,11 @@ echo "" >&2
 echo "Querying Konflux for component snapshots..." >&2
 
 # Batched query (1 API call instead of many)
-ALL_SNAPSHOTS=$(oc get snapshots -n submariner-tenant -o json 2>/dev/null)
-
-if [ -z "$ALL_SNAPSHOTS" ]; then
+# Use `if ! VAR=$(...)` so a failed oc call surfaces this error: a bare
+# `VAR=$(cmd)` under set -e aborts the script silently before the guard runs.
+# `|| [ -z ... ]` also catches an empty-but-rc0 result.
+if ! ALL_SNAPSHOTS=$(oc get snapshots -n submariner-tenant -o json 2>/dev/null) \
+   || [ -z "$ALL_SNAPSHOTS" ]; then
   echo "❌ ERROR: Failed to query snapshots from cluster" >&2
   echo "Check: oc login status and network connectivity" >&2
   exit 1
@@ -158,9 +160,7 @@ if [ -z "$TEST_STATUS" ] || [ "$TEST_STATUS" = "null" ]; then
 fi
 
 # Parse test status JSON
-# TestPassed = test passed; BuildPLRInProgress = test passed, post-build pipeline triggered
-# Both have completionTime set and details say "Integration test passed [with warnings]"
-FAILED_TESTS=$(echo "$TEST_STATUS" | jq -r '.[] | select(.status != "TestPassed" and .status != "BuildPLRInProgress") | .scenario' 2>/dev/null)
+FAILED_TESTS=$(echo "$TEST_STATUS" | jq -r '.[] | select(.status != "TestPassed") | .scenario' 2>/dev/null || true)
 
 if [ -n "$FAILED_TESTS" ]; then
   echo "❌ ERROR: Snapshot has failing tests" >&2
@@ -176,10 +176,10 @@ if [ -n "$FAILED_TESTS" ]; then
 fi
 
 # Check for enterprise-contract specifically (critical for releases)
-EC_TEST=$(echo "$TEST_STATUS" | jq -r '.[] | select(.scenario | contains("enterprise-contract")) | .status' 2>/dev/null)
+EC_TEST=$(echo "$TEST_STATUS" | jq -r '.[] | select(.scenario | contains("enterprise-contract")) | .status' 2>/dev/null) || EC_TEST=""
 
 if [ -n "$EC_TEST" ]; then
-  if [ "$EC_TEST" = "TestPassed" ] || [ "$EC_TEST" = "BuildPLRInProgress" ]; then
+  if [ "$EC_TEST" = "TestPassed" ]; then
     echo "  ✓ enterprise-contract: $EC_TEST" >&2
   else
     echo "  ✗ enterprise-contract: $EC_TEST (CRITICAL FAILURE)" >&2

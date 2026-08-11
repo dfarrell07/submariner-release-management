@@ -25,6 +25,17 @@
 
 set -euo pipefail
 
+# Locate this script's directory so shared libs source regardless of CWD (this
+# script cds into component repos during execution). Computed before any cd.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PATCHER_LIB="$SCRIPT_DIR/lib/pipeline-patcher.sh"
+if [ ! -f "$PATCHER_LIB" ]; then
+  echo "ERROR: Required library not found: $PATCHER_LIB" >&2
+  exit 1
+fi
+# shellcheck source=lib/pipeline-patcher.sh
+source "$PATCHER_LIB"
+
 # ━━━ CONSTANTS ━━━
 
 # Component metadata: prefetch_type:has_cpe:special_files
@@ -51,10 +62,6 @@ declare -A REPO_SHORTCUTS=(
   ["shipyard"]="$HOME/go/src/submariner-io/shipyard"
   ["subctl"]="$HOME/go/src/submariner-io/subctl"
 )
-
-# Pipeline patcher configuration
-readonly PATCHER_SHA="b001763bb1cd0286a894cfb570fe12dd7f4504bd"
-readonly EXPECTED_SHA256="080ad5d7cf7d0cee732a774b7e4dda0e2ccf26b58e08a8516a3b812bc73beb53"
 
 # ━━━ GLOBAL VARIABLES ━━━
 
@@ -604,8 +611,12 @@ add_konflux_dockerfile() {
   fi
 
   # Update Tekton config to use Konflux Dockerfile (only if not already .konflux)
-  local file
-  if grep -q "package/Dockerfile.${COMPONENT}.konflux" "${TEKTON_FILES[@]}" 2>/dev/null; then
+  local file _all_have
+  _all_have=true
+  for file in "${TEKTON_FILES[@]}"; do
+    grep -q "package/Dockerfile.${COMPONENT}.konflux" "$file" 2>/dev/null || { _all_have=false; break; }
+  done
+  if [ "$_all_have" = "true" ]; then
     echo "✓ Tekton already references Konflux Dockerfile"
   else
     for file in "${TEKTON_FILES[@]}"; do
@@ -627,7 +638,15 @@ add_konflux_dockerfile() {
   if [ -d scripts/ ]; then
     git add scripts/ || true
   fi
-  commit_changes "Add Konflux Dockerfile for ${COMPONENT}" "Dockerfile configured and committed"
+  # Re-run safe: on a second run the Dockerfile regenerates byte-identically
+  # (deterministic seds, no timestamps) and the Tekton edits are already present,
+  # so nothing stages. Skip the commit instead of dying on an empty commit,
+  # matching Step 4's guard.
+  if git diff --cached --quiet; then
+    echo "✅ Konflux Dockerfile already configured (no commit needed)"
+  else
+    commit_changes "Add Konflux Dockerfile for ${COMPONENT}" "Dockerfile configured and committed"
+  fi
 }
 
 # ━━━ STEP 4: ADD RPM LOCKFILE SUPPORT (CONDITIONAL) ━━━
@@ -725,8 +744,12 @@ add_build_args() {
     return 0
   fi
 
-  # Check if already configured
-  if grep -q "^  - name: build-args-file$" "${TEKTON_FILES[@]}" 2>/dev/null && \
+  # Check if already configured (all files must have the parameter)
+  local _f _all_have=true
+  for _f in "${TEKTON_FILES[@]}"; do
+    grep -q "^  - name: build-args-file$" "$_f" 2>/dev/null || { _all_have=false; break; }
+  done
+  if [ "$_all_have" = true ] && \
      [ -f .tekton/konflux.args ] && \
      grep -q "BASE_BRANCH=${TARGET_BRANCH}" .tekton/konflux.args 2>/dev/null; then
     echo "ℹ️  Build args file already configured"
@@ -749,6 +772,7 @@ add_build_args() {
   local file
   for file in "${TEKTON_FILES[@]}"; do
     [ -f "$file" ] || die "No Tekton files found matching pattern: .tekton/${COMPONENT}-${VERSION_DASHED}-*.yaml"
+    grep -q '^  - name: build-args-file$' "$file" && continue
     sed -i '/value: package\/Dockerfile.submariner-operator.konflux$/a\  - name: build-args-file\n    value: .tekton/konflux.args' "$file" || \
       die "Failed to add build-args-file parameter to Tekton config"
   done
@@ -766,8 +790,12 @@ add_build_args() {
 enable_hermetic_builds() {
   echo "━━━ Step 6: Enable Hermetic Builds ━━━"
 
-  # Check if already configured
-  if grep -q "^  - name: hermetic$" "${TEKTON_FILES[@]}" 2>/dev/null; then
+  # Check if already configured (all files must have the parameter)
+  local _f _all_have=true
+  for _f in "${TEKTON_FILES[@]}"; do
+    grep -q "^  - name: hermetic$" "$_f" 2>/dev/null || { _all_have=false; break; }
+  done
+  if [ "$_all_have" = true ]; then
     echo "ℹ️  Hermetic builds already enabled"
     return 0
   fi
@@ -817,10 +845,13 @@ enable_hermetic_builds() {
       die "Failed to add hermetic build parameters to $file"
   done
 
-  # Verify parameters were added
-  grep -q "name: hermetic" "${TEKTON_FILES[@]}" || \
-    ! grep -q "name: prefetch-input" "${TEKTON_FILES[@]}" || \
-    die "Hermetic build parameters not found after adding"
+  # Verify BOTH parameters were added to EVERY file. A single grep across all
+  # files would pass on partial application (one file matches for all), and the
+  # previous "A || !B" form passed when both params were missing.
+  for file in "${TEKTON_FILES[@]}"; do
+    grep -q "name: hermetic" "$file" && grep -q "name: prefetch-input" "$file" || \
+      die "Hermetic build parameters not found in $file after adding"
+  done
 
   git add "${TEKTON_FILES[@]}" || exit 1
   commit_changes "Enable hermetic builds with prefetching for ${COMPONENT}" "Hermetic builds enabled and committed"
@@ -831,8 +862,12 @@ enable_hermetic_builds() {
 add_multiplatform() {
   echo "━━━ Step 7: Add Multi-Platform Support ━━━"
 
-  # Check if already configured
-  if grep -q "linux/arm64" "${TEKTON_FILES[@]}" 2>/dev/null; then
+  # Check if already configured (all files must have the parameter)
+  local _f _all_have=true
+  for _f in "${TEKTON_FILES[@]}"; do
+    grep -q "linux/arm64" "$_f" 2>/dev/null || { _all_have=false; break; }
+  done
+  if [ "$_all_have" = true ]; then
     echo "ℹ️  Multi-platform already enabled"
     return 0
   fi
@@ -840,15 +875,22 @@ add_multiplatform() {
   local file
   for file in "${TEKTON_FILES[@]}"; do
     [ -f "$file" ] || die "No Tekton files found matching pattern: .tekton/${COMPONENT}-${VERSION_DASHED}-*.yaml"
+    grep -q 'linux/arm64' "$file" && continue
     sed -i '/^    - linux\/x86_64$/a\    - linux/arm64\n    - linux/ppc64le\n    - linux/s390x' "$file" || \
       die "Failed to add multi-platform support to Tekton config"
   done
 
-  grep -q "linux/arm64" "${TEKTON_FILES[@]}" || \
-    die "Multi-platform architectures not found after adding"
+  for file in "${TEKTON_FILES[@]}"; do
+    grep -q "linux/arm64" "$file" || \
+      die "Multi-platform architectures not found in $file after adding"
+  done
 
   git add "${TEKTON_FILES[@]}" || exit 1
-  commit_changes "Add multi-platform build support for ${COMPONENT}" "Multi-platform support enabled and committed"
+  if git diff --cached --quiet; then
+    echo "✅ Multi-platform already set in all files (no commit needed)"
+  else
+    commit_changes "Add multi-platform build support for ${COMPONENT}" "Multi-platform support enabled and committed"
+  fi
 }
 
 # ━━━ STEP 8: ENABLE SBOM GENERATION ━━━
@@ -856,8 +898,12 @@ add_multiplatform() {
 enable_sbom() {
   echo "━━━ Step 8: Enable SBOM Generation ━━━"
 
-  # Check if already configured
-  if grep -q "^  - name: build-source-image$" "${TEKTON_FILES[@]}" 2>/dev/null; then
+  # Check if already configured (all files must have the parameter)
+  local _f _all_have=true
+  for _f in "${TEKTON_FILES[@]}"; do
+    grep -q "^  - name: build-source-image$" "$_f" 2>/dev/null || { _all_have=false; break; }
+  done
+  if [ "$_all_have" = true ]; then
     echo "ℹ️  SBOM generation already enabled"
     return 0
   fi
@@ -865,17 +911,24 @@ enable_sbom() {
   local file
   for file in "${TEKTON_FILES[@]}"; do
     [ -f "$file" ] || die "No Tekton files found matching pattern: .tekton/${COMPONENT}-${VERSION_DASHED}-*.yaml"
+    grep -q '^  - name: build-source-image$' "$file" && continue
     sed -i '/  - name: hermetic$/,/    value: "true"$/{
       /    value: "true"$/a\  - name: build-source-image\n    value: "true"
     }' "$file" || \
       die "Failed to add build-source-image parameter to Tekton config"
   done
 
-  grep -q "name: build-source-image" "${TEKTON_FILES[@]}" || \
-    die "build-source-image parameter not found after adding"
+  for file in "${TEKTON_FILES[@]}"; do
+    grep -q "name: build-source-image" "$file" || \
+      die "build-source-image parameter not found in $file after adding"
+  done
 
   git add "${TEKTON_FILES[@]}" || exit 1
-  commit_changes "Enable SBOM generation for ${COMPONENT}" "SBOM generation enabled and committed"
+  if git diff --cached --quiet; then
+    echo "✅ SBOM already enabled in all files (no commit needed)"
+  else
+    commit_changes "Enable SBOM generation for ${COMPONENT}" "SBOM generation enabled and committed"
+  fi
 }
 
 # ━━━ STEP 9: UPDATE TASK REFERENCES ━━━
@@ -884,25 +937,13 @@ update_task_refs() {
   echo "━━━ Step 9: Update Task References ━━━"
 
   echo "ℹ️  Downloading pipeline-patcher..."
+  # Download and verify the pipeline-patcher (pinned SHA, checksum, and download
+  # hardening all live in scripts/lib/pipeline-patcher.sh, shared with
+  # konflux-bundle-setup.sh).
   local SCRIPT
-  SCRIPT=$(curl -sL "https://raw.githubusercontent.com/simonbaird/konflux-pipeline-patcher/${PATCHER_SHA}/pipeline-patcher")
-
-  [ -z "$SCRIPT" ] && die "Failed to download pipeline-patcher script" \
+  SCRIPT=$(download_and_verify_patcher) || \
+    die "Failed to download/verify pipeline-patcher" \
       "Check network connectivity and GitHub access"
-
-  # Verify checksum
-  local ACTUAL_SHA256
-  if command -v sha256sum &>/dev/null; then
-    ACTUAL_SHA256=$(echo "$SCRIPT" | sha256sum | cut -d' ' -f1)
-  else
-    ACTUAL_SHA256=$(echo "$SCRIPT" | shasum -a 256 | cut -d' ' -f1)
-  fi
-
-  if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-    die "Pipeline patcher checksum mismatch!" \
-        "Expected: $EXPECTED_SHA256
-Actual:   $ACTUAL_SHA256"
-  fi
   echo "✓ Checksum verified"
 
   # Save non-component files before patcher runs (protect bundle, etc.)
@@ -974,9 +1015,11 @@ add_file_change_filters() {
       continue
     fi
 
-    # Extract CEL expression from previous branch
+    # Extract CEL expression from previous branch. `|| true`: git show (missing
+    # ref/file) or grep (no match) exits non-zero, which under set -o pipefail
+    # would abort before the friendly empty-CEL_LINE handler below.
     CEL_LINE=$(git show "origin/release-${VERSION_MAJOR}.${PREV_VERSION}:${PREV_FILE}" 2>/dev/null | \
-      grep 'pipelinesascode.tekton.dev/on-cel-expression:')
+      grep 'pipelinesascode.tekton.dev/on-cel-expression:' || true)
 
     if [ -z "$CEL_LINE" ]; then
       echo "⚠️  Could not extract CEL from ${PREV_FILE} - previous branch may not have filters yet"
@@ -1058,7 +1101,10 @@ print_summary() {
   echo ""
 
   local COMMIT_COUNT
-  COMMIT_COUNT=$(git --no-pager log "origin/${TARGET_BRANCH}..HEAD" --oneline 2>/dev/null | wc -l | tr -d ' ')
+  # `|| echo 0`: if origin/$TARGET_BRANCH is absent, git log exits non-zero and
+  # (with pipefail) would abort under set -e before this summary prints. Fall
+  # back to a numeric 0 so the "Commits created" line stays valid.
+  COMMIT_COUNT=$(git --no-pager log "origin/${TARGET_BRANCH}..HEAD" --oneline 2>/dev/null | wc -l | tr -d ' ' || echo 0)
   echo "📝 Commits created: $COMMIT_COUNT"
   git --no-pager log "origin/${TARGET_BRANCH}..HEAD" --oneline 2>/dev/null || echo "(Could not fetch commit log)"
   echo ""

@@ -154,6 +154,7 @@ echo "=== 3. Subtask Counts ==="
 # ============================================================================
 
 export JIRA_TRACKER_DRY_RUN=true
+export _JIRA_STALE_RETRY_DELAY=0  # no sleep in tests
 query_jira() { echo "[]"; }
 # shellcheck disable=SC2034  # ACM_VERSION used by library after mock returns
 calculate_acm_version() { ACM_VERSION="ACM 2.17.0"; }
@@ -173,7 +174,31 @@ query_jira() { echo '[{"key":"ACM-EXISTING"}]'; }
 key=$(create_release_tracker "0.24.0" 2>/dev/null)
 assert_eq "idempotent: returns existing key" "$key" "ACM-EXISTING"
 
-unset JIRA_TRACKER_DRY_RUN
+# Idempotency check can't reach Jira (query fails → find_release_tracker rc 2):
+# refuse rather than create a possible duplicate.
+query_jira() { return 1; }
+rc=0
+out=$(create_release_tracker "0.24.0" 2>&1) || rc=$?
+assert_eq "query failure → refuse (rc 1)" "$rc" "1"
+created=$(printf '%s' "$out" | grep -c "Would create" || true)
+assert_eq "query failure → no tracker created" "$created" "0"
+
+# Stale-index retry: initial query empty (stale), retry finds existing tracker.
+# Verifies no duplicate creation when the index clears between initial and retry.
+# Uses a temp file counter because query_jira runs in subshells of find_release_tracker,
+# so an in-memory counter would reset each call (subshells don't update parent vars).
+_stale_ctr=$(mktemp)
+printf '0' > "$_stale_ctr"
+query_jira() {
+  _n=$(cat "$_stale_ctr"); _n=$((_n + 1)); printf '%s' "$_n" > "$_stale_ctr"
+  [ "$_n" -le 1 ] && { echo "[]"; return 0; }
+  echo '[{"key":"ACM-RETRY"}]'
+}
+key=$(create_release_tracker "0.24.0" 2>/dev/null)
+assert_eq "stale-index retry: found on retry -> returns key" "$key" "ACM-RETRY"
+rm -f "$_stale_ctr"
+
+unset JIRA_TRACKER_DRY_RUN _JIRA_STALE_RETRY_DELAY
 query_jira() { echo "[]"; }
 
 # ============================================================================
@@ -240,6 +265,19 @@ get_step() {
 result=$(check_freshness "0.24.0" "ecFixes" "ACM-99" 2>/dev/null)
 assert_eq "no snapshot field: fresh" "$result" "fresh"
 
+# Snapshot: step has one but bundleShas has none → fresh (nothing to compare
+# against). Guards the `[ -n "$latest_snapshot" ]` conjunct at check_freshness's
+# snapshot arm; without it, an absent bundleShas snapshot spuriously flags every
+# downstream step as stale.
+get_step() {
+  case "$2" in
+    ecFixes)    printf '%s' '{"_t":"STEP_DATA","step":"ecFixes","timestamp":"2026-07-01T00:00:00Z","status":"complete","data":{"snapshot":"snap-abc"}}' ;;
+    bundleShas) printf '%s' '{"_t":"STEP_DATA","step":"bundleShas","timestamp":"2026-07-01T00:00:00Z","status":"complete","data":{}}' ;;
+  esac
+}
+result=$(check_freshness "0.24.0" "ecFixes" "ACM-99" 2>/dev/null)
+assert_eq "step snapshot but no bundleShas snapshot: fresh" "$result" "fresh"
+
 # Restore original get_step (saved before section 4 overrides)
 eval "$_SAVED_GET_STEP"
 
@@ -251,16 +289,20 @@ echo "=== 5. get_step Parser ==="
 # Save original find_release_tracker before overriding
 _SAVED_FIND_RELEASE_TRACKER=$(declare -f find_release_tracker)
 
-# Mock acli comment list with hardcoded fixtures
+# Mock acli comment list with hardcoded fixtures. Real acli (1.3.x) returns a
+# {"comments":[...]} OBJECT (not a bare array), so the fixture uses that shape to
+# exercise _fetch_tracker_comments' normalization on the real contract.
 acli() {
   if [[ "${*}" == *"comment list"* ]]; then
     cat <<'MOCK'
-[
-  {"body": "Just a comment"},
-  {"body": "## CVE fixes\n\n---\n```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"cveFixes\",\"timestamp\":\"2026-07-01T10:00:00Z\",\"status\":\"complete\",\"data\":{}}\n```"},
-  {"body": "## Bundle SHAs\n\n---\n```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"bundleShas\",\"timestamp\":\"2026-07-02T10:00:00Z\",\"status\":\"complete\",\"data\":{\"snapshot\":\"snap-123\"}}\n```"},
-  {"body": "## CVE fixes attempt 2\n\n---\n```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"cveFixes\",\"timestamp\":\"2026-07-05T10:00:00Z\",\"status\":\"complete\",\"data\":{\"attempt\":2}}\n```"}
-]
+{
+  "comments": [
+    {"body": "Just a comment"},
+    {"body": "## CVE fixes\n\n---\n```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"cveFixes\",\"timestamp\":\"2026-07-01T10:00:00Z\",\"status\":\"complete\",\"data\":{}}\n```"},
+    {"body": "## Bundle SHAs\n\n---\n```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"bundleShas\",\"timestamp\":\"2026-07-02T10:00:00Z\",\"status\":\"complete\",\"data\":{\"snapshot\":\"snap-123\"}}\n```"},
+    {"body": "## CVE fixes attempt 2\n\n---\n```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"cveFixes\",\"timestamp\":\"2026-07-05T10:00:00Z\",\"status\":\"complete\",\"data\":{\"attempt\":2}}\n```"}
+  ]
+}
 MOCK
   fi
 }
@@ -279,10 +321,46 @@ assert_eq "bundleShas: correct snapshot" "$snap" "snap-123"
 result=$(get_step "0.24.0" "nonExistent" "ACM-99")
 assert_eq "missing step: empty" "$result" ""
 
+# acli --paginate streams one {"comments":[...]} object PER PAGE; the fetch must
+# slurp all pages into one array. Mock two concatenated page objects and assert a
+# step recorded on page 2 is still found (guards the jq -s slurp + object unwrap).
+acli() {
+  if [[ "${*}" == *"comment list"* ]]; then
+    cat <<'MOCK'
+{"comments":[{"body":"## CVE fixes\n\n---\n```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"cveFixes\",\"timestamp\":\"2026-07-01T10:00:00Z\",\"status\":\"complete\",\"data\":{}}\n```"}]}
+{"comments":[{"body":"## Bundle SHAs\n\n---\n```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"bundleShas\",\"timestamp\":\"2026-07-09T10:00:00Z\",\"status\":\"complete\",\"data\":{\"snapshot\":\"snap-page2\"}}\n```"}]}
+MOCK
+  fi
+}
+snap=$(printf '%s' "$(get_step "0.24.0" "bundleShas" "ACM-99")" | jq -r '.data.snapshot' 2>/dev/null)
+assert_eq "multi-page: step from page 2 found" "$snap" "snap-page2"
+
 # Empty comments → empty
 acli() { printf '%s' "[]"; }
 result=$(get_step "0.24.0" "cveFixes" "ACM-99")
 assert_eq "no comments: empty" "$result" ""
+
+# A genuinely empty tracker (valid `[]`) is a GOOD read → exit 0, empty output.
+# This is the case evidence recorders must NOT confuse with a failed read below.
+gs_rc=0; get_step "0.24.0" "cveFixes" "ACM-99" >/dev/null || gs_rc=$?
+assert_eq "empty tracker: exit 0 (absent, not failed)" "$gs_rc" "0"
+
+# Failed fetch (acli non-zero) → non-zero, so callers can tell a blip from absence
+acli() { return 1; }
+gs_rc=0; result=$(get_step "0.24.0" "cveFixes" "ACM-99") || gs_rc=$?
+assert_eq "fetch failure: non-zero exit" "$gs_rc" "1"
+assert_eq "fetch failure: no output" "$result" ""
+
+# Garbled success (exit 0 but not a JSON array) → treated as unreliable → non-zero
+acli() { printf '%s' 'not json'; }
+gs_rc=0; result=$(get_step "0.24.0" "cveFixes" "ACM-99") || gs_rc=$?
+assert_eq "garbled read: non-zero exit" "$gs_rc" "1"
+assert_eq "garbled read: no output" "$result" ""
+
+# Empty stdout on exit 0 (truncated response) → unreliable → non-zero
+acli() { printf ''; }
+gs_rc=0; result=$(get_step "0.24.0" "cveFixes" "ACM-99") || gs_rc=$?
+assert_eq "empty stdout read: non-zero exit" "$gs_rc" "1"
 
 # Reset mocks (restore library function behavior)
 eval "$_SAVED_FIND_RELEASE_TRACKER"
@@ -321,6 +399,27 @@ step_json=$(printf '%s\n' "$_ADD_COMMENT_BODY" | sed -n '/STEP_DATA/{n;p;}')
 data_field=$(printf '%s' "$step_json" | jq -r '.data' 2>/dev/null) || data_field="PARSE_FAILED"
 assert_eq "STEP_DATA has valid data field" "$data_field" "{}"
 
+# STEP_DATA is the DAG's persistence contract: find_next_step keys the walk on
+# .step and gates completion on .status, so a write that corrupts either field
+# would re-run done steps or skip pending ones. Pin both.
+assert_eq "STEP_DATA .step is the step key" \
+  "$(printf '%s' "$step_json" | jq -r '.step')" "cveFixes"
+assert_eq "STEP_DATA .status is the status" \
+  "$(printf '%s' "$step_json" | jq -r '.status')" "complete"
+
+# update_step maps step status → subtask Jira transition. Record the targets so
+# a swapped or deleted transition (leaving subtasks stale) fails a test.
+_transition_issue() { _T="${_T}${1}=>${2}"$'\n'; return 0; }
+_T=""; update_step "0.24.0" "cveFixes" "complete" "{}" "ACM-99" 2>/dev/null
+assert_eq "update_step: complete → subtask Resolved" \
+  "$(printf '%s' "$_T" | grep -q 'ACM-98=>Resolved' && echo yes || echo no)" "yes"
+_T=""; update_step "0.24.0" "cveFixes" "in_progress" "{}" "ACM-99" 2>/dev/null
+assert_eq "update_step: in_progress → subtask In Progress" \
+  "$(printf '%s' "$_T" | grep -q 'ACM-98=>In Progress' && echo yes || echo no)" "yes"
+_T=""; update_step "0.24.0" "cveFixes" "failed" "{}" "ACM-99" 2>/dev/null
+assert_eq "update_step: failed → no subtask transition" "$_T" ""
+_transition_issue() { return 0; }
+
 # find_release_tracker: invalid version → empty (not crash)
 query_jira() { printf '%s' "SHOULD NOT BE CALLED"; }
 result=$(find_release_tracker "bad" 2>/dev/null)
@@ -334,6 +433,106 @@ _add_comment() { return 0; }
 query_jira() { echo '[{"key":"ACM-222"}]'; }
 result=$(find_release_tracker "0.24" 2>/dev/null)
 assert_eq "find_release_tracker: 2-seg version works" "$result" "ACM-222"
+query_jira() { echo "[]"; }
+
+# find_release_tracker: Jira query failure → return 2 (distinct from absent)
+query_jira() { return 1; }
+result=$(find_release_tracker "0.24.0" 2>/dev/null) && rc=0 || rc=$?
+assert_eq "find_release_tracker: query failure → rc 2" "$rc" "2"
+assert_eq "find_release_tracker: query failure → empty stdout" "$result" ""
+
+# find_release_tracker: genuinely absent (query ok, empty) → return 0, empty
+query_jira() { echo "[]"; }
+result=$(find_release_tracker "0.24.0" 2>/dev/null) && rc=0 || rc=$?
+assert_eq "find_release_tracker: absent → rc 0" "$rc" "0"
+assert_eq "find_release_tracker: absent → empty stdout" "$result" ""
+
+# find_release_tracker: exit-0 but garbled response (not an array) → return 2,
+# NOT 0/empty. A bare null / error object / truncated page must not be read as
+# "absent" (that would let create_release_tracker make a DUPLICATE).
+query_jira() { echo "null"; }
+result=$(find_release_tracker "0.24.0" 2>/dev/null) && rc=0 || rc=$?
+assert_eq "find_release_tracker: garbled (null) → rc 2" "$rc" "2"
+assert_eq "find_release_tracker: garbled (null) → empty stdout" "$result" ""
+query_jira() { printf '%s' '{"errorMessages":["boom"]}'; }
+result=$(find_release_tracker "0.24.0" 2>/dev/null) && rc=0 || rc=$?
+assert_eq "find_release_tracker: garbled (error obj) → rc 2" "$rc" "2"
+query_jira() { echo "[]"; }
+
+# Bare $(find_release_tracker) call sites must not set -e abort on the rc 2:
+# get_release_summary echoes "{}" and returns 0 even when the lookup fails.
+query_jira() { return 1; }
+result=$(get_release_summary "0.24.0" 2>/dev/null) && rc=0 || rc=$?
+assert_eq "get_release_summary: query failure → rc 0 (shielded)" "$rc" "0"
+assert_eq "get_release_summary: query failure → {}" "$result" "{}"
+query_jira() { echo "[]"; }
+
+# close_release_tracker: resolves parent + open subtasks to "Resolved" (the same
+# terminal status per-step completion uses), never "Closed". (Mocks find_release_tracker
+# from here on — no test below relies on the real one.)
+_has_transition() { printf '%s' "$_TRANSITIONS" | grep -q "$1" && echo yes || echo no; }
+find_release_tracker() { printf '%s' "ACM-99"; }
+_add_comment() { return 0; }
+query_jira() { echo '[{"key":"ACM-101"},{"key":"ACM-102"}]'; }
+_TRANSITIONS=""
+_transition_issue() { _TRANSITIONS="${_TRANSITIONS}${1}=>${2}"$'\n'; return 0; }
+close_release_tracker "0.24.0" "Release 0.24.0 complete" >/dev/null 2>&1; rc=$?
+assert_eq "close: returns 0" "$rc" "0"
+assert_eq "close: parent resolved" "$(_has_transition 'ACM-99=>Resolved')" "yes"
+assert_eq "close: subtask ACM-101 resolved" "$(_has_transition 'ACM-101=>Resolved')" "yes"
+assert_eq "close: subtask ACM-102 resolved" "$(_has_transition 'ACM-102=>Resolved')" "yes"
+assert_eq "close: never transitions to Closed" "$(_has_transition 'Closed')" "no"
+
+# close_release_tracker: subtask query filters on "status != Resolved".
+# query_jira runs inside a $() subshell in the impl, so capture via a temp file
+# (a global var assignment would not survive the subshell).
+_CLOSE_JQL_FILE=$(mktemp)
+query_jira() { printf '%s' "$*" >"$_CLOSE_JQL_FILE"; echo '[]'; }
+close_release_tracker "0.24.0" "x" >/dev/null 2>&1 || true
+assert_eq "close: subtask query filters status != Resolved" \
+  "$(grep -q 'status != Resolved' "$_CLOSE_JQL_FILE" && echo yes || echo no)" "yes"
+rm -f "$_CLOSE_JQL_FILE"
+
+# close_release_tracker: no tracker found → returns 0, no transitions attempted
+find_release_tracker() { printf '%s' ""; }
+_TRANSITIONS=""
+query_jira() { echo '[]'; }
+close_release_tracker "0.24.0" "x" >/dev/null 2>&1; rc=$?
+assert_eq "close: no tracker → returns 0" "$rc" "0"
+assert_eq "close: no tracker → no transitions" "$_TRANSITIONS" ""
+
+# close_release_tracker: best-effort — a failed transition still returns 0
+find_release_tracker() { printf '%s' "ACM-99"; }
+query_jira() { echo '[]'; }
+_transition_issue() { return 1; }
+close_release_tracker "0.24.0" "x" >/dev/null 2>&1; rc=$?
+assert_eq "close: transition failure → returns 0" "$rc" "0"
+
+# Reset mocks touched above for the smoke tests that follow
+_transition_issue() { return 0; }
+query_jira() { echo "[]"; }
+_add_comment() { return 0; }
+
+# tracker_is_open: gates auto-close so re-runs on a resolved release don't
+# re-probe / re-comment. Open only when it POSITIVELY reads a non-Resolved status.
+# (Capture rc via `&& ... || ...` so a returned 1 doesn't set -e abort the run.)
+query_jira() { echo '[{"key":"ACM-99","fields":{"status":{"name":"In Progress"}}}]'; }
+tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq "tracker_is_open: In Progress → open (0)" "$rc" "0"
+query_jira() { echo '[{"key":"ACM-99","fields":{"status":{"name":"Resolved"}}}]'; }
+tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq "tracker_is_open: Resolved → not open (1)" "$rc" "1"
+query_jira() { echo '[]'; }
+tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq "tracker_is_open: absent → not open (1)" "$rc" "1"
+query_jira() { return 1; }
+tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq "tracker_is_open: query failure → not open (1)" "$rc" "1"
+query_jira() { echo "null"; }
+tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq "tracker_is_open: garbled (non-array) → not open (1)" "$rc" "1"
+tracker_is_open "bad-version" >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq "tracker_is_open: invalid version → not open (1)" "$rc" "1"
 query_jira() { echo "[]"; }
 
 # ============================================================================
@@ -403,6 +602,57 @@ create_release_tracker "0.24.0" 2>/dev/null && crc=0 || crc=$?
 assert_eq "create fails on ACM version error" "$crc" "1"
 # shellcheck disable=SC2034  # ACM_VERSION used by library after mock returns
 calculate_acm_version() { ACM_VERSION="ACM 2.17.0"; }
+
+# ============================================================================
+echo ""
+echo "=== 8. Staleness surfaced end-to-end via get_release_summary ==="
+# ============================================================================
+# Section 4 tests check_freshness directly, always with 3 args (the re-fetch
+# branch) and never asserting a value in the summary. Section 7 stubs comments
+# to "[]", so every step's step_data stays "{}", the != "{}" guard is always
+# false, and freshness never leaves its "fresh" default. This section drives the
+# real production path (release-status.sh's only consumer): comments carry
+# STEP_DATA, so get_release_summary hits the guard, calls check_freshness, and
+# emits the freshness field — the wiring a regression would silently break.
+
+_SAVED_FRT=$(declare -f find_release_tracker)
+_SAVED_QJ=$(declare -f query_jira)
+_SAVED_ACLI=$(declare -f acli)
+
+find_release_tracker() { printf '%s' "ACM-99"; }
+query_jira() { echo "[]"; }
+
+# ecFixes recorded against snap-old while bundleShas advanced to snap-new → stale.
+acli() {
+  [[ "${*}" == *"comment list"* ]] || return 0
+  cat <<'JSON'
+[
+  {"body":"```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"ecFixes\",\"timestamp\":\"2026-07-01T00:00:00Z\",\"status\":\"complete\",\"data\":{\"snapshot\":\"snap-old\"}}\n```"},
+  {"body":"```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"bundleShas\",\"timestamp\":\"2026-07-01T00:00:00Z\",\"status\":\"complete\",\"data\":{\"snapshot\":\"snap-new\"}}\n```"}
+]
+JSON
+}
+summary=$(get_release_summary "0.24.0" 2>/dev/null)
+result=$(printf '%s' "$summary" | jq -r '.steps.ecFixes.freshness')
+assert_eq "advanced snapshot surfaces as stale in summary" "$result" "stale"
+
+# Same snapshot → fresh (guards against a rule that flags everything stale).
+acli() {
+  [[ "${*}" == *"comment list"* ]] || return 0
+  cat <<'JSON'
+[
+  {"body":"```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"ecFixes\",\"timestamp\":\"2026-07-01T00:00:00Z\",\"status\":\"complete\",\"data\":{\"snapshot\":\"snap-same\"}}\n```"},
+  {"body":"```STEP_DATA\n{\"_t\":\"STEP_DATA\",\"step\":\"bundleShas\",\"timestamp\":\"2026-07-01T00:00:00Z\",\"status\":\"complete\",\"data\":{\"snapshot\":\"snap-same\"}}\n```"}
+]
+JSON
+}
+summary=$(get_release_summary "0.24.0" 2>/dev/null)
+result=$(printf '%s' "$summary" | jq -r '.steps.ecFixes.freshness')
+assert_eq "matching snapshot stays fresh in summary" "$result" "fresh"
+
+eval "$_SAVED_FRT"
+eval "$_SAVED_QJ"
+eval "$_SAVED_ACLI"
 
 # ============================================================================
 echo ""

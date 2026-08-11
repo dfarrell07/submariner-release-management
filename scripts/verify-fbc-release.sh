@@ -57,59 +57,12 @@ echo "Version: $FULL_VERSION (branch: release-$MAJOR_MINOR, components: *-$HYPHE
 echo "" >&2
 
 # ============================================================================
-# Parallel Job Execution Helpers
+# Parallel Job Execution Helpers (shared lib, relies on global TMPDIR)
 # ============================================================================
 
-# Run a job in background with error tracking
-run_parallel_job() {
-    local job_name="$1"
-    local job_func="$2"
-    shift 2
-    (
-        set -euo pipefail
-        EXIT_CODE=0
-        "${job_func}" "$@" 2>"$TMPDIR/${job_name}.stderr" || EXIT_CODE=$?
-        echo "$EXIT_CODE" > "$TMPDIR/${job_name}.exit"
-    ) &
-    echo "$!" >> "$TMPDIR/pids.txt"
-}
-
-# Wait for all parallel jobs and check for errors
-wait_parallel_jobs() {
-    local job_description="$1"
-
-    # Wait for all background jobs
-    while read -r pid; do
-        wait "$pid" || true  # Don't exit on individual job failure
-    done < "$TMPDIR/pids.txt"
-
-    # Check for errors after all jobs complete
-    local failed_count=0
-    local error_msg=""
-    local exit_code
-    local job_name
-    local stderr
-    for exit_file in "$TMPDIR"/*.exit; do
-        [ -f "$exit_file" ] || continue
-        exit_code=$(cat "$exit_file")
-        if [ "$exit_code" -ne 0 ]; then
-            failed_count=$((failed_count + 1))
-            job_name=$(basename "$exit_file" .exit)
-            stderr=$(cat "${exit_file%.exit}.stderr" 2>/dev/null || echo "")
-            error_msg="${error_msg}  ${job_name}: ${stderr}\n"
-        fi
-    done
-
-    if [ $failed_count -gt 0 ]; then
-        echo "" >&2
-        echo "❌ ERROR: $failed_count $job_description job(s) failed:" >&2
-        echo -e "$error_msg" >&2
-        return 1
-    fi
-
-    # Clean up for next parallel batch
-    rm -f "$TMPDIR/pids.txt" "$TMPDIR"/*.exit "$TMPDIR"/*.stderr 2>/dev/null || true
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/parallel-jobs.sh
+source "$SCRIPT_DIR/lib/parallel-jobs.sh"
 
 # ============================================================================
 # Step 1: Verify GitHub Catalog Consistency
@@ -124,8 +77,20 @@ SKIPPED=0
 for VERSION in 14 15 16 17 18 19 20 21 22; do
   CATALOG_URL="https://raw.githubusercontent.com/stolostron/submariner-operator-fbc/main/catalog-4-${VERSION}/bundles/bundle-v${FULL_VERSION}.yaml"
 
-  # Fetch bundle and extract SHA
-  BUNDLE_SHA=$(curl -sf "$CATALOG_URL" | grep "^image:" | head -1 | grep -oP 'sha256:\K[a-f0-9]+' || true)
+  # Fetch bundle by HTTP status, not curl's -f exit code: -f collapses 404
+  # (bundle legitimately absent for this OCP version → skip) and 429/5xx
+  # (transient CDN/rate-limit error) into the same exit 22. Treating a transient
+  # error as "absent" would silently drop an OCP version we should release.
+  CATALOG_FILE="$TMPDIR/catalog-4-${VERSION}.yaml"
+  HTTP_CODE=$(curl -s -o "$CATALOG_FILE" -w '%{http_code}' "$CATALOG_URL") || HTTP_CODE="000"
+  case "$HTTP_CODE" in
+    200) BUNDLE_SHA=$(grep "^image:" "$CATALOG_FILE" | head -1 | grep -oP 'sha256:\K[a-f0-9]+' || true) ;;
+    404) BUNDLE_SHA="" ;;
+    *)   echo "✗ ERROR: unexpected HTTP $HTTP_CODE fetching catalog for 4-${VERSION}" >&2
+         echo "  ($CATALOG_URL)" >&2
+         echo "  Refusing to silently drop an OCP version on a transient error." >&2
+         exit 1 ;;
+  esac
 
   if [ -z "$BUNDLE_SHA" ]; then
     echo "  4-${VERSION}: - bundle not in catalog (skipped)" >&2
@@ -173,8 +138,15 @@ echo "✓ Bundle SHA consistent across ${#APPLICABLE_VERSIONS[@]} GitHub catalog
 echo "" >&2
 echo "Step 2: Fetching FBC snapshots (batched query)..." >&2
 
-# ONE query for all snapshots (vs 6 list + 24 individual gets)
-ALL_SNAPSHOTS=$(oc get snapshots -n submariner-tenant -o json 2>/dev/null)
+# ONE query for all snapshots (vs 6 list + 24 individual gets).
+# Use `if ! VAR=$(...)` so a failed oc call surfaces a friendly error: a bare
+# `VAR=$(cmd)` under set -e aborts the script silently at this line before any
+# guard below could run. `|| [ -z ... ]` also catches an empty-but-rc0 result.
+if ! ALL_SNAPSHOTS=$(oc get snapshots -n submariner-tenant -o json 2>/dev/null) \
+   || [ -z "$ALL_SNAPSHOTS" ]; then
+  echo "❌ ERROR: Failed to query snapshots from cluster (check oc login / network)" >&2
+  exit 1
+fi
 
 # Save for debugging
 echo "$ALL_SNAPSHOTS" > "$TMPDIR/snapshots.json"
@@ -195,7 +167,7 @@ for VERSION in "${APPLICABLE_VERSIONS[@]}"; do
     ".items[] | select(.metadata.name | startswith(\"submariner-fbc-4-${VERSION}\")) |
     select(.metadata.creationTimestamp != null) |
     {name: .metadata.name,
-     event: .metadata.annotations[\"pac.test.appstudio.openshift.io/event-type\"],
+     event: .metadata.labels[\"pac.test.appstudio.openshift.io/event-type\"],
      tests: .metadata.annotations[\"test.appstudio.openshift.io/status\"],
      image: .spec.components[0].containerImage,
      timestamp: .metadata.creationTimestamp} |
@@ -331,11 +303,27 @@ for VERSION in "${APPLICABLE_VERSIONS[@]}"; do
     continue
   fi
 
-  # Check for any non-passing tests
-  # TestPassed and BuildPLRInProgress both indicate the integration test passed
-  FAILED_TESTS=$(echo "$TESTS_JSON" | jq -r '.[] | select(.status != "TestPassed" and .status != "BuildPLRInProgress") | .scenario' 2>/dev/null || true)
+  # Check for any non-passing tests. Emit scenario:status so the operator can
+  # distinguish a transient BuildPLRInProgress from a persistent failure.
+  FAILED_TESTS=$(echo "$TESTS_JSON" | jq -r '.[] | select(.status != "TestPassed") | "\(.scenario): \(.status)"' 2>/dev/null || true)
   if [ -n "$FAILED_TESTS" ]; then
     echo "  4-${VERSION}: ✗ Tests failed: $FAILED_TESTS" >&2
+    # If every failing test is BuildPLRInProgress and the snapshot is old, the
+    # pipeline may be stuck rather than still building.
+    if printf '%s\n' "$FAILED_TESTS" | grep -q "BuildPLRInProgress" && \
+       ! printf '%s\n' "$FAILED_TESTS" | grep -qv "BuildPLRInProgress"; then
+      SNAP_TS=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant \
+        -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
+      if [ -n "$SNAP_TS" ]; then
+        SNAP_EPOCH=$(date -d "$SNAP_TS" +%s 2>/dev/null || echo 0)
+        NOW_EPOCH=$(date +%s)
+        AGE_MIN=$(( (NOW_EPOCH - SNAP_EPOCH) / 60 ))
+        if [ "$AGE_MIN" -gt 45 ]; then
+          echo "    ⚠ Snapshot is ${AGE_MIN}m old — pipeline may be stuck." >&2
+          echo "      Check: oc get pipelineruns -n submariner-tenant | grep fbc-4-${VERSION}" >&2
+        fi
+      fi
+    fi
     FAILED_DETAILS="${FAILED_DETAILS}    4-${VERSION}: Tests failed: $FAILED_TESTS\n"
     FAILED=$((FAILED + 1))
     continue
@@ -430,7 +418,7 @@ echo "" >&2
 echo "Step 6: Fetching operator CSV from commit ${SOURCE_COMMIT:0:7}..." >&2
 
 # Fetch CSV from specific commit (not branch HEAD)
-OP_CSV=$(curl -sf "https://raw.githubusercontent.com/submariner-io/submariner-operator/${SOURCE_COMMIT}/bundle/manifests/submariner.clusterserviceversion.yaml")
+OP_CSV=$(curl -sf "https://raw.githubusercontent.com/submariner-io/submariner-operator/${SOURCE_COMMIT}/bundle/manifests/submariner.clusterserviceversion.yaml" || true)
 if [ -z "$OP_CSV" ]; then
   echo "❌ ERROR: Failed to fetch operator CSV from source commit" >&2
   echo "URL: https://raw.githubusercontent.com/submariner-io/submariner-operator/${SOURCE_COMMIT}/bundle/manifests/submariner.clusterserviceversion.yaml" >&2
@@ -440,7 +428,7 @@ fi
 echo "  ✓ Fetched operator CSV from commit ${SOURCE_COMMIT:0:7}" >&2
 
 # Fetch FBC bundle for comparison (using first applicable version as representative - all verified identical)
-FBC_BUNDLE=$(curl -sf "https://raw.githubusercontent.com/stolostron/submariner-operator-fbc/main/catalog-4-${REPRESENTATIVE_VERSION}/bundles/bundle-v${FULL_VERSION}.yaml")
+FBC_BUNDLE=$(curl -sf "https://raw.githubusercontent.com/stolostron/submariner-operator-fbc/main/catalog-4-${REPRESENTATIVE_VERSION}/bundles/bundle-v${FULL_VERSION}.yaml" || true)
 if [ -z "$FBC_BUNDLE" ]; then
   echo "❌ ERROR: Failed to fetch FBC bundle from GitHub" >&2
   echo "URL: https://raw.githubusercontent.com/stolostron/submariner-operator-fbc/main/catalog-4-${REPRESENTATIVE_VERSION}/bundles/bundle-v${FULL_VERSION}.yaml" >&2

@@ -24,6 +24,9 @@
 
 set -euo pipefail
 
+# Resolve script location before any cd so lib paths work from any clone location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ━━━ CONSTANTS ━━━
 
 readonly OPERATOR_REPO="$HOME/go/src/submariner-io/submariner-operator"
@@ -110,6 +113,22 @@ check_prerequisites() {
   echo ""
 }
 
+# Cross-step branch-misroute guard. bundle-image-update commits the SHA bump onto
+# whatever branch submariner-operator has checked out (commit_changes) and prints
+# `push origin $BRANCH`. If a prior release step (e.g. the cveFixes CVE-fix tooling)
+# left the repo parked on its own `fix-*` branch, the bump would silently land there
+# instead of release-<X.Y> — the documented cross-step branch hazard (see plan
+# "Known bugs"). Assert the checkout is an *intended* bundle branch for this version:
+# the release branch, or the Konflux bundle bot branch (Y-stream step 3b). Returns
+# non-zero for anything else (a stray fix branch, detached HEAD, or wrong version).
+assert_expected_branch() {
+  local branch="$1" version_dot="$2" version_dash="$3"
+  case "$branch" in
+    "release-$version_dot"|"konflux-submariner-bundle-$version_dash") return 0 ;;
+  esac
+  return 1
+}
+
 parse_arguments() {
   local VERSION_ARG=""
 
@@ -135,9 +154,10 @@ parse_arguments() {
     esac
   done
 
-  # Extract version from branch if not provided
+  # Extract version from branch if not provided. Only the two branches this script
+  # legitimately commits onto are recognized (release + bundle bot); any other
+  # branch dies below rather than guessing a version and risking a misrouted commit.
   if [ -z "$VERSION_ARG" ]; then
-    # Try extracting version from various branch patterns
     case "$BRANCH" in
       release-*)
         VERSION_DOT="${BRANCH#release-}"  # release-0.21 -> 0.21
@@ -146,10 +166,6 @@ parse_arguments() {
         # Bot branch: konflux-submariner-bundle-0-24 -> 0.24
         local TEMP="${BRANCH#konflux-submariner-bundle-}"
         VERSION_DOT="${TEMP//-/.}"
-        ;;
-      *)
-        # Try extracting X-Y or X.Y pattern from branch name
-        VERSION_DOT=$(echo "$BRANCH" | grep -oE '[0-9]+-[0-9]+' | head -1 | tr '-' '.' || true)
         ;;
     esac
     if ! echo "$VERSION_DOT" | grep -qE '^[0-9]+\.[0-9]+$'; then
@@ -171,8 +187,21 @@ parse_arguments() {
 
   VERSION_DASH="${VERSION_DOT//./-}"  # 0.21 -> 0-21
 
+  # Refuse to commit onto a stray branch. bundle-image-update commits to whatever
+  # branch is checked out, so a repo left on a fix branch by a prior release step
+  # would misroute the SHA bump. Only the intended release / bundle-bot branch for
+  # this version is allowed. (Auto-detected branches always pass — they can only be
+  # release-*/bundle-*; every other branch already died above with "Cannot
+  # auto-detect version". The check still earns its keep on the explicit path.)
+  if ! assert_expected_branch "$BRANCH" "$VERSION_DOT" "$VERSION_DASH"; then
+    die "submariner-operator is on branch '$BRANCH', not release-$VERSION_DOT" \
+      "A prior release step may have left the repo on a fix branch, which would
+misroute the bundle-SHA commit. Check out the release branch and re-run:
+  cd $OPERATOR_REPO && git checkout release-$VERSION_DOT"
+  fi
+
   # Read current bundle version
-  CURRENT_VERSION=$(grep "^  version:" bundle/manifests/submariner.clusterserviceversion.yaml | head -1 | awk '{print $2}')
+  CURRENT_VERSION=$(grep "^  version:" bundle/manifests/submariner.clusterserviceversion.yaml | head -1 | awk '{print $2}') || true
 
   if ! echo "$CURRENT_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     die "Invalid version format in CSV: $CURRENT_VERSION" \
@@ -207,7 +236,9 @@ find_snapshot() {
     SNAPSHOT="$SNAPSHOT_ARG"
     # Verify snapshot exists
     local CREATION_TIME
-    CREATION_TIME=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null)
+    # `|| true`: oc get on a nonexistent named snapshot exits non-zero, which
+    # under set -e would abort before the friendly "Snapshot not found" die below.
+    CREATION_TIME=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
     if [ -z "$CREATION_TIME" ]; then
       die "Snapshot not found: $SNAPSHOT"
     fi
@@ -215,10 +246,12 @@ find_snapshot() {
   else
     # Get snapshot names only (avoids JSON corruption with large result sets)
     local SNAPSHOT_NAMES
+    # `|| true`: a no-match grep exits non-zero, which (with pipefail) would abort
+    # the whole script before the friendly "No snapshots found" die below.
     SNAPSHOT_NAMES=$(oc get snapshots -n submariner-tenant \
       -l 'pac.test.appstudio.openshift.io/event-type in (push,retest-all-comment,incoming)' \
       --sort-by=.metadata.creationTimestamp -o name | \
-      grep "^snapshot.appstudio.redhat.com/submariner-${VERSION_DASH}")
+      grep "^snapshot.appstudio.redhat.com/submariner-${VERSION_DASH}" || true)
 
     if [ -z "$SNAPSHOT_NAMES" ]; then
       die "No snapshots found for version ${VERSION_DOT}"
@@ -245,9 +278,15 @@ find_snapshot() {
     fi
 
     local CREATION_TIME
-    CREATION_TIME=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o jsonpath='{.metadata.creationTimestamp}')
+    CREATION_TIME=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
+    [ -z "$CREATION_TIME" ] && die "Snapshot disappeared or oc error: $SNAPSHOT"
     echo "Using snapshot: $SNAPSHOT (created $CREATION_TIME)"
-    [ "$FALLBACK" = true ] && echo "  Note: Snapshot may have test failures (expected for new version setup)"
+    [ "$FALLBACK" = true ] && {
+      echo "  ⚠️  WARNING: this snapshot's tests did NOT pass (no passing snapshot was found)."
+      echo "     Verify its test/EC status in the Konflux UI before pushing the bundle."
+      echo "     Failing tests are expected only during initial new-version setup —"
+      echo "     during a normal Z-stream update they may signal a real regression."
+    }
   fi
 
   echo ""
@@ -256,16 +295,26 @@ find_snapshot() {
 extract_shas() {
   echo "Extracting component SHAs from snapshot..."
 
+  # Fetch the snapshot JSON once and reuse it for every component. A single
+  # snapshot is a bounded object that is safe to hold in a variable; the
+  # "don't store JSON" caveat applies only to the large snapshot LIST queried
+  # in find_snapshot, not to one resolved snapshot.
+  local SNAP_JSON
+  SNAP_JSON=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o json) || \
+    die "Failed to fetch snapshot: $SNAPSHOT"
+
   local COMPONENT SNAPSHOT_COMPONENT VAR_NAME SHA
   for PAIR in "${COMPONENT_MAP[@]}"; do
     COMPONENT="${PAIR%%:*}"
     VAR_NAME="${PAIR##*:}"
     SNAPSHOT_COMPONENT="${COMPONENT}-${VERSION_DASH}"
 
-    # Pipe directly from oc to jq (don't store JSON in variable)
-    SHA=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o json | \
+    # `|| true`: a missing component yields empty jq output, so grep exits
+    # non-zero on no-match; under set -e/pipefail that would abort before the
+    # friendly "Failed to extract SHA" die below.
+    SHA=$(printf '%s' "$SNAP_JSON" | \
       jq -r ".spec.components[] | select(.name==\"$SNAPSHOT_COMPONENT\") | .containerImage" | \
-      grep -oP 'sha256:\K[a-f0-9]+')
+      grep -oP 'sha256:\K[a-f0-9]+' || true)
 
     if [ -z "$SHA" ]; then
       die "Failed to extract SHA for component: $SNAPSHOT_COMPONENT"
@@ -381,20 +430,28 @@ verify_shas() {
 
   local ERRORS=0
 
+  # Fetch the snapshot JSON once (source of truth) and reuse it per component;
+  # a single snapshot is safe to hold in a variable (see extract_shas).
+  local SNAP_JSON
+  SNAP_JSON=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o json) || \
+    die "Failed to fetch snapshot: $SNAPSHOT"
+
   local PAIR COMPONENT SNAPSHOT_COMPONENT VAR_NAME SNAPSHOT_SHA BUNDLE_SHA
   for PAIR in "${COMPONENT_MAP[@]}"; do
     COMPONENT="${PAIR%%:*}"
     VAR_NAME="${PAIR##*:}"
     SNAPSHOT_COMPONENT="${COMPONENT}-${VERSION_DASH}"
 
-    # Get SHA from snapshot (source of truth)
-    SNAPSHOT_SHA=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o json | \
+    # Get SHA from snapshot (source of truth). `|| true`: a missing component or
+    # SHA-less image makes grep exit non-zero, which under set -e/pipefail would
+    # abort before the empty-SHA guard below can report the MISSING via ERRORS.
+    SNAPSHOT_SHA=$(printf '%s' "$SNAP_JSON" | \
       jq -r ".spec.components[] | select(.name==\"$SNAPSHOT_COMPONENT\") | .containerImage" | \
-      grep -o 'sha256:[a-f0-9]*')
+      grep -o 'sha256:[a-f0-9]*' || true)
 
     # Get SHA from bundle CSV (what we generated)
     BUNDLE_SHA=$(grep -A1 "name: RELATED_IMAGE_$VAR_NAME" bundle/manifests/submariner.clusterserviceversion.yaml \
-      | grep "value:" | grep -o 'sha256:[a-f0-9]*')
+      | grep "value:" | grep -o 'sha256:[a-f0-9]*' || true)
 
     if [ -z "$SNAPSHOT_SHA" ] || [ -z "$BUNDLE_SHA" ]; then
       echo "FAIL $SNAPSHOT_COMPONENT: MISSING SHA!"
@@ -413,11 +470,13 @@ verify_shas() {
 
   # Verify metrics-proxy uses nettest SHA
   local NETTEST_SHA METRICS_SHA
-  NETTEST_SHA=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o json | \
+  # `|| true` on both: no-match grep exits non-zero and would abort under
+  # set -e/pipefail before the empty-SHA guard below can report it via ERRORS.
+  NETTEST_SHA=$(printf '%s' "$SNAP_JSON" | \
     jq -r ".spec.components[] | select(.name==\"nettest-${VERSION_DASH}\") | .containerImage" | \
-    grep -o 'sha256:[a-f0-9]*')
+    grep -o 'sha256:[a-f0-9]*' || true)
   METRICS_SHA=$(grep -A1 "name: RELATED_IMAGE_submariner-metrics-proxy" bundle/manifests/submariner.clusterserviceversion.yaml \
-    | grep "value:" | grep -o 'sha256:[a-f0-9]*')
+    | grep "value:" | grep -o 'sha256:[a-f0-9]*' || true)
 
   if [ -z "$NETTEST_SHA" ] || [ -z "$METRICS_SHA" ]; then
     echo "FAIL metrics-proxy: MISSING SHA!"
@@ -486,9 +545,13 @@ Updates container image SHAs to match Konflux snapshot.
 Snapshot: $SNAPSHOT"
   fi
 
+  git diff --quiet --cached && { echo "Nothing staged — bundle already up to date"; return 0; }
   git commit -s -m "$COMMIT_MSG"
+  COMMIT_CREATED=true
   echo "Commit created"
 }
+
+COMMIT_CREATED=false
 
 # ━━━ STEP 7: SUMMARY ━━━
 
@@ -504,11 +567,15 @@ print_summary() {
   echo "  Snapshot: $SNAPSHOT"
   echo "  Branch: $BRANCH"
   echo ""
-  echo "Commit created:"
-  git --no-pager log -1 --oneline
-  echo ""
-  echo "Files modified:"
-  git --no-pager diff --stat HEAD~1
+  if [ "$COMMIT_CREATED" = true ]; then
+    echo "Commit created:"
+    git --no-pager log -1 --oneline
+    echo ""
+    echo "Files modified:"
+    git --no-pager diff --stat HEAD~1
+  else
+    echo "No changes — bundle already up to date"
+  fi
   echo ""
   echo "Next steps:"
   echo "  1. Review changes: git show"
@@ -516,6 +583,12 @@ print_summary() {
   echo "  3. Wait for bundle rebuild (~15-30 min)"
   echo "  4. Verify: oc get snapshots -n submariner-tenant | grep submariner-bundle-${VERSION_DASH}"
   echo ""
+  # Append to push summary if conductor is running
+  if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
+    printf '\n  cd %s\n  git push origin %s\n' \
+      "$OPERATOR_REPO" "$BRANCH" \
+      >> "$AUTORELEASE_PUSH_LOG"
+  fi
 }
 
 # ━━━ MAIN ━━━
@@ -525,7 +598,7 @@ main() {
   parse_arguments "$@"
 
   # Tracker integration
-  TRACKER_LIB="${TRACKER_LIB:-$HOME/konflux/submariner-release-management/scripts/lib/jira-tracker.sh}"
+  TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
   # shellcheck source=/dev/null
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
   TRACKER=$(find_release_tracker "${TARGET_VERSION:-}" 2>/dev/null || true)
@@ -556,4 +629,7 @@ main() {
   fi
 }
 
-main "$@"
+# Guard so tests can source helpers (assert_expected_branch) without running an update.
+if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
+  main "$@"
+fi

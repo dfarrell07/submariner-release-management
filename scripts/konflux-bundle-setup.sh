@@ -25,10 +25,19 @@
 
 set -euo pipefail
 
+# Locate this script's directory so shared libs source regardless of CWD (this
+# script cds into the operator repo during execution). Computed before any cd.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PATCHER_LIB="$SCRIPT_DIR/lib/pipeline-patcher.sh"
+if [ ! -f "$PATCHER_LIB" ]; then
+  echo "ERROR: Required library not found: $PATCHER_LIB" >&2
+  exit 1
+fi
+# shellcheck source=lib/pipeline-patcher.sh
+source "$PATCHER_LIB"
+
 # ━━━ CONSTANTS ━━━
 
-readonly PATCHER_SHA="b001763bb1cd0286a894cfb570fe12dd7f4504bd"
-readonly EXPECTED_SHA256="080ad5d7cf7d0cee732a774b7e4dda0e2ccf26b58e08a8516a3b812bc73beb53"
 readonly OPERATOR_REPO="$HOME/go/src/submariner-io/submariner-operator"
 
 # ━━━ GLOBAL VARIABLES ━━━
@@ -343,10 +352,18 @@ add_bundle_infrastructure() {
 
   echo "✓ Version strings updated (${VERSION}, ${VERSION_DASH}, ${ACM_VERSION})"
 
-  # Commit changes
+  # Commit changes. Skip if nothing staged: this step re-derives its inputs
+  # deterministically (checkout-from-prev + fixed seds), so a re-run stages an
+  # identical tree and an unconditional `git commit` would die at a no-op.
+  # `--cached` (not a working-tree check) because the -f paths are gitignored —
+  # untracked/ignored files never show in `git diff`, only in the staged index.
   git add -f bundle.Dockerfile.konflux config/bundle/ config/manager/patches/ .tekton/
-  commit_changes "Add Konflux bundle infrastructure for ${RELEASE_BRANCH}" \
-    "Bundle infrastructure configured"
+  if git diff --cached --quiet; then
+    echo "ℹ️  Bundle infrastructure already present (no commit needed)"
+  else
+    commit_changes "Add Konflux bundle infrastructure for ${RELEASE_BRANCH}" \
+      "Bundle infrastructure configured"
+  fi
 }
 
 # ━━━ STEP 5: VERIFY BUNDLE IMAGES ━━━
@@ -437,21 +454,20 @@ add_subscription_annotation() {
 # ━━━ STEP 8: ADD BUILD ARGS FILE ━━━
 
 add_build_args_file() {
-  local PULL_REQUEST_FILE=".tekton/submariner-bundle-${VERSION_DASH}-pull-request.yaml"
-
   echo "Checking build-args-file parameter..."
 
-  # Check if build-args-file parameter already exists in pull-request file
-  if awk '/^spec:/,/^  pipelineSpec:/' "$PULL_REQUEST_FILE" | grep -q "name: build-args-file"; then
-    echo "ℹ️  Build args file parameter already present"
-  else
-    echo "Adding build-args-file parameter..."
-
-    # Add build-args-file parameter after dockerfile parameter
+  local file
+  for file in .tekton/submariner-bundle-*.yaml; do
+    grep -q "name: build-args-file" "$file" && continue
+    echo "Adding build-args-file parameter to $file..."
     sed -i '/value: bundle.Dockerfile.konflux$/a\  - name: build-args-file\n    value: .tekton/konflux.args' \
-      .tekton/submariner-bundle-*.yaml
+      "$file"
+  done
 
-    git add .tekton/submariner-bundle-*.yaml
+  git add .tekton/submariner-bundle-*.yaml
+  if git diff --cached --quiet; then
+    echo "ℹ️  Build args file parameter already present in all files"
+  else
     commit_changes "Add build args file to bundle tekton config" \
       "Build args file parameter added"
   fi
@@ -460,21 +476,20 @@ add_build_args_file() {
 # ━━━ STEP 9: ENABLE HERMETIC BUILDS AND SBOM ━━━
 
 enable_hermetic_builds() {
-  local PULL_REQUEST_FILE=".tekton/submariner-bundle-${VERSION_DASH}-pull-request.yaml"
-
   echo "Checking hermetic builds and SBOM parameters..."
 
-  # Idempotency check
-  if awk '/^spec:/,/^  pipelineSpec:/' "$PULL_REQUEST_FILE" | grep -q "name: hermetic"; then
-    echo "ℹ️  Hermetic builds and SBOM parameters already present"
-  else
-    echo "Adding hermetic builds and SBOM parameters..."
-
-    # Add hermetic and build-source-image parameters after build-args-file
+  local file
+  for file in .tekton/submariner-bundle-*.yaml; do
+    grep -q "name: hermetic" "$file" && continue
+    echo "Adding hermetic builds and SBOM parameters to $file..."
     sed -i '/value: \.tekton\/konflux\.args$/a\  - name: hermetic\n    value: "true"\n  - name: build-source-image\n    value: "true"' \
-      .tekton/submariner-bundle-*.yaml
+      "$file"
+  done
 
-    git add .tekton/submariner-bundle-*.yaml
+  git add .tekton/submariner-bundle-*.yaml
+  if git diff --cached --quiet; then
+    echo "ℹ️  Hermetic builds and SBOM parameters already present in all files"
+  else
     commit_changes "Enable hermetic builds and SBOM for bundle" \
       "Hermetic builds and SBOM enabled"
   fi
@@ -483,21 +498,20 @@ enable_hermetic_builds() {
 # ━━━ STEP 10: ADD MULTI-PLATFORM SUPPORT ━━━
 
 add_multiplatform() {
-  local PULL_REQUEST_FILE=".tekton/submariner-bundle-${VERSION_DASH}-pull-request.yaml"
-
   echo "Checking multi-platform support..."
 
-  # Idempotency check
-  if awk '/^spec:/,/^  pipelineSpec:/' "$PULL_REQUEST_FILE" | grep -q "name: build-platforms"; then
-    echo "ℹ️  Multi-platform support already present"
-  else
-    echo "Adding multi-platform support..."
-
-    # Add build-platforms parameter after dockerfile parameter
+  local file
+  for file in .tekton/submariner-bundle-*.yaml; do
+    grep -q "build-platforms" "$file" && continue
+    echo "Adding multi-platform support to $file..."
     sed -i '/value: bundle.Dockerfile.konflux$/a\  - name: build-platforms\n    value:\n    - linux/x86_64\n    - linux/ppc64le\n    - linux/s390x\n    - linux/arm64' \
-      .tekton/submariner-bundle-*.yaml
+      "$file"
+  done
 
-    git add .tekton/submariner-bundle-*.yaml
+  git add .tekton/submariner-bundle-*.yaml
+  if git diff --cached --quiet; then
+    echo "ℹ️  Multi-platform support already present in all files"
+  else
     commit_changes "Add multi-platform build support to bundle" \
       "Multi-platform support added (x86_64, ppc64le, s390x, arm64)"
   fi
@@ -561,11 +575,15 @@ add_file_change_filters() {
   done
 
   git add .tekton/submariner-bundle-*.yaml
-  commit_changes "Avoid building bundle when updating operator
+  if git diff --cached --quiet; then
+    echo "ℹ️  File change filters already present (no commit needed)"
+  else
+    commit_changes "Avoid building bundle when updating operator
 
 Add file change filters to CEL expressions to prevent
 unnecessary bundle builds when only operator files change." \
-    "File change filters added"
+      "File change filters added"
+  fi
 }
 
 # ━━━ STEP 12: UPDATE TASK REFERENCES ━━━
@@ -573,34 +591,31 @@ unnecessary bundle builds when only operator files change." \
 update_task_refs() {
   echo "Updating Tekton task references..."
 
-  # Download script
-  local SCRIPT ACTUAL_SHA256
-  SCRIPT=$(curl -sL "https://raw.githubusercontent.com/simonbaird/konflux-pipeline-patcher/${PATCHER_SHA}/pipeline-patcher")
-
-  # Verify SHA256 checksum
-  if command -v sha256sum &>/dev/null; then
-    ACTUAL_SHA256=$(echo "$SCRIPT" | sha256sum | cut -d' ' -f1)
-  else
-    ACTUAL_SHA256=$(echo "$SCRIPT" | shasum -a 256 | cut -d' ' -f1)
-  fi
-
-  if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-    die "Script checksum mismatch!" \
-      "   Expected: $EXPECTED_SHA256
-   Actual:   $ACTUAL_SHA256
-
-Security verification failed. Not executing downloaded script."
-  fi
+  # Download and verify the pipeline-patcher (pinned SHA, checksum, and download
+  # hardening all live in scripts/lib/pipeline-patcher.sh, shared with
+  # konflux-component-setup.sh).
+  local SCRIPT
+  SCRIPT=$(download_and_verify_patcher) || \
+    die "Failed to download/verify pipeline-patcher" \
+      "Check network connectivity and GitHub access"
 
   echo "✓ Script checksum verified"
 
   # Run bump-task-refs (updates all .tekton files, including operator)
   echo "$SCRIPT" | bash -s bump-task-refs
 
-  # Stage all .tekton changes (bundle + operator files)
+  # Stage all .tekton changes (bundle + operator files). Skip the commit if the
+  # patcher was a no-op — the bot-generated .tekton files may already reference
+  # the latest task versions (or this is a re-run), so nothing is staged and an
+  # unconditional `git commit` would die at the final step despite success.
+  # Mirrors the guard in konflux-component-setup.sh update_task_refs.
   git add .tekton/
-  commit_changes "Update Tekton task references to latest versions" \
-    "Task references updated"
+  if git diff --cached --quiet; then
+    echo "ℹ️  Task references already up to date (no commit needed)"
+  else
+    commit_changes "Update Tekton task references to latest versions" \
+      "Task references updated"
+  fi
 }
 
 # ━━━ STEP 13: FINAL VERIFICATION AND SUMMARY ━━━
@@ -706,8 +721,17 @@ print_summary() {
 # ━━━ MAIN ━━━
 
 main() {
+  local input_version="${1:-}"
   check_prerequisites
   parse_args_and_detect_version "$@"
+
+  # Tracker integration (input_version preserves 3-segment before parse overwrites VERSION to 2-segment)
+  TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
+  # shellcheck source=/dev/null
+  [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
+  TRACKER=$(find_release_tracker "$input_version" 2>/dev/null || true)
+  [ -n "${TRACKER:-}" ] && update_step "$input_version" "tektonBundle" "in_progress" '{}' "$TRACKER"
+
   checkout_branch
   add_yamllint_ignore
   add_bundle_infrastructure
@@ -720,6 +744,20 @@ main() {
   add_file_change_filters
   update_task_refs
   print_summary
+
+  # Push summary
+  if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
+    local current_branch
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    printf '\n  cd %s\n  git push origin %s\n' "$OPERATOR_REPO" "$current_branch" >> "$AUTORELEASE_PUSH_LOG"
+  fi
+
+  # Record completion
+  if [ -n "${TRACKER:-}" ]; then
+    local data
+    data=$(jq -n --arg ver "$VERSION" '{version:$ver}' | jq -c .) || data="{}"
+    update_step "$input_version" "tektonBundle" "complete" "$data" "$TRACKER"
+  fi
 }
 
 main "$@"

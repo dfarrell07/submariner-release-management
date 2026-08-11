@@ -58,7 +58,7 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 **FBC (File-Based Catalog):**
 
 - **Purpose**: Makes Submariner installable via OLM. Publishes to Red Hat's operator index (appears in OperatorHub).
-- **Template**: `catalog-template.yaml` is source of truth. `make build-catalogs` generates 6 `catalog-4-XX/` directories.
+- **Template**: `catalog-template.yaml` is source of truth. `make build-catalogs` generates 7 `catalog-4-XX/` directories.
 - **Bundles**: Version entries (e.g., `submariner.v0.22.0`) containing bundle image SHA and `relatedImages` (7 components).
 - **Channels**: Update paths (e.g., `stable-0.22`). Users subscribe to a channel and get upgrades within it.
 - **Version pruning**: `drop-versions.json` maps OCP versions to minimum Submariner versions (e.g., OCP 4.20 drops anything before 0.20).
@@ -66,7 +66,7 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 
 **Konflux resources (K8s CRDs):**
 
-- **Application**: Groups components. `submariner-0-X` has 9 components; 6 `submariner-fbc-4-XX` apps each have 1 catalog.
+- **Application**: Groups components. `submariner-0-X` has 9 components; 7 `submariner-fbc-4-XX` apps each have 1 catalog.
 - **Snapshot**: Immutable component references (image SHAs). Created after builds complete. Query with `oc get snapshots`.
 - **ReleasePlan**: Links application to RPA. Lives in tenant namespace (submariner-tenant). Referenced by Release CRs.
 - **RPA**: ReleasePlanAdmission. Defines release pipeline, EC policy, registry config. Lives in managed namespace (rhtap-releng-tenant).
@@ -99,16 +99,16 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 | 10 | Apply stage release to cluster via `make apply` | Y/Z |
 | 10b | Check Released=True, debug failures, retry if infra issue | Y/Z |
 | 11 | Update FBC catalogs with bundle SHA from stage registry | Y/Z |
-| 12 | Create 6 FBC stage release YAMLs (one per OCP 4.16-4.21) | Y/Z |
-| 13 | Apply all 6 FBC stage releases to cluster | Y/Z |
-| 13b | Verify all 6 FBC pipelines succeeded | Y/Z |
+| 12 | Create 7 FBC stage release YAMLs (one per OCP 4.16-4.22) | Y/Z |
+| 13 | Apply all 7 FBC stage releases to cluster | Y/Z |
+| 13b | Verify all 7 FBC pipelines succeeded | Y/Z |
 | 14 | Create Jira ticket with stage catalog URLs for QE | Y/Z |
 | 15 | Copy stage YAML to prod, change releasePlan to prod | Y/Z |
 | 16 | Apply prod release to cluster | Y/Z |
 | 16b | Verify prod pipeline succeeded | Y/Z |
-| 17 | Copy 6 FBC stage YAMLs to prod, change releasePlans | Y/Z |
-| 18 | Apply all 6 FBC prod releases to cluster | Y/Z |
-| 18b | Verify all 6 FBC prod pipelines succeeded | Y/Z |
+| 17 | Copy 7 FBC stage YAMLs to prod, change releasePlans | Y/Z |
+| 18 | Apply all 7 FBC prod releases to cluster | Y/Z |
+| 18b | Verify all 7 FBC prod pipelines succeeded | Y/Z |
 | 19 | Share prod index URLs with QE - release complete | Y/Z |
 | 20 | Update FBC templates to use registry.redhat.io URLs | Y/Z |
 
@@ -120,7 +120,7 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 | 2 | Add overlays (app, 9 components, ReleasePlans) and RPAs in konflux-release-data. ArgoCD syncs; triggers bot PRs. |
 | 3 | Customize Tekton configs: hermetic builds (Go mods, RPM lockfiles), multi-arch, SBOM. Version labels. 8 components, 5 repos. |
 | 3b | Two parts: (1) update bundle CSV with component SHAs from snapshot, (2) set up bundle Tekton pipeline. Components must build first. |
-| 4 | Enterprise Contract validates Red Hat release policies. Fix violations in component repos (9 images) and FBC repo (6 catalogs). |
+| 4 | Enterprise Contract validates Red Hat release policies. Fix violations in component repos (9 images) and FBC repo (7 catalogs). |
 | 5 | Grype scans Go (7 repos), clair scans images. Fix→rebuild→rescan loop. Go stdlib CVEs fixed in Shipyard (base image for others). |
 | 5b | Bump version labels in 9 Dockerfiles across 5 repos. Bundle has 3 labels (csv-version, release, version). Rebuild triggers. |
 | 6 | Run releases repo tooling to create git tags and publish images to quay.io/submariner. Official upstream release. |
@@ -130,16 +130,16 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 | 10 | Run `make apply` to create Release CR on cluster. Pipeline publishes 9 images to registry.stage.redhat.io. |
 | 10b | Check `Released` condition. If failed: check ManagedPipelineProcessed, get log URL, determine retry vs fix. Increment suffix. |
 | 11 | Update FBC catalogs in submariner-operator-fbc repo with bundle SHA from stage registry. Wait ~15-30 min for rebuilds. |
-| 12 | Find passing FBC snapshots (push events only). Verify bundle SHA matches across all 6 catalogs. Create 6 Release YAMLs. |
-| 13 | Apply 6 FBC releases with `make apply`. Each publishes catalog to stage index for its OCP version. |
-| 13b | Check all 6 Released conditions. Same debug process as 10b. All must succeed before QE handoff. |
-| 14 | Extract catalog URLs from snapshots. Create Jira ticket for QE with 6 URLs. **Wait for QE approval before prod.** |
+| 12 | Find passing FBC snapshots (push events only). Verify bundle SHA matches across all 7 catalogs. Create 7 Release YAMLs. |
+| 13 | Apply 7 FBC releases with `make apply`. Each publishes catalog to stage index for its OCP version. |
+| 13b | Check all 7 Released conditions. Same debug process as 10b. All must succeed before QE handoff. |
+| 14 | Extract catalog URLs from snapshots. Create Jira ticket for QE with 7 URLs. **Wait for QE approval before prod.** |
 | 15 | Copy stage YAML to prod directory. Change name (stage→prod) and releasePlan (stage-0-X→prod-0-X). Same snapshot/notes. |
 | 16 | Apply prod release. Pipeline publishes to registry.redhat.io (production). Same 9 images as stage. |
 | 16b | Verify prod pipeline succeeded. Same debug process as 10b. |
-| 17 | Copy 6 FBC stage YAMLs to prod directories. Change names and releasePlans. Same snapshots - catalog URLs work for both. |
-| 18 | Apply 6 FBC prod releases. Publishes catalogs to production indices (registry.redhat.io/redhat/redhat-operator-index). |
-| 18b | Verify all 6 succeeded. Release is now live in production OperatorHub. |
+| 17 | Copy 7 FBC stage YAMLs to prod directories. Change names and releasePlans. Same snapshots - catalog URLs work for both. |
+| 18 | Apply 7 FBC prod releases. Publishes catalogs to production indices (registry.redhat.io/redhat/redhat-operator-index). |
+| 18b | Verify all 7 succeeded. Release is now live in production OperatorHub. |
 | 19 | Extract index URLs from release status. Notify QE. **Submariner 0.X.Y production release complete.** |
 | 20 | Optional cleanup: update FBC templates to use registry.redhat.io URLs. Prevents breakage when quay.io images expire. |
 
@@ -158,7 +158,7 @@ Each step's workflow is in `.agents/workflows/<step-name>.md`. When it says "fol
 | [submariner-io/lighthouse](https://github.com/submariner-io/lighthouse) | `~/go/src/submariner-io/lighthouse` | `.agents/workflows/` (devel) | Agent, coredns |
 | [submariner-io/shipyard](https://github.com/submariner-io/shipyard) | `~/go/src/submariner-io/shipyard` | `.agents/workflows/` (devel) | Nettest |
 | [submariner-io/subctl](https://github.com/submariner-io/subctl) | `~/go/src/submariner-io/subctl` | `.agents/workflows/` (devel) | Subctl CLI |
-| [stolostron/submariner-operator-fbc](https://github.com/stolostron/submariner-operator-fbc) | `~/konflux/submariner-operator-fbc` | `.agents/workflows/` (main) | FBC catalogs (6 OCP) |
+| [stolostron/submariner-operator-fbc](https://github.com/stolostron/submariner-operator-fbc) | `~/konflux/submariner-operator-fbc` | `.agents/workflows/` (main) | FBC catalogs (7 OCP) |
 | [konflux-release-data](https://gitlab.cee.redhat.com/releng/konflux-release-data) (GitLab) | `~/konflux/konflux-release-data` | `tenants-config/.../CLAUDE.md` (main) | Konflux tenant config |
 | [konflux-ci/docs](https://github.com/konflux-ci/docs) | `~/konflux/konflux-ci/docs` | `modules/` (main) | Konflux platform docs |
 | [rhtap-ec-policy](https://github.com/release-engineering/rhtap-ec-policy) | `~/konflux/konflux-ci/rhtap-ec-policy` | `data/` (main) | EC policy definitions |

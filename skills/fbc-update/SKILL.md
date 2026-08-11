@@ -1,15 +1,23 @@
 ---
 name: fbc-update
-description: Update FBC catalog with bundle from Konflux snapshot - automates scenario detection, template updates, catalog rebuild, and verification
+description: Update FBC catalog with bundle from Konflux snapshot - runs update-bundle + build-catalogs, commits, and updates the release tracker
 version: 1.0.0
 argument-hint: "<version> [--snapshot name] [--replace old-version]"
 user-invocable: true
-allowed-tools: [Bash]
+allowed-tools: Bash
 ---
 
 # FBC Update Skill
 
-Automates FBC (File-Based Catalog) updates for Submariner releases.
+Automates Step 11 (FBC catalog update) of the Submariner release workflow.
+
+**What it does** (via `scripts/fbc-catalog-update.sh`):
+
+- Runs `make update-bundle` in the FBC repo (queries the latest passing snapshot)
+- Runs `make build-catalogs` to regenerate all 7 OCP catalogs
+- Commits the catalog update
+- Appends the push command to the autorelease push log (never auto-pushes)
+- Updates the Jira release tracker (`fbcCatalogUpdate` step)
 
 ## Usage
 
@@ -34,66 +42,28 @@ Automates FBC (File-Based Catalog) updates for Submariner releases.
 - oc login to Konflux cluster
 - FBC repository at ~/konflux/submariner-operator-fbc
 
+**Arguments:** $ARGUMENTS
+
 ---
 
 ```bash
 #!/bin/bash
 set -euo pipefail
 
-# Validate prerequisites
-if ! oc auth can-i get snapshots -n submariner-tenant 2>/dev/null; then
-  echo "❌ ERROR: Not logged into Konflux cluster"
-  echo "Run: oc login --web https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443/"
+# Find git repository root
+GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$GIT_ROOT" ]; then
+  echo "❌ ERROR: Not in a git repository"
   exit 1
 fi
 
-# Parse arguments
-VERSION=""
-SNAPSHOT=""
-REPLACE=""
-
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --snapshot) SNAPSHOT="$2"; shift 2 ;;
-    --replace) REPLACE="$2"; shift 2 ;;
-    -*) echo "❌ ERROR: Unknown flag: $1"; exit 1 ;;
-    *) VERSION="$1"; shift ;;
-  esac
-done
-
-if [ -z "$VERSION" ]; then
-  echo "❌ ERROR: Version required"
-  echo ""
-  echo "Examples:"
-  echo "  /fbc-update 0.22.1"
-  echo "  /fbc-update 0.22.0"
-  echo "  /fbc-update 0.21.2 --replace 0.21.1"
+# Verify companion script exists
+if [ ! -x "$GIT_ROOT/scripts/fbc-catalog-update.sh" ]; then
+  echo "❌ ERROR: Required script not found"
+  echo "This skill requires: scripts/fbc-catalog-update.sh"
   exit 1
 fi
 
-# Navigate to FBC repo
-FBC_REPO="$HOME/konflux/submariner-operator-fbc"
-if [ ! -d "$FBC_REPO" ]; then
-  echo "❌ ERROR: FBC repository not found at $FBC_REPO"
-  exit 1
-fi
-
-cd "$FBC_REPO"
-
-# Check git status
-if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-  echo "❌ ERROR: FBC repository has uncommitted changes"
-  echo "Run: git status"
-  exit 1
-fi
-
-# Build make command
-MAKE_CMD="make update-bundle VERSION=$VERSION"
-[ -n "$SNAPSHOT" ] && MAKE_CMD="$MAKE_CMD SNAPSHOT=$SNAPSHOT"
-[ -n "$REPLACE" ] && MAKE_CMD="$MAKE_CMD REPLACE=$REPLACE"
-
-# Execute update
-echo "🚀 Executing: $MAKE_CMD"
-echo ""
-exec $MAKE_CMD
+# Delegate to companion script (passes all arguments)
+exec "$GIT_ROOT/scripts/fbc-catalog-update.sh" $ARGUMENTS
 ```

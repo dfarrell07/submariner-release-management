@@ -47,11 +47,15 @@ validate_file() {
   if [[ -z "$bundle_image" || "$bundle_image" == "null" ]]; then
     if [[ "$is_fbc_release" == "true" ]]; then
       echo "  ✓ FBC release (no operator bundle to validate)"
-    else
-      echo "WARNING: No operator bundle component found in snapshot"
+      rm -rf "$tmpdir"
+      return
     fi
+    # A component release must contain a bundle; missing it means the validator
+    # verified nothing. Fail rather than pass unchecked (matches the matched==0
+    # guard below).
+    echo "ERROR: No operator bundle component found in snapshot (component release must contain a bundle)"
     rm -rf "$tmpdir"
-    return
+    exit 1
   fi
 
   echo "  Bundle: $bundle_image"
@@ -101,6 +105,7 @@ validate_file() {
   errors=0
   matched=0
   skipped=0
+  unpinned=0
   while IFS= read -r csv_image; do
     # Skip empty or null lines
     if [[ -z "$csv_image" || "$csv_image" == "null" ]]; then
@@ -110,9 +115,12 @@ validate_file() {
     # Extract SHA from CSV image
     csv_sha=$(echo "$csv_image" | grep -oP 'sha256:[a-f0-9]+' || echo "")
 
+    # An image with no sha256 digest is an unpinned reference (e.g. :v0.22 or
+    # :latest) — the exact defect this validator exists to catch — so count it
+    # as unpinned and fail after the loop rather than silently skipping it.
     if [[ -z "$csv_sha" ]]; then
-      echo "  ⚠ CSV image has no SHA digest: $csv_image"
-      skipped=$((skipped + 1))
+      echo "  ✗ CSV image is not pinned to a sha256 digest: $csv_image"
+      unpinned=$((unpinned + 1))
       continue
     fi
 
@@ -167,6 +175,24 @@ validate_file() {
   if [[ $errors -gt 0 ]]; then
     echo ""
     echo "ERROR: Found $errors image mismatches between CSV and snapshot"
+    rm -rf "$tmpdir"
+    exit 1
+  fi
+
+  if [[ $unpinned -gt 0 ]]; then
+    echo ""
+    echo "ERROR: $unpinned CSV image(s) are not pinned to a sha256 digest"
+    rm -rf "$tmpdir"
+    exit 1
+  fi
+
+  # If nothing matched despite the CSV having images, the validator verified
+  # nothing (e.g. the component-name regex is out of date) — fail rather than
+  # report success on an unchecked bundle.
+  if [[ $matched -eq 0 ]]; then
+    echo ""
+    echo "ERROR: validated 0 of $csv_image_count CSV image(s) — nothing verified"
+    echo "  (no image matched a known component; the component regex may be stale)"
     rm -rf "$tmpdir"
     exit 1
   fi

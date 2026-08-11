@@ -10,7 +10,16 @@ Provide FBC catalog/index URLs to QE for testing in stage and production environ
 
 ### Extract Stage Catalog URLs
 
-Agent extracts catalog URLs for all OCP versions from stage snapshots:
+Use the automation — it extracts stage catalog URLs for every supported OCP
+version from the Release CRs (falling back to local YAMLs + snapshot lookup if
+the CRs are garbage-collected), and populates the QE subtask description:
+
+```bash
+/get-fbc-urls 0.X.Y            # full output for all OCP versions
+/get-fbc-urls 0.X.Y --raw-url  # URLs only (one per line)
+```
+
+**Manual fallback** (equivalent to the default mode, minus the GC fallback):
 
 ```bash
 echo "=== FBC Stage Catalog URLs for QE ==="
@@ -23,7 +32,7 @@ for VERSION in 16 17 18 19 20 21 22; do
 done
 ```
 
-Example output (6 catalog URLs):
+Example output (7 catalog URLs):
 
 ```text
 OCP 4.16: quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-4-16@sha256:...
@@ -32,6 +41,7 @@ OCP 4.18: quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-4-18@sh
 OCP 4.19: quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-4-19@sha256:...
 OCP 4.20: quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-4-20@sha256:...
 OCP 4.21: quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-4-21@sha256:...
+OCP 4.22: quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-4-22@sha256:...
 ```
 
 ### Verify Stage Catalog Content
@@ -88,14 +98,22 @@ Verify all 7 FBC prod releases completed:
 ```bash
 oc get releases -n submariner-tenant --no-headers | \
   grep "submariner-fbc-4-.*-prod.*Succeeded" | wc -l
-# Should show: 5
+# Should show: 7
 ```
 
 If not all completed, wait for remaining releases to finish.
 
 ### Generate QE Message
 
-Extract index URLs and format message for QE:
+Use the automation — `--prod-index` confirms the bundle is live in the Red Hat
+operator index (via skopeo) and prints the per-OCP `registry.redhat.io` index URLs:
+
+```bash
+/get-fbc-urls 0.X.Y --prod-index            # full output
+/get-fbc-urls 0.X.Y --prod-index --raw-url  # URLs only
+```
+
+**Manual fallback** — extract index URLs from the prod Release CRs and format for QE:
 
 ```bash
 echo "Submariner 0.X.Y Prod FBC Released"
@@ -123,7 +141,7 @@ Replace `0.X.Y` with actual version. Copy the output and share with QE.
 **What to verify:**
 
 - Extract bundle SHA from prod release YAML files
-- Check each of 6 index images contains that bundle SHA
+- Check each of 7 index images contains that bundle SHA
 - Verify bundle version matches expected release (0.X.Y)
 
 **Why optional:** QE testing will catch issues if bundle missing/wrong. This verification adds confidence but isn't blocking.
@@ -139,3 +157,10 @@ Replace `0.X.Y` with actual version. Copy the output and share with QE.
 - All 7 FBC prod releases succeeded
 - QE message shared with index URLs
 - **Submariner 0.X.Y production release COMPLETE**
+
+Once the release has shipped, close out its Jira tracker (resolves the parent
+and any still-open subtasks):
+
+```bash
+/autorelease 0.X.Y --close
+```

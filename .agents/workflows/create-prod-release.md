@@ -29,6 +29,6 @@ Create prod YAML with QE-verified release notes.
 Prod YAML created, committed, and pushed. Ready for Step 16 to apply to cluster.
 
 ```bash
-# Verify file pushed to remote
-git ls-tree -r --name-only HEAD releases/0.X/prod/submariner-0-X-Y-prod-*.yaml
+# Verify file pushed to remote (origin/main advances only on an actual push)
+git ls-tree -r --name-only origin/main releases/0.X/prod/submariner-0-X-Y-prod-*.yaml
 ```

@@ -46,8 +46,9 @@ else
   exit 1
 fi
 
-# Extract major.minor for directory structure
-VERSION_MAJOR_MINOR=$(echo "$VERSION" | grep -oE '^[0-9]+\.[0-9]+')
+# Extract major.minor for directory structure (VERSION is validated X.Y.Z above,
+# so %.* strips only the trailing patch segment — no subshell needed)
+VERSION_MAJOR_MINOR="${VERSION%.*}"
 VERSION_MAJOR_MINOR_DASH="${VERSION_MAJOR_MINOR//./-}"  # 0.22 → 0-22
 
 # Version with dashes for naming (0.22.1 → 0-22-1)

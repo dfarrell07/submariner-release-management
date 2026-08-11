@@ -1,4 +1,4 @@
-.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release rpm-lockfile-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker
+.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope
 
 .DEFAULT_GOAL := help
 
@@ -19,7 +19,7 @@ help:
 	@echo "                           Creates overlays, tenant config, and RPA entries"
 	@echo "                           Example: make add-fbc-ocp-version OCP_VERSION=4.22 MIN_SUB=0.23"
 	@echo "  make create-fbc-releases VERSION=... [TYPE=stage|prod]"
-	@echo "                         - Create FBC releases for all 6 OCP versions (requires oc login)"
+	@echo "                         - Create FBC releases for all 7 OCP versions (requires oc login)"
 	@echo "                           Default TYPE is stage if not specified"
 	@echo "                           Example: make create-fbc-releases VERSION=0.22.1"
 	@echo "                           Example: make create-fbc-releases VERSION=0.22.1 TYPE=prod"
@@ -28,11 +28,26 @@ help:
 	@echo "                           Default TYPE is stage if not specified"
 	@echo "                           Example: make create-component-release VERSION=0.22.1"
 	@echo "                           Example: make create-component-release VERSION=0.22.1 TYPE=prod"
+	@echo "  make update-version-labels VERSION=... [REPO=...]"
+	@echo "                         - Update component version labels for a Z-stream release"
+	@echo "                           REPO optional (defaults to all component repos)"
+	@echo "                           Example: make update-version-labels VERSION=0.23.1"
+	@echo "                           Example: make update-version-labels VERSION=0.23.1 REPO=subctl"
 	@echo "  make rpm-lockfile-update [BRANCH=...] [REPO=...|COMPONENT=...]"
 	@echo "                         - Update RPM lockfiles across Submariner repos"
 	@echo "                           Example: make rpm-lockfile-update"
 	@echo "                           Example: make rpm-lockfile-update COMPONENT=gateway"
 	@echo "                           Example: make rpm-lockfile-update BRANCH=0.21 COMPONENT=gateway"
+	@echo "  make tekton-task-refs-update VERSION=... [REPO=...]"
+	@echo "                         - Bump .tekton task references across component + FBC repos"
+	@echo "                           REPO optional (defaults to all: 5 components + fbc)"
+	@echo "                           Example: make tekton-task-refs-update VERSION=0.23.1"
+	@echo "                           Example: make tekton-task-refs-update VERSION=0.23.1 REPO=fbc"
+	@echo "  make cve-fixes-update VERSION=... [REPO=...]"
+	@echo "                         - Fix Go-dependency CVEs across the 7 Go repos (shipyard cve-fix skill)"
+	@echo "                           REPO optional (defaults to all 7); never pushes — prints PR commands"
+	@echo "                           Example: make cve-fixes-update VERSION=0.23.1"
+	@echo "                           Example: make cve-fixes-update VERSION=0.23.1 REPO=submariner"
 	@echo "  make add-release-notes VERSION=... [STAGE_YAML=...]"
 	@echo "                         - Auto-apply ALL filtered release notes to stage YAML and commit"
 	@echo "                           Then run 'make review-release-notes' for per-issue agent review"
@@ -75,13 +90,16 @@ help:
 	@echo "  make gitlint           - Commit message linting"
 	@echo "  make shellcheck        - Shell script linting"
 	@echo "  make test-tracker      - Jira tracker library tests"
+	@echo "  make test-drift        - Tracker-vs-reality drift detection tests"
+	@echo "  make test-prod-bundle  - Prod-bundle shipped-check (tag-scheme) tests"
+	@echo "  make test-fbc-scope    - FBC per-release OCP-scope derivation tests"
 	@echo ""
 	@echo "Release Operations:"
 	@echo "  make apply FILE=...    - Validate and apply release YAML to cluster (requires oc login)"
 	@echo "  make watch NAME=...    - Watch release status (requires oc login)"
 	@echo "  make create-release-tracker VERSION=... [QE_ASSIGNEE=...]"
 	@echo "                         - Create Jira release tracker with subtasks per workflow step"
-	@echo "                           Creates parent Task + 15-19 Sub-tasks in ACM project"
+	@echo "                           Creates parent Task + 15-18 Sub-tasks in ACM project"
 	@echo "                           Example: make create-release-tracker VERSION=0.24.0"
 	@echo "                           Example: make create-release-tracker VERSION=0.24.0 QE_ASSIGNEE=qe@redhat.com"
 	@echo "  make get-fbc-urls VERSION=... [OCP=4.XX] [RAW_URL=true] [PROD_INDEX=true]"
@@ -103,7 +121,7 @@ add-fbc-ocp-version:
 
 create-fbc-releases:
 	@test -n "$(VERSION)" || (echo "ERROR: VERSION parameter required. Usage: make create-fbc-releases VERSION=0.22.1 [TYPE=stage|prod]" && exit 1)
-	./scripts/create-fbc-releases.sh $(VERSION) $(if $(TYPE),--$(TYPE),--stage)
+	./scripts/create-fbc-releases.sh $(VERSION) $(if $(TYPE),$(TYPE),stage)
 
 create-component-release:
 	@test -n "$(VERSION)" || (echo "ERROR: VERSION parameter required. Usage: make create-component-release VERSION=0.22.1 [TYPE=stage|prod]" && exit 1)
@@ -115,6 +133,14 @@ update-version-labels:
 
 rpm-lockfile-update:
 	./scripts/rpm-lockfile-update.sh $(BRANCH) $(if $(REPO),$(REPO),$(COMPONENT))
+
+tekton-task-refs-update:
+	@test -n "$(VERSION)" || (echo "ERROR: VERSION required. Usage: make tekton-task-refs-update VERSION=0.23.1 [REPO=fbc]" && exit 1)
+	./scripts/tekton-task-refs-update.sh $(VERSION) $(if $(REPO),$(REPO),)
+
+cve-fixes-update:
+	@test -n "$(VERSION)" || (echo "ERROR: VERSION required. Usage: make cve-fixes-update VERSION=0.23.1 [REPO=submariner]" && exit 1)
+	./scripts/cve-fixes-update.sh $(VERSION) $(if $(REPO),$(REPO),)
 
 add-release-notes:
 	@test -n "$(VERSION)" || (echo "ERROR: VERSION parameter required. Usage: make add-release-notes VERSION=0.22.1 [STAGE_YAML=...]" && exit 1)
@@ -150,7 +176,31 @@ create-release-tracker:
 test-tracker:
 	./scripts/lib/test-jira-tracker.sh
 
-test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck
+test-autorelease:
+	./scripts/lib/test-autorelease.sh
+
+test-component:
+	./scripts/lib/test-component-release.sh
+
+test-tekton:
+	./scripts/lib/test-tekton-task-refs.sh
+
+test-cve:
+	./scripts/lib/test-cve-fixes.sh
+
+test-bundle:
+	./scripts/lib/test-bundle-image-update.sh
+
+test-drift:
+	./scripts/lib/test-tracker-drift.sh
+
+test-prod-bundle:
+	./scripts/lib/test-prod-bundle.sh
+
+test-fbc-scope:
+	./scripts/lib/test-fbc-scope.sh
+
+test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-autorelease test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

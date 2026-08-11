@@ -25,6 +25,15 @@ fi
 # Extract version components
 MAJOR_MINOR=$(echo "$VERSION" | grep -oE '^[0-9]+\.[0-9]+')
 MAJOR_MINOR_DASH=$(echo "$MAJOR_MINOR" | tr '.' '-')
+# A bare X.Y means the initial Y-stream release X.Y.0. Normalize VERSION to the
+# full X.Y.Z form once, so every downstream use agrees: the artifact globs
+# (FULL_VERSION_DASH), the upstream-tag / registry / label checks (v$VERSION),
+# and the summary. Without it, `release-status.sh 0.22` reported the artifacts
+# "complete" (globs are dash-derived) while Step 6 said "v0.22 tag not found"
+# (the real tag is v0.22.0) — a self-contradicting board.
+if [ "$VERSION" = "$MAJOR_MINOR" ]; then
+  VERSION="$MAJOR_MINOR.0"
+fi
 FULL_VERSION_DASH=$(echo "$VERSION" | tr '.' '-')
 
 # Detect stream type
@@ -40,8 +49,16 @@ readonly SECONDS_PER_DAY=86400
 readonly FBC_DATE_MATCH_WINDOW_DAYS=3
 readonly FBC_DATE_MATCH_WINDOW_SECS=$((FBC_DATE_MATCH_WINDOW_DAYS * SECONDS_PER_DAY))
 readonly BUNDLE_CLOCK_SKEW_SECS=300  # 5 minutes tolerance for clock skew
-readonly CURRENT_OCP_VERSION_COUNT=7
 readonly OCP_VERSIONS="16 17 18 19 20 21 22"
+# Count and "4.<first>-4.<last>" display range are both derived from OCP_VERSIONS
+# so status output can't drift behind the list (token count / first+last token).
+read -ra _OCP_VERSION_ARR <<< "$OCP_VERSIONS"
+readonly CURRENT_OCP_VERSION_COUNT=${#_OCP_VERSION_ARR[@]}
+readonly OCP_VERSION_RANGE="4.${OCP_VERSIONS%% *}-4.${OCP_VERSIONS##* }"
+
+# Prod-bundle shipped check (tag-scheme-aware; used by check_component_release_status).
+# shellcheck source=lib/prod-bundle.sh
+source "$(dirname "$0")/lib/prod-bundle.sh"
 
 # Submariner component repos (for branch checks)
 readonly SUBMARINER_REPOS="submariner-operator submariner lighthouse shipyard subctl admiral cloud-prepare"
@@ -108,6 +125,20 @@ get_snapshot_test_status() {
   local snapshot=$1
   oc get snapshot "$snapshot" -n submariner-tenant \
     -o jsonpath='{.metadata.annotations.test\.appstudio\.openshift\.io/status}' 2>/dev/null || true
+}
+
+# Helper function: Read the container-image version label from a snapshot
+# Args: $1=snapshot name
+# Returns: the lighthouse-agent component's image version label (e.g. "v0.22.1"),
+#          or empty if the snapshot, image, or label can't be resolved. All
+#          failures are swallowed so callers can use it under set -e / $(...).
+get_snapshot_image_version() {
+  local snapshot=$1
+  local image
+  image=$(oc get snapshot "$snapshot" -n submariner-tenant \
+    -o jsonpath="{.spec.components[?(@.name==\"lighthouse-agent-$MAJOR_MINOR_DASH\")].containerImage}" 2>/dev/null || true)
+  [ -z "$image" ] && return 0
+  skopeo inspect "docker://$image" 2>/dev/null | jq -r '.Labels.version // empty' 2>/dev/null || true
 }
 
 # Format date with fallback
@@ -185,10 +216,14 @@ get_release_ocp_scope() {
   local env=$1
   local versions=""
 
-  # Find first component YAML to get original release date
-  # Use head -1 to get earliest (first release, not retries)
+  # Find the component YAML for this release to anchor the date window.
+  # sort | tail -1 = latest attempt = the successful release: FBC releases are
+  # cut right after the component release succeeds, so their dates cluster around
+  # the latest (not earliest) component YAML. Anchoring on an earlier failed retry
+  # would put the ±window days before the FBC YAMLs and match none of them.
+  # sort makes the selection deterministic (find output order is unspecified).
   local component_yaml
-  component_yaml=$(find "releases/$MAJOR_MINOR/$env/" -name "submariner-$FULL_VERSION_DASH-$env-*.yaml" 2>/dev/null | head -1)
+  component_yaml=$(find "releases/$MAJOR_MINOR/$env/" -name "submariner-$FULL_VERSION_DASH-$env-*.yaml" 2>/dev/null | sort | tail -1)
   [ -z "$component_yaml" ] && return  # No component YAML, can't determine scope
 
   # Extract date from component filename: submariner-0-22-0-stage-20251203-01.yaml → 20251203
@@ -231,11 +266,12 @@ get_release_ocp_scope() {
 # Args: $1 = env ("stage" or "prod")
 # Returns: YYYYMMDD date string or empty
 # Uses globals: MAJOR_MINOR, FULL_VERSION_DASH
-# Note: Uses head -1 to get earliest (first release, not retries) for historical matching
+# Note: sort | tail -1 picks the latest attempt = the successful release (retries
+# share the version but differ by date; the FBC releases follow the successful one).
 get_component_yaml_date() {
   local env=$1
   local yaml_file
-  yaml_file=$(find "releases/$MAJOR_MINOR/$env/" -name "submariner-$FULL_VERSION_DASH-$env-*.yaml" 2>/dev/null | head -1)
+  yaml_file=$(find "releases/$MAJOR_MINOR/$env/" -name "submariner-$FULL_VERSION_DASH-$env-*.yaml" 2>/dev/null | sort | tail -1)
 
   [ -z "$yaml_file" ] && return
 
@@ -294,24 +330,13 @@ find_fbc_yaml_by_date() {
   echo "$best_yaml"
 }
 
-# Helper function: Calculate missing OCP versions
-# Args:
-#   $1 - Current scope (space-separated OCP versions, e.g., "16 17 18 19 20")
-# Returns: space-separated list of missing versions compared to OCP_VERSIONS
-#
-# Example: If OCP_VERSIONS="16 17 18 19 20 21 22" and scope="16 17 18 19 20 21", returns "22"
-get_missing_ocp_versions() {
-  local scope=$1
-  comm -13 <(echo "$scope" | tr ' ' '\n' | sort) <(echo "$OCP_VERSIONS" | tr ' ' '\n' | sort) | tr '\n' ' ' | xargs
-}
-
 # Helper function: Report FBC scope with context about OCP versions
 # Args:
 #   $1 - Environment (stage/prod)
 #   $2 - YAML count
 #   $3 - Scope (space-separated OCP versions)
 #   $4 - Step number for "Next" messages
-# Uses global: RELEASE_STATE, OCP_VERSIONS
+# Uses global: RELEASE_STATE, CURRENT_OCP_VERSION_COUNT
 report_fbc_scope() {
   local env=$1
   local yaml_count=$2
@@ -321,12 +346,12 @@ report_fbc_scope() {
 
   if [ "$yaml_count" -lt "$current_total" ]; then
     if [ "$RELEASE_STATE" = "complete" ]; then
-      # For completed releases, show what was released at the time
+      # For completed releases, show which OCP catalogs were cut alongside it
+      # (matched by release date). We can't infer *why* another OCP version is
+      # absent from this set — a later-introduced version and a pre-existing one
+      # simply not re-cut inside the date window look identical — so make no
+      # causal claim about when support was added.
       echo "📄 FBC $env YAMLs: $yaml_count at release time (OCP 4-$scope)"
-      # Calculate missing versions
-      local missing_versions
-      missing_versions=$(get_missing_ocp_versions "$scope")
-      [ -n "$missing_versions" ] && echo "   ℹ️  OCP 4-$missing_versions support added after this release"
     else
       # For in-progress releases, incomplete scope is a blocker
       echo "⚠️  Incomplete: $yaml_count/$current_total FBC $env YAMLs"
@@ -370,16 +395,15 @@ check_component_release_status() {
     # Release CR not found - may be archived or not yet applied
     # For completed prod releases, verify via production registry
     if [ "$RELEASE_STATE" = "complete" ] && [ "$env_type" = "prod" ]; then
-      # For completed prod releases, check production registry as source of truth
-      local bundle_version
-      bundle_version=$(skopeo inspect "docker://registry.redhat.io/rhacm2/submariner-operator-bundle:v$VERSION" 2>/dev/null | \
-        jq -r '.Labels.version // empty' 2>/dev/null || true)
-
-      if [ "$bundle_version" = "v$VERSION" ]; then
-        echo "   ✅ Released to production (verified in registry)"
-      else
-        echo "   ⚠️  Not found on cluster or registry"
-      fi
+      # For completed prod releases, check production registry as source of truth.
+      # Tag-scheme-aware (new-scheme .0 releases have no vX.Y.0 tag) and
+      # probe-failure-safe: an unreachable registry reads "unknown", not "absent".
+      prod_bundle_shipped "$VERSION"
+      case "$PROD_BUNDLE_VERDICT" in
+        shipped)     echo "   ✅ Released to production (verified in registry)" ;;
+        not-shipped) echo "   ⚠️  Not found on cluster or registry" ;;
+        *)           echo "   ℹ️  Release complete; could not reach registry to verify" ;;
+      esac
     elif [ "$RELEASE_STATE" = "complete" ]; then
       # For completed stage releases, Release CRs may be archived/deleted
       echo "   ℹ️  Not on cluster (release complete, CR may be archived)"
@@ -405,7 +429,9 @@ check_component_release_status() {
 #   $3 - Label name to check ("version", "csv-version", etc.)
 #   $4 - Expected value
 # Uses globals: MAJOR_MINOR (for branch reference)
-# Modifies global: INCORRECT array (appends mismatches)
+# Modifies globals: INCORRECT array (appends mismatches), FETCH_FAILED counter
+#   (incremented when a Dockerfile can't be fetched — so a total GitHub outage is
+#   not mistaken for "all labels correct")
 check_version_label() {
   local repo=$1
   local file=$2
@@ -416,6 +442,7 @@ check_version_label() {
   content=$(gh api "repos/submariner-io/$repo/contents/$file?ref=release-$MAJOR_MINOR" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || true)
   if [ -z "$content" ]; then
     echo "   ⚠️  Cannot fetch $repo/$file" >&2
+    FETCH_FAILED=$((FETCH_FAILED + 1))
     return
   fi
 
@@ -435,20 +462,29 @@ check_version_label() {
 }
 
 # Helper function: Detect current release phase based on workflow state
-# Returns one of: upstream-prep, component-prep, upstream-release, component-stage,
-#                 fbc-stage, qe-approval, component-prod, fbc-prod, complete
+# Returns one of: upstream-prep, component-prep, upstream-release, fbc-stage,
+#                 qe-approval, component-prod, complete
 #
 # Uses globals (set by step check functions):
-#   RELEASE_STATE, IS_ZSTREAM, VERSION, MAJOR_MINOR_DASH, SNAPSHOT
-#   Y-stream: BRANCH_CHECK, STAGE_PLAN, MISSING_TEKTON
-#   Build: TAG_EXISTS, WRONG_COUNT, IMAGE_VERSION
-#   Stage: STAGE_YAML, FBC_STAGE_YAML_COUNT, FBC_SUCCEEDED
-#   Prod: PROD_YAML, FBC_PROD_YAML_COUNT, FBC_PROD_SUCCEEDED
+#   RELEASE_STATE, IS_ZSTREAM, VERSION, SNAPSHOT
+#   Y-stream: BRANCH_CHECK, STAGE_PLAN, PROD_PLAN, MISSING_TEKTON
+#   Build: TAG_EXISTS, WRONG_COUNT, FETCH_FAILED, IMAGE_VERSION, IMAGE_VERSION_FETCHED
+#   Stage: FBC_STAGE_YAML_COUNT, FBC_SUCCEEDED
+#   Prod: FBC_PROD_YAML_COUNT
 detect_current_phase() {
   # Use release state detection FIRST (most reliable signal)
   # Completed releases have prod YAML, so they return "complete" immediately
   # This prevents false phase detection based on missing/cleaned-up resources
   if [ "$RELEASE_STATE" = "complete" ]; then
+    # The component prod YAML (the "complete" signal) is committed at Step 15, before
+    # the FBC prod releases (Step 17). If FBC stage YAMLs exist but FBC prod ones
+    # aren't all done yet, prod is still in progress — report that instead of a
+    # premature "complete".
+    # (Pre-FBC releases have no FBC stage YAMLs, so they still resolve to "complete".)
+    if [ "$FBC_STAGE_YAML_COUNT" -gt 0 ] && [ "$FBC_PROD_YAML_COUNT" -eq 0 ]; then
+      echo "component-prod"
+      return
+    fi
     echo "complete"
     return
   fi
@@ -470,69 +506,68 @@ detect_current_phase() {
   # Common blockers (apply to both Y and Z streams)
   [ -z "$TAG_EXISTS" ] && echo "upstream-release" && return
   [ "$WRONG_COUNT" -gt 0 ] && echo "upstream-release" && return
+  # Couldn't read the Dockerfiles (GitHub outage) — don't advance past the label
+  # gate on unverified data; stay conservative until a re-run can confirm.
+  [ "${FETCH_FAILED:-0}" -gt 0 ] && echo "upstream-release" && return
   [ -z "$SNAPSHOT" ] && echo "upstream-release" && return
 
   # Reuse IMAGE_VERSION from test verification if available, otherwise fetch
   local image_version_local="$IMAGE_VERSION"
   if [ "$IMAGE_VERSION_FETCHED" != "true" ]; then
-    local image
-    image=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant \
-      -o jsonpath="{.spec.components[?(@.name==\"lighthouse-agent-$MAJOR_MINOR_DASH\")].containerImage}" 2>/dev/null || true)
-    if [ -n "$image" ]; then
-      image_version_local=$(skopeo inspect "docker://$image" 2>/dev/null | jq -r '.Labels.version' 2>/dev/null || true)
-    fi
+    image_version_local=$(get_snapshot_image_version "$SNAPSHOT")
   fi
 
   [ -n "$image_version_local" ] && [ "$image_version_local" != "v$VERSION" ] && echo "upstream-release" && return
 
-  # Stage blockers
-  [ -z "$STAGE_YAML" ] && echo "component-stage" && return
+  # Stage blockers. Reaching here means RELEASE_STATE=="in-progress", which
+  # detect_release_state sets only when a stage YAML exists (same glob as the global
+  # STAGE_YAML) — so STAGE_YAML is always non-empty and a "component-stage" phase for a
+  # missing stage YAML is unreachable; the first real stage gate is the FBC one below.
   [ "$FBC_STAGE_YAML_COUNT" -eq 0 ] && echo "fbc-stage" && return
   [ "$FBC_SUCCEEDED" -lt "$FBC_STAGE_YAML_COUNT" ] && echo "fbc-stage" && return
 
-  # QE approval checkpoint
-  [ -z "$PROD_YAML" ] && echo "qe-approval" && return
-
-  # Prod blockers (should not reach here if RELEASE_STATE = "complete")
-  [ "$FBC_PROD_YAML_COUNT" -eq 0 ] && echo "component-prod" && return
-  [ "$FBC_PROD_SUCCEEDED" -lt "$FBC_PROD_YAML_COUNT" ] && echo "fbc-prod" && return
-
-  # All in-progress conditions met (should match "complete" state)
-  echo "complete"
+  # QE approval is the terminal in-progress phase. Once the component prod YAML
+  # exists, RELEASE_STATE becomes "complete" (handled at the top), so on the
+  # in-progress path PROD_YAML is always empty and every prod-phase report is
+  # emitted from that "complete" branch — never from here.
+  echo "qe-approval"
 }
 
 # Helper function: Check FBC release status across OCP versions in scope
 # Args:
 #   $1 = environment (stage/prod)
-#   $2 = full_version_dash
-#   $3 = scope (space-separated OCP versions, e.g., "16 17 18 19 20") [optional, defaults to all]
+#   $2 = scope (space-separated OCP versions, e.g., "16 17 18 19 20") [optional, defaults to all]
 # Sets globals: FBC_NOT_APPLIED, FBC_IN_PROGRESS, FBC_SUCCEEDED, FBC_FAILED (for stage)
 #              FBC_PROD_NOT_APPLIED, FBC_PROD_IN_PROGRESS, FBC_PROD_SUCCEEDED, FBC_PROD_FAILED (for prod)
 check_fbc_release_status() {
   local env=$1
-  local version_dash=$2
-  local scope="${3:-$OCP_VERSIONS}"  # Default to all if not specified
+  local scope="${2:-$OCP_VERSIONS}"  # Default to all if not specified
 
-  # Determine variable prefix based on environment
-  # Creates: FBC_* for stage, FBC_PROD_* for prod (using eval for dynamic names)
+  # Determine variable prefix based on environment: FBC_* for stage, FBC_PROD_*
+  # for prod. Bind namerefs to the prefixed globals so consumers (detect_current_phase
+  # and the summary printers) read the same variables, without eval'ing dynamic names.
   local prefix=""
   [ "$env" = "prod" ] && prefix="PROD_"
 
-  # Initialize counters using dynamic variable names
-  eval "FBC_${prefix}NOT_APPLIED=0"
-  eval "FBC_${prefix}IN_PROGRESS=0"
-  eval "FBC_${prefix}SUCCEEDED=0"
-  eval "FBC_${prefix}FAILED=0"
+  local -n not_applied="FBC_${prefix}NOT_APPLIED"
+  local -n in_progress="FBC_${prefix}IN_PROGRESS"
+  local -n succeeded="FBC_${prefix}SUCCEEDED"
+  local -n failed="FBC_${prefix}FAILED"
+  not_applied=0
+  in_progress=0
+  succeeded=0
+  failed=0
 
   # Loop through OCP versions in scope
   for ocp_version in $scope; do
     local fbc_release
-    # More precise grep pattern - anchor version to avoid partial matches
+    # FBC release CRs are named submariner-fbc-4-XX-{env}-YYYYMMDD-NN — they carry
+    # NO Submariner version segment (unlike component releases). Match date+sequence.
     fbc_release=$(oc get release -n submariner-tenant --no-headers 2>/dev/null \
-      | grep -E "submariner-fbc-4-$ocp_version-$env-[0-9]+-$version_dash-[0-9]+" | tail -1 | awk '{print $1}' || true)
+      | grep -E "submariner-fbc-4-$ocp_version-$env-[0-9]{8}-[0-9]+" | tail -1 | awk '{print $1}' || true)
 
     if [ -z "$fbc_release" ]; then
-      eval "FBC_${prefix}NOT_APPLIED=\$((FBC_${prefix}NOT_APPLIED + 1))"
+      not_applied=$((not_applied + 1))
     else
       local fbc_status fbc_reason
       fbc_status=$(oc get release "$fbc_release" -n submariner-tenant \
@@ -541,11 +576,11 @@ check_fbc_release_status() {
         -o jsonpath='{.status.conditions[?(@.type=="Released")].reason}' 2>/dev/null || true)
 
       if [ "$fbc_status" = "True" ] && [ "$fbc_reason" = "Succeeded" ]; then
-        eval "FBC_${prefix}SUCCEEDED=\$((FBC_${prefix}SUCCEEDED + 1))"
+        succeeded=$((succeeded + 1))
       elif [ "$fbc_reason" = "Progressing" ]; then
-        eval "FBC_${prefix}IN_PROGRESS=\$((FBC_${prefix}IN_PROGRESS + 1))"
+        in_progress=$((in_progress + 1))
       else
-        eval "FBC_${prefix}FAILED=\$((FBC_${prefix}FAILED + 1))"
+        failed=$((failed + 1))
       fi
     fi
   done
@@ -561,12 +596,21 @@ check_step_1() {
   local missing_repos=()
 
   for repo in $SUBMARINER_REPOS; do
-    local branch_check
-    branch_check=$(git ls-remote --heads "https://github.com/submariner-io/$repo" "refs/heads/release-$MAJOR_MINOR" 2>/dev/null | grep -o "refs/heads/release-$MAJOR_MINOR" || true)
-
-    if [ -z "$branch_check" ]; then
+    local branch_check ls_output
+    # ls-remote exits 0 even when the ref is genuinely absent (empty output), and
+    # non-zero only when GitHub is unreachable. Capture its exit directly (no pipe,
+    # which pipefail+`|| true` would otherwise mask) so drift can tell "branch
+    # missing" from "couldn't reach GitHub". Either way it still displays as missing.
+    if ls_output=$(git ls-remote --heads "https://github.com/submariner-io/$repo" "refs/heads/release-$MAJOR_MINOR" 2>/dev/null); then
+      branch_check=$(printf '%s' "$ls_output" | grep -o "refs/heads/release-$MAJOR_MINOR" || true)
+      if [ -z "$branch_check" ]; then
+        missing_repos+=("$repo")
+        missing_count=$((missing_count + 1))
+      fi
+    else
+      BRANCH_FETCH_FAILED=$((BRANCH_FETCH_FAILED + 1))
       missing_repos+=("$repo")
-      ((missing_count++))
+      missing_count=$((missing_count + 1))
     fi
   done
 
@@ -624,16 +668,30 @@ check_step_2() {
 # Step 3: Component Tekton Config
 check_step_3() {
   local missing_repos=()
-  local tekton_count
+  local tekton_count gh_rc err_file
+  err_file=$(mktemp)
 
   for repo in submariner-operator submariner lighthouse shipyard subctl; do
-    tekton_count=$(gh api "repos/submariner-io/$repo/contents/.tekton?ref=release-$MAJOR_MINOR" --jq 'length' 2>/dev/null || echo "0")
+    # gh api 404s (non-zero) both when .tekton is genuinely absent AND when the
+    # release branch doesn't exist yet — both mean "step 3 not done". Any OTHER
+    # error (401/403/rate-limit/network) means "couldn't reach GitHub", which must
+    # NOT be reported as drift. Distinguish a definitive HTTP 404 from everything
+    # else; when unclear, count it a fetch failure (the safe, no-false-warning side).
+    tekton_count=$(gh api "repos/submariner-io/$repo/contents/.tekton?ref=release-$MAJOR_MINOR" --jq 'length' 2>"$err_file") && gh_rc=0 || gh_rc=$?
+
+    if [ "$gh_rc" -ne 0 ]; then
+      grep -q 'HTTP 404' "$err_file" || TEKTON_FETCH_FAILED=$((TEKTON_FETCH_FAILED + 1))
+      missing_repos+=("$repo")
+      MISSING_TEKTON=$((MISSING_TEKTON + 1))
+      continue
+    fi
 
     if [ "$tekton_count" = "0" ] || ! echo "$tekton_count" | grep -qE '^[0-9]+$'; then
       missing_repos+=("$repo")
       MISSING_TEKTON=$((MISSING_TEKTON + 1))
     fi
   done
+  rm -f "$err_file"
 
   if [ "$MISSING_TEKTON" -eq 0 ]; then
     echo "✅ All 5 repos configured"
@@ -721,8 +779,11 @@ check_step_5() {
 
 # Step 5b: Version Labels
 check_step_5b() {
-  # INCORRECT array is populated by check_version_label (not local - shared with helper)
+  # INCORRECT array and FETCH_FAILED counter are populated by check_version_label
+  # (not local - shared with helper). FETCH_FAILED tracks Dockerfiles we couldn't
+  # read, so a GitHub outage isn't misreported as "all labels correct".
   INCORRECT=()
+  FETCH_FAILED=0
 
   # Check all Dockerfiles
   check_version_label "submariner-operator" "package/Dockerfile.submariner-operator.konflux" "version" "v$VERSION"
@@ -738,21 +799,35 @@ check_step_5b() {
   check_version_label "subctl" "package/Dockerfile.subctl.konflux" "version" "v$VERSION"
 
   WRONG_COUNT=${#INCORRECT[@]}
-  if [ "$WRONG_COUNT" -eq 0 ]; then
-    echo "✅ All 9 Dockerfiles (11 version labels) correct"
-  else
+  if [ "$WRONG_COUNT" -gt 0 ]; then
     echo "❌ $WRONG_COUNT version label(s) need update:"
     for f in "${INCORRECT[@]}"; do
       echo "   - $f"
     done
     echo "   ⮕ Next: Update version labels (Step 5b)"
+  elif [ "$FETCH_FAILED" -gt 0 ]; then
+    echo "⚠️  Inconclusive: could not fetch $FETCH_FAILED Dockerfile(s) (GitHub auth/network)"
+    echo "   ⮕ Next: Restore GitHub access, then re-run to verify version labels (Step 5b)"
+  else
+    echo "✅ All 9 Dockerfiles (11 version labels) correct"
   fi
 }
 
 # Step 6: Upstream Release
 check_step_6() {
-  TAG_EXISTS=$(gh api repos/submariner-io/submariner-operator/tags \
-    --jq ".[] | select(.name == \"v$VERSION\") | .name" 2>/dev/null || true)
+  # Query the exact tag ref via ls-remote (like Step 1's branch check): it exits 0
+  # whether or not the tag exists — empty output when absent — and non-zero only
+  # when GitHub is unreachable, so absence is cleanly distinguished from "couldn't
+  # reach GitHub" (record that so drift stays silent rather than flagging the
+  # tracker). Avoids the tags-list endpoint, which is paginated (30/page) and would
+  # report a genuinely-existing older tag as missing once newer tags bury it.
+  local tag_ls
+  if tag_ls=$(git ls-remote --tags "https://github.com/submariner-io/submariner-operator" "refs/tags/v$VERSION" 2>/dev/null); then
+    [ -n "$tag_ls" ] && TAG_EXISTS="v$VERSION" || TAG_EXISTS=""
+  else
+    TAG_FETCH_FAILED=1
+    TAG_EXISTS=""
+  fi
 
   if [ -n "$TAG_EXISTS" ]; then
     # Get tag object URL, fetch tag details, extract date
@@ -799,20 +874,17 @@ check_step_7() {
       if [ "$all_passed" -eq "$total_tests" ] && [ "$total_tests" -gt 0 ]; then
         echo "   ✅ All tests passed ($all_passed/$total_tests)"
 
-        local image
-        image=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant \
-          -o jsonpath="{.spec.components[?(@.name==\"lighthouse-agent-$MAJOR_MINOR_DASH\")].containerImage}" 2>/dev/null || true)
+        IMAGE_VERSION=$(get_snapshot_image_version "$SNAPSHOT")
+        IMAGE_VERSION_FETCHED=true
 
-        if [ -n "$image" ]; then
-          IMAGE_VERSION=$(skopeo inspect "docker://$image" 2>/dev/null | jq -r '.Labels.version' 2>/dev/null || true)
-          IMAGE_VERSION_FETCHED=true
-          if [ "$IMAGE_VERSION" = "v$VERSION" ]; then
-            echo "   ✅ Image labels: v$VERSION"
-          else
-            echo "   ⚠️  Image labels: $IMAGE_VERSION (expected v$VERSION)"
-            echo "      Snapshot built before label update - needs rebuild"
-            echo "   ⮕ Next: Wait for rebuild after version label PRs merge (~15-30 min)"
-          fi
+        if [ -z "$IMAGE_VERSION" ]; then
+          :  # no lighthouse-agent image or unlabeled — can't verify labels here
+        elif [ "$IMAGE_VERSION" = "v$VERSION" ]; then
+          echo "   ✅ Image labels: v$VERSION"
+        else
+          echo "   ⚠️  Image labels: $IMAGE_VERSION (expected v$VERSION)"
+          echo "      Snapshot built before label update - needs rebuild"
+          echo "   ⮕ Next: Wait for rebuild after version label PRs merge (~15-30 min)"
         fi
       else
         echo "   ❌ Tests: $all_passed/$total_tests passed"
@@ -823,8 +895,12 @@ check_step_7() {
     fi
   fi
 
+  # Sub-heading only — the top-level "[Step 7] Bundle SHAs" header is already
+  # printed by the main loop (line ~1298). Reusing that exact format here made
+  # the header appear twice per run and mislabeled the snapshot section above as
+  # "Bundle SHAs". A distinct sub-heading separates the two sub-sections cleanly.
   echo ""
-  echo "[Step 7] Bundle SHAs"
+  echo "Bundle SHAs:"
 
   # For completed releases: check bundle against snapshot in release YAML
   # For pre-release: check bundle against latest snapshot
@@ -943,7 +1019,10 @@ check_step_11() {
     if [ -z "$fbc_snapshot" ]; then
       if [ "$FBC_MISSING" -eq 0 ]; then
         if [ "$RELEASE_STATE" = "complete" ]; then
-          echo "ℹ️  OCP versions not supported at release time:"
+          # A missing dated FBC YAML only tells us this OCP version had no FBC
+          # catalog cut in this release's date window — not *why*. Stay
+          # descriptive; don't claim the version was unsupported at the time.
+          echo "ℹ️  OCP versions with no FBC catalog in this release:"
         else
           echo "❌ Missing FBC snapshots:"
         fi
@@ -984,7 +1063,7 @@ check_step_11() {
   else
     # In-progress or not-started: show current verification with actionable next steps
     if [ "$FBC_MISSING" -eq 0 ] && [ "$FBC_FAILED" -eq 0 ]; then
-      echo "✅ All FBC snapshots ready (OCP 4.16-4.21)"
+      echo "✅ All FBC snapshots ready (OCP ${OCP_VERSION_RANGE})"
     else
       if [ "$FBC_FAILED" -gt 0 ]; then
         echo "   ⮕ Next: Fix FBC tests and wait for rebuild"
@@ -1029,7 +1108,7 @@ check_step_12_13() {
   report_fbc_scope "stage" "$FBC_STAGE_YAML_COUNT" "$scope_stage" "12"
 
   # Check cluster status using helper function (only check versions in scope)
-  check_fbc_release_status "stage" "$FULL_VERSION_DASH" "$scope_stage"
+  check_fbc_release_status "stage" "$scope_stage"
 
   # Report status (conditional based on release state)
   if [ "$RELEASE_STATE" = "complete" ]; then
@@ -1120,7 +1199,7 @@ check_step_17_18() {
   report_fbc_scope "prod" "$FBC_PROD_YAML_COUNT" "$scope_prod" "17"
 
   # Check cluster status using helper function (only check versions in scope)
-  check_fbc_release_status "prod" "$FULL_VERSION_DASH" "$scope_prod"
+  check_fbc_release_status "prod" "$scope_prod"
 
   # Report status (conditional based on release state)
   if [ "$RELEASE_STATE" = "complete" ]; then
@@ -1199,13 +1278,17 @@ if [ -f "$TRACKER_LIB" ]; then
   # shellcheck source=lib/jira-tracker.sh
   source "$TRACKER_LIB" 2>/dev/null || true
 
-  # Look up tracker if version has 3 segments (X.Y.Z)
-  if echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    TRACKER_KEY=$(find_release_tracker "$VERSION" 2>/dev/null || true)
-    if [ -n "$TRACKER_KEY" ]; then
-      echo "📋 Jira Tracker: $TRACKER_KEY (https://issues.redhat.com/browse/$TRACKER_KEY)"
-      echo ""
-    fi
+  # Drift detection reuses the tracker's per-step status vs the ground-truth
+  # globals this script already computes (best-effort; never fails the run).
+  DRIFT_LIB="$(dirname "$0")/lib/tracker-drift.sh"
+  # shellcheck source=lib/tracker-drift.sh
+  [ -f "$DRIFT_LIB" ] && source "$DRIFT_LIB" 2>/dev/null || true
+
+  # VERSION is always X.Y.Z here (bare X.Y normalized above), so look up its tracker.
+  TRACKER_KEY=$(find_release_tracker "$VERSION" 2>/dev/null || true)
+  if [ -n "$TRACKER_KEY" ]; then
+    echo "📋 Jira Tracker: $TRACKER_KEY (https://issues.redhat.com/browse/$TRACKER_KEY)"
+    echo ""
   fi
 fi
 
@@ -1221,17 +1304,24 @@ else
   SNAPSHOT=""
 fi
 
-# Find release YAMLs once (used across multiple steps and phase detection)
-STAGE_YAML=$(find "releases/$MAJOR_MINOR/stage/" -name "submariner-$FULL_VERSION_DASH-stage-*.yaml" 2>/dev/null | tail -1 || true)
-PROD_YAML=$(find "releases/$MAJOR_MINOR/prod/" -name "submariner-$FULL_VERSION_DASH-prod-*.yaml" 2>/dev/null | tail -1 || true)
+# Find release YAMLs once (used across multiple steps and phase detection).
+# sort | tail -1 = latest attempt = the successful release, chosen deterministically
+# (find output order is unspecified); we read the snapshot/name from this file.
+STAGE_YAML=$(find "releases/$MAJOR_MINOR/stage/" -name "submariner-$FULL_VERSION_DASH-stage-*.yaml" 2>/dev/null | sort | tail -1 || true)
+PROD_YAML=$(find "releases/$MAJOR_MINOR/prod/" -name "submariner-$FULL_VERSION_DASH-prod-*.yaml" 2>/dev/null | sort | tail -1 || true)
 
 # Step check results (used across multiple steps and phase detection)
 BRANCH_CHECK=""              # Step 1: Branch existence check
+BRANCH_FETCH_FAILED=0        # Step 1: repos whose ls-remote failed (unreachable, not proven absent)
 STAGE_PLAN=""                # Step 2: Stage ReleasePlan
 PROD_PLAN=""                 # Step 2: Prod ReleasePlan
 MISSING_TEKTON=0             # Step 3: Missing Tekton configs count
+TEKTON_FETCH_FAILED=0        # Step 3: repos whose gh probe failed for a non-404 reason (unreachable)
 TAG_EXISTS=""                # Step 6: Upstream tag existence
+# shellcheck disable=SC2034  # consumed cross-file by tracker-drift.sh (set to 1, never re-read here)
+TAG_FETCH_FAILED=0           # Step 6: tag listing failed (unreachable, not proven absent)
 WRONG_COUNT=0                # Step 5b: Incorrect version labels count
+FETCH_FAILED=0               # Step 5b: Dockerfiles that couldn't be fetched
 IMAGE_VERSION=""             # Step 7: Container image version label
 IMAGE_VERSION_FETCHED=false  # Step 7: Whether IMAGE_VERSION was fetched
 
@@ -1292,7 +1382,7 @@ echo ""
 
 if [ -n "$TRACKER_KEY" ]; then
   echo "Jira Tracker: $TRACKER_KEY"
-elif echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+else
   echo "Jira Tracker: (none — run /create-release-tracker $VERSION to create)"
 fi
 
@@ -1300,30 +1390,25 @@ fi
 if [ -n "$TRACKER_KEY" ] && type get_release_summary &>/dev/null; then
   TRACKER_SUMMARY=$(get_release_summary "$VERSION" 2>/dev/null || true)
   if [ -n "$TRACKER_SUMMARY" ] && [ "$TRACKER_SUMMARY" != "{}" ]; then
-    STALE_STEPS=""
-    for step_key in cveFixes rpmLockfiles ecFixes bundleShas fbcCatalogUpdate qeValidation fbcProdUrls; do
-      freshness=$(printf '%s' "$TRACKER_SUMMARY" | jq -r --arg k "$step_key" '.steps[$k].freshness // empty' 2>/dev/null || true)
-      if [ "$freshness" = "stale" ]; then
-        title=$(printf '%s' "$TRACKER_SUMMARY" | jq -r --arg k "$step_key" '.steps[$k].title // $k' 2>/dev/null || true)
-        STALE_STEPS="${STALE_STEPS:+$STALE_STEPS, }$title"
-      fi
-    done
+    # get_release_summary only ever marks rule-bearing steps "stale" (every other
+    # step defaults to "fresh"), so selecting stale steps needs no key list here —
+    # this stays in sync with STALENESS_RULES automatically.
+    STALE_STEPS=$(printf '%s' "$TRACKER_SUMMARY" \
+      | jq -r '[.steps | to_entries[] | select(.value.freshness == "stale") | .value.title] | join(", ")' 2>/dev/null || true)
     [ -n "$STALE_STEPS" ] && echo "⚠️  Stale steps: $STALE_STEPS"
+
+    # Tracker-vs-reality drift: reuse TRACKER_SUMMARY (no extra Jira query);
+    # ground truth comes from the globals the step checks already populated.
+    if type print_tracker_drift &>/dev/null; then
+      print_tracker_drift "$TRACKER_SUMMARY" || true
+    fi
   fi
 fi
 
 if [ "$IS_ZSTREAM" = "true" ]; then
-  BASE_VERSION=$(echo "$VERSION" | grep -oE '^[0-9]+\.[0-9]+')
-  echo "Release Type: Z-stream ($BASE_VERSION → $VERSION)"
+  echo "Release Type: Z-stream ($MAJOR_MINOR → $VERSION)"
 else
-  # Y-stream: handle both X.Y and X.Y.0 formats
-  if echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    # Already has patch version (X.Y.0)
-    echo "Release Type: Y-stream ($VERSION)"
-  else
-    # Just X.Y format
-    echo "Release Type: Y-stream ($VERSION.0)"
-  fi
+  echo "Release Type: Y-stream ($VERSION)"
 fi
 
 # Determine current phase and next steps
@@ -1338,7 +1423,7 @@ case "$CURRENT_PHASE" in
     echo ""
     echo "NEXT STEPS:"
     if [ "$IS_ZSTREAM" = "false" ]; then
-      echo "1. [Step 1] Create release-$MAJOR_MINOR branches (for Y-stream $VERSION.0)"
+      echo "1. [Step 1] Create release-$MAJOR_MINOR branches (for Y-stream $VERSION)"
       echo "2. [Step 2] Configure Konflux ReleasePlans"
     else
       echo "1. [Step 5b] Update version labels in Dockerfiles"
@@ -1399,15 +1484,6 @@ case "$CURRENT_PHASE" in
       echo "1. [Check] Verify builds are running"
       echo "2. [Wait] Wait for first snapshot (~15-30 min)"
     else
-      # Reuse IMAGE_VERSION from test verification if available, otherwise fetch
-      if [ "$IMAGE_VERSION_FETCHED" != "true" ]; then
-        image=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant \
-          -o jsonpath="{.spec.components[?(@.name==\"lighthouse-agent-$MAJOR_MINOR_DASH\")].containerImage}" 2>/dev/null || true)
-        if [ -n "$image" ]; then
-          IMAGE_VERSION=$(skopeo inspect "docker://$image" 2>/dev/null | jq -r '.Labels.version' 2>/dev/null || true)
-        fi
-      fi
-
       echo "Current Phase: Build Preparation"
       echo "Blocking: Waiting for snapshot rebuild"
       echo ""
@@ -1417,15 +1493,6 @@ case "$CURRENT_PHASE" in
     fi
     ;;
 
-  component-stage)
-    echo "Current Phase: Stage Preparation"
-    echo "Blocking: Ready for stage release"
-    echo ""
-    echo "NEXT STEPS:"
-    echo "1. [Step 7] Update bundle SHAs with latest snapshot"
-    echo "2. [Step 8] Create stage release YAML"
-    ;;
-
   fbc-stage)
     if [ "$FBC_STAGE_YAML_COUNT" -eq 0 ]; then
       echo "Current Phase: Stage Release"
@@ -1433,7 +1500,7 @@ case "$CURRENT_PHASE" in
       echo ""
       echo "NEXT STEPS:"
       echo "1. [Step 11] Update FBC catalog with stage bundle"
-      echo "2. [Step 12] Create FBC stage releases (6 OCP versions)"
+      echo "2. [Step 12] Create FBC stage releases (${CURRENT_OCP_VERSION_COUNT} OCP versions)"
     else
       echo "Current Phase: Stage Release"
       echo "Blocking: FBC stage releases incomplete"
@@ -1455,20 +1522,14 @@ case "$CURRENT_PHASE" in
 
   component-prod)
     echo "Current Phase: Production Release"
-    echo "Blocking: Component prod in progress or complete"
     echo ""
     echo "NEXT STEPS:"
-    echo "1. [Step 17] Create FBC prod releases (6 OCP versions)"
-    echo "2. [Step 18] Apply FBC prod releases"
-    ;;
-
-  fbc-prod)
-    echo "Current Phase: Production Release"
-    echo "Blocking: FBC prod releases incomplete"
-    echo ""
-    echo "NEXT STEPS:"
-    echo "1. [Step 18] Apply/monitor FBC prod releases"
-    echo "2. [Step 19] Share with QE when complete"
+    if [ "$FBC_PROD_YAML_COUNT" -eq 0 ]; then
+      echo "1. [Step 17] Create FBC prod releases (${CURRENT_OCP_VERSION_COUNT} OCP versions)"
+      echo "2. [Step 18] Apply FBC prod releases"
+    else
+      echo "1. [Step 18] Apply FBC prod releases ($FBC_PROD_SUCCEEDED/$FBC_PROD_YAML_COUNT succeeded)"
+    fi
     ;;
 
   complete)
@@ -1476,38 +1537,19 @@ case "$CURRENT_PHASE" in
     echo "Status: ✅ Release $VERSION deployed to production"
     echo ""
 
-    # Show what was released (use prod scope, fall back to stage if no prod YAMLs)
+    # Show what was released
     prod_scope=$(get_release_ocp_scope "prod")
     prod_count=$(count_words "$prod_scope")
 
-    # If no prod FBC YAMLs, check stage (release might have completed before FBC was added)
+    echo "RELEASED:"
+    echo "- Component: submariner-$VERSION"
     if [ "$prod_count" -eq 0 ]; then
-      stage_scope=$(get_release_ocp_scope "stage")
-      stage_count=$(count_words "$stage_scope")
-      if [ "$stage_count" -gt 0 ]; then
-        echo "RELEASED:"
-        echo "- Component: submariner-$VERSION"
-        echo "- FBC catalogs: $stage_count stage only (OCP 4-$stage_scope)"
-        echo ""
-        echo "ℹ️  No prod FBC releases found (release may predate FBC workflow)"
-      else
-        echo "RELEASED:"
-        echo "- Component: submariner-$VERSION"
-        echo "- FBC catalogs: None found"
-      fi
+      # No FBC prod releases means a pre-FBC release (it has no FBC stage YAMLs
+      # either — an active release with FBC stage but not-yet-prod resolves to the
+      # "component-prod" phase above, never here).
+      echo "- FBC catalogs: None found"
     else
-      echo "RELEASED:"
-      echo "- Component: submariner-$VERSION"
       echo "- FBC catalogs: $prod_count (OCP 4-$prod_scope)"
-
-      # Note if OCP versions were added since this release
-      if [ "$prod_count" -lt "$CURRENT_OCP_VERSION_COUNT" ]; then
-        missing_versions=$(get_missing_ocp_versions "$prod_scope")
-        if [ -n "$missing_versions" ]; then
-          echo ""
-          echo "ℹ️  OCP 4-$missing_versions support added after this release"
-        fi
-      fi
     fi
     ;;
 

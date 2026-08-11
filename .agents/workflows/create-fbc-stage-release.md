@@ -64,7 +64,7 @@ for VERSION in 16 17 18 19 20 21 22; do
   fi
 
   # Verify event type (push/incoming/retest-all-comment are main-branch builds; reject PR)
-  EVENT_TYPE=$(oc get snapshot $SNAPSHOT -n submariner-tenant -o jsonpath='{.metadata.annotations.pac\.test\.appstudio\.openshift\.io/event-type}')
+  EVENT_TYPE=$(oc get snapshot $SNAPSHOT -n submariner-tenant -o jsonpath='{.metadata.labels.pac\.test\.appstudio\.openshift\.io/event-type}')
   [ "$EVENT_TYPE" != "push" ] && [ "$EVENT_TYPE" != "incoming" ] && [ "$EVENT_TYPE" != "retest-all-comment" ] && { echo "4-$VERSION: ✗ Event '$EVENT_TYPE' (not a main-branch build)"; ((FAILED++)); continue; }
 
   # Verify all tests passed
@@ -96,7 +96,7 @@ spec:
   snapshot: submariner-fbc-4-XX-xxxxx  # From snapshot verification above
 ```
 
-Replace `4-XX` with OCP version (4-16, 4-17, 4-18, 4-19, 4-20, 4-21), `YYYYMMDD` with today's date,
+Replace `4-XX` with OCP version (4-16, 4-17, 4-18, 4-19, 4-20, 4-21, 4-22), `YYYYMMDD` with today's date,
 `xxxxx` with verified snapshot name for that version (from verification output above).
 
 Save to: `releases/fbc/4-XX/stage/submariner-fbc-4-XX-stage-YYYYMMDD-01.yaml`

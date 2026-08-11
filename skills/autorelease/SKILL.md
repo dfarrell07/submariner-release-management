@@ -2,7 +2,7 @@
 name: autorelease
 description: Run ready release steps — chains auto steps, stops at gate/review/manual
 version: 1.0.0
-argument-hint: "<version>"
+argument-hint: "<version> [--dry-run | --complete STEP | --refresh STEP | --close]"
 user-invocable: true
 allowed-tools: Bash
 ---
@@ -17,11 +17,15 @@ Requires a Jira release tracker. Run `/create-release-tracker` first if one does
 **Usage:**
 
 ```bash
-/autorelease 0.25.1    # Find and run the next step for 0.25.1
-/autorelease 0.25      # Auto-expands to 0.25.0 (Y-stream)
+/autorelease 0.25.1                        # Find and run the next step
+/autorelease 0.25                          # Auto-detects the target patch version
+/autorelease 0.25.1 --dry-run              # Preview the chain; run nothing, write nothing
+/autorelease 0.25.1 --complete cveFixes    # Mark a step as complete
+/autorelease 0.25.1 --refresh bundleShas   # Reset a step to re-run it
+/autorelease 0.25.1 --close                # after the release has shipped
 ```
 
-**Requires:** `acli jira auth login --web`, `jq`
+**Requires:** `acli jira auth login --web`, `jq`, `gh`
 
 **Arguments:** $ARGUMENTS
 

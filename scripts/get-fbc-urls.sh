@@ -7,7 +7,7 @@
 #   version:     Submariner version (e.g., 0.24.0 or 0.24)
 #
 # Options:
-#   --ocp 4.XX:    Single OCP version (default: all 4.16 through 4.21)
+#   --ocp 4.XX:    Single OCP version (default: all supported, see ALL_OCP_VERSIONS)
 #   --raw-url:     Print only URLs (one per line, for automation)
 #   --prod-index:  Check prod operator index at registry.redhat.io (requires skopeo)
 #
@@ -38,6 +38,9 @@ OCP_FILTER=""
 PROD_INDEX=false
 GIT_ROOT=""
 TMPDIR=""
+# Per-OCP catalog fragment URLs captured by get_urls, used to populate the
+# QE subtask description in main() (Phase 3).
+QE_CATALOG_URLS=()
 
 # ━━━ HELPERS ━━━
 
@@ -127,58 +130,21 @@ parse_arguments() {
     for V in "${ALL_OCP_VERSIONS[@]}"; do
       [ "$V_NUM" = "$V" ] && VALID=true
     done
-    $VALID || die "Invalid OCP version: $OCP_FILTER" \
-      "Valid versions: 4.16, 4.17, 4.18, 4.19, 4.20, 4.21"
+    if ! $VALID; then
+      # Derive the valid-versions list from ALL_OCP_VERSIONS so it never drifts.
+      local valid_list
+      valid_list=$(printf '4.%s, ' "${ALL_OCP_VERSIONS[@]}")
+      die "Invalid OCP version: $OCP_FILTER" "Valid versions: ${valid_list%, }"
+    fi
     OCP_FILTER="$V_NUM"
   fi
 }
 
-# ━━━ PARALLEL JOB HELPERS ━━━
+# ━━━ PARALLEL JOB HELPERS (shared lib, relies on global TMPDIR) ━━━
 
-run_parallel_job() {
-  local job_name="$1"
-  local job_func="$2"
-  shift 2
-  (
-    set -euo pipefail
-    EXIT_CODE=0
-    "${job_func}" "$@" 2>"$TMPDIR/${job_name}.stderr" || EXIT_CODE=$?
-    echo "$EXIT_CODE" > "$TMPDIR/${job_name}.exit"
-  ) &
-  echo "$!" >> "$TMPDIR/pids.txt"
-}
-
-wait_parallel_jobs() {
-  local job_description="$1"
-
-  while read -r pid; do
-    wait "$pid" || true
-  done < "$TMPDIR/pids.txt"
-
-  local failed_count=0
-  local error_msg=""
-  local exit_code
-  local job_name
-  local stderr
-  for exit_file in "$TMPDIR"/*.exit; do
-    [ -f "$exit_file" ] || continue
-    exit_code=$(cat "$exit_file")
-    if [ "$exit_code" -ne 0 ]; then
-      ((failed_count++))
-      job_name=$(basename "$exit_file" .exit)
-      stderr=$(cat "${exit_file%.exit}.stderr" 2>/dev/null || echo "")
-      error_msg="${error_msg}  ${job_name}: ${stderr}\n"
-    fi
-  done
-
-  if [ $failed_count -gt 0 ]; then
-    echo "❌ ERROR: $failed_count $job_description job(s) failed:" >&2
-    echo -e "$error_msg" >&2
-    return 1
-  fi
-
-  rm -f "$TMPDIR/pids.txt" "$TMPDIR"/*.exit "$TMPDIR"/*.stderr 2>/dev/null || true
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/parallel-jobs.sh
+source "$SCRIPT_DIR/lib/parallel-jobs.sh"
 
 setup_tmpdir() {
   if [ -z "$TMPDIR" ]; then
@@ -192,8 +158,14 @@ setup_tmpdir() {
 readonly BUNDLE_REGISTRY="registry.redhat.io/rhacm2/submariner-operator-bundle"
 readonly INDEX_REGISTRY="registry.redhat.io/redhat/redhat-operator-index"
 
+# Tag-scheme-aware prod-bundle check (new-scheme .0 releases have no vX.Y.0 tag).
+# PROD_BUNDLE_REGISTRY is read by the sourced prod-bundle.sh.
+# shellcheck disable=SC2034
+PROD_BUNDLE_REGISTRY="$BUNDLE_REGISTRY"
+# shellcheck source=lib/prod-bundle.sh
+source "$SCRIPT_DIR/lib/prod-bundle.sh"
+
 get_urls_from_prod_index() {
-  local FOUND=0
   local VERSIONS=("${ALL_OCP_VERSIONS[@]}")
 
   if [ -n "$OCP_FILTER" ]; then
@@ -204,17 +176,22 @@ get_urls_from_prod_index() {
     echo "Checking prod registry for Submariner $VERSION..."
   fi
 
-  local BUNDLE_INFO
-  BUNDLE_INFO=$(skopeo inspect "docker://${BUNDLE_REGISTRY}:v${VERSION}" 2>/dev/null) || \
-    die "Submariner $VERSION not found in prod registry" \
-        "Bundle tag ${BUNDLE_REGISTRY}:v${VERSION} does not exist"
+  # Confirm the bundle shipped (tag-scheme-aware; sets PROD_BUNDLE_* on success)
+  # before advertising index URLs, distinguishing genuine absence from an
+  # unreachable registry so a flake doesn't read as "not released".
+  prod_bundle_shipped "$VERSION"
+  case "$PROD_BUNDLE_VERDICT" in
+    shipped) ;;
+    not-shipped) die "Submariner $VERSION not found in prod registry" \
+        "No exact tag v${VERSION} and floating v${VERSION%.*} points to another patch" ;;
+    *) die "Cannot verify Submariner $VERSION in prod registry" \
+        "skopeo could not inspect ${BUNDLE_REGISTRY} (check auth/network)" ;;
+  esac
 
-  local BUNDLE_DIGEST BUNDLE_CREATED
-  BUNDLE_DIGEST=$(echo "$BUNDLE_INFO" | jq -r '.Digest')
-  BUNDLE_CREATED=$(echo "$BUNDLE_INFO" | jq -r '.Created' | cut -dT -f1)
+  local BUNDLE_DIGEST="$PROD_BUNDLE_DIGEST" BUNDLE_CREATED="$PROD_BUNDLE_CREATED"
 
   if ! $RAW_URL; then
-    echo "✓ Found bundle v${VERSION} (${BUNDLE_DIGEST:7:12}, built ${BUNDLE_CREATED})"
+    echo "✓ Found bundle ${PROD_BUNDLE_TAG} (${BUNDLE_DIGEST:7:12}, built ${BUNDLE_CREATED})"
     echo ""
     echo "=== Prod Operator Index URLs for Submariner $VERSION ==="
     echo ""
@@ -227,15 +204,12 @@ get_urls_from_prod_index() {
     else
       echo "OCP 4.${V}: $INDEX_URL"
     fi
-    FOUND=$((FOUND + 1))
   done
 
   if ! $RAW_URL; then
     echo ""
-    echo "Found $FOUND/${#VERSIONS[@]} OCP versions"
+    echo "Found ${#VERSIONS[@]} OCP versions"
   fi
-
-  [ "$FOUND" -gt 0 ] || die "No OCP versions matched"
 }
 
 # ━━━ SNAPSHOT FALLBACK ━━━
@@ -342,6 +316,10 @@ get_urls_from_snapshots() {
       echo ""
     fi
 
+    # Populate QE_CATALOG_URLS so Phase 3 writes the snapshot URLs to the Jira
+    # subtask even when the primary Release-CR path found nothing (CRs GC'd).
+    QE_CATALOG_URLS+=("OCP 4.${V}: ${CATALOG_MAP[$V]} (pre-release snapshot)")
+
     FOUND=$((FOUND + 1))
   done
 
@@ -408,7 +386,14 @@ get_urls() {
     fi
 
     local FBC_FRAG
-    FBC_FRAG=$(oc get release "$MATCH" -n "$NAMESPACE" -o jsonpath='{.status.artifacts.components[0].fbc_fragment}')
+    FBC_FRAG=$(oc get release "$MATCH" -n "$NAMESPACE" -o jsonpath='{.status.artifacts.components[0].fbc_fragment}') || true
+
+    # Capture the catalog fragment for the QE subtask (populated in main).
+    if [ -z "$FBC_FRAG" ]; then
+      MISSING+=("4.$V")
+      continue
+    fi
+    QE_CATALOG_URLS+=("OCP 4.${V}: ${FBC_FRAG}")
 
     if $RAW_URL; then
       echo "$FBC_FRAG"
@@ -462,10 +447,12 @@ main() {
     get_urls
   fi
 
-  # Phase 3: populate QE subtask with catalog URLs
-  if [ -n "${TRACKER:-}" ] && ! $RAW_URL && ! $PROD_INDEX; then
+  # Phase 3: populate QE subtask with the actual catalog URLs captured above.
+  # Only write when we captured at least one URL — never a content-free
+  # placeholder that claims to be populated while holding nothing.
+  if [ -n "${TRACKER:-}" ] && ! $RAW_URL && ! $PROD_INDEX && [ "${#QE_CATALOG_URLS[@]}" -gt 0 ]; then
     local url_markdown
-    url_markdown=$(printf '## Stage Catalog URLs\n\n_(populated by /get-fbc-urls)_')
+    url_markdown="## Stage Catalog URLs"$'\n\n'"$(printf -- '- %s\n' "${QE_CATALOG_URLS[@]}")"
     update_subtask_description "$VERSION" "qeValidation" "$url_markdown" "$TRACKER" 2>/dev/null || true
   fi
 }

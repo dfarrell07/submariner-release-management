@@ -2,7 +2,7 @@
 name: create-fbc-release
 description: Create FBC releases for all OCP versions (stage or prod) with comprehensive verification
 version: 1.0.0
-argument-hint: "<version> [--stage|--prod]"
+argument-hint: "<version> [stage|prod]"
 user-invocable: true
 allowed-tools: Bash
 ---
@@ -13,20 +13,19 @@ Automates Step 12 (FBC stage releases) and Step 17 (FBC prod releases) of the Su
 
 **What it does:**
 
-- Verifies GitHub catalog consistency (all 6 OCP versions)
+- Verifies GitHub catalog consistency (all 7 OCP versions)
 - Verifies FBC snapshots (event type, tests, bundle SHAs)
-- Verifies component SHAs across 10 sources (operator repo, registry bundle, FBC GitHub, 6 snapshots)
-- Generates 6 Release YAMLs (one per OCP version: 4-16 through 4-21)
+- Verifies component SHAs across sources (operator repo, registry bundle, FBC GitHub, 7 snapshots)
+- Generates 7 Release YAMLs (one per OCP version: 4-16 through 4-22)
 - Validates YAMLs with make test-remote
 - Automatically commits with descriptive message
 
 **Usage:**
 
 ```bash
-/create-fbc-release 0.22.1 --stage   # Create stage releases
-/create-fbc-release 0.22.1 --prod    # Create prod releases
-/create-fbc-release 0.22 --stage     # Auto-detects latest patch version
-/create-fbc-release 0.22             # Defaults to stage
+/create-fbc-release 0.22.1 stage     # Create stage releases
+/create-fbc-release 0.22.1 prod      # Create prod releases
+/create-fbc-release 0.22.1           # Defaults to stage
 ```
 
 **Prerequisites:**

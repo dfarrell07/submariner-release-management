@@ -16,6 +16,9 @@
 
 set -euo pipefail
 
+# Resolve script location before any cd so lib paths work from any clone location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ━━━ CONSTANTS ━━━
 
 readonly SUBMARINER_BASE="$HOME/go/src/submariner-io"
@@ -143,7 +146,11 @@ update_repo() {
     BRANCH_REF="$RELEASE_BRANCH"
     if ! git show-ref --verify --quiet "refs/heads/$BRANCH_REF"; then
       echo "  ✗ Branch $RELEASE_BRANCH not found (run: git fetch origin $RELEASE_BRANCH)"
-      REPOS_SKIPPED+=("$REPO:branch-not-found")
+      # A missing release branch means this repo could NOT be processed — that is
+      # a failure (needs a git fetch), not a benign skip. Recording it as skipped
+      # would let the run exit 0 and mark the tracker step complete while a repo
+      # went untouched.
+      REPOS_FAILED+=("$REPO:branch-not-found")
       echo ""
       return
     fi
@@ -286,6 +293,12 @@ print_summary() {
       echo "git show"
       echo "git push origin fix-version-labels-${major_minor}"
       echo "gh pr create --base $branch --head fix-version-labels-${major_minor} --title \"Update version labels to v$VERSION\" --body \"Enables correct Konflux image tagging.\""
+      # Append to push summary if conductor is running
+      if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
+        printf '\n  cd %s/%s\n  git push origin fix-version-labels-%s\n  gh pr create --base %s --head fix-version-labels-%s\n' \
+          "$SUBMARINER_BASE" "$repo" "$major_minor" "$branch" "$major_minor" \
+          >> "$AUTORELEASE_PUSH_LOG"
+      fi
     done
   fi
 
@@ -300,16 +313,23 @@ main() {
   parse_arguments "$@"
 
   # Tracker integration
-  TRACKER_LIB="${TRACKER_LIB:-$HOME/konflux/submariner-release-management/scripts/lib/jira-tracker.sh}"
+  TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
   # shellcheck source=/dev/null
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
   TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
-  [ -n "${TRACKER:-}" ] && update_step "$VERSION" "versionLabels" "in_progress" '{}' "$TRACKER"
+  # Only move tracker state on a full run. A filtered (single-repo) run is a manual
+  # partial retry: guarding in_progress the same way as completion (below) keeps it
+  # from flipping an already-complete step back to in_progress and never restoring it.
+  [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && update_step "$VERSION" "versionLabels" "in_progress" '{}' "$TRACKER"
 
   update_all
 
-  # Record completion before print_summary (which returns non-zero on partial failure)
-  if [ -n "${TRACKER:-}" ] && [ "${#REPOS_UPDATED[@]}" -gt 0 ]; then
+  # Record completion when the full repo set was processed with no failures.
+  # "All already correct" (0 updated, 0 failed) is still success — requiring
+  # REPOS_UPDATED>0 left the step stuck in_progress on a no-op re-run. A
+  # single-repo run (REPO_FILTER) covers only part of the step, so it must not
+  # mark the whole step complete.
+  if [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && [ "${#REPOS_FAILED[@]}" -eq 0 ]; then
     local data
     data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" --arg ver "$VERSION" \
       '{reposUpdated:($count|tonumber),version:$ver}' | jq -c .) || data="{}"

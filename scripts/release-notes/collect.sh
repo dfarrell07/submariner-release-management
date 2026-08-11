@@ -102,10 +102,13 @@ echo "Stage YAML: $STAGE_YAML"
 # Extract snapshot build date from stage YAML (embedded in snapshot name: *-YYYYMMDD-*)
 # CVEs filed after this date can't be verified — "absent in Clair" would be a false positive
 # because the CVE didn't exist yet when the scan ran
-SNAPSHOT_NAME=$(yq eval '.spec.snapshot' "$STAGE_YAML" 2>/dev/null)
+# `|| true`: a malformed stage YAML makes yq exit non-zero, which under set -e
+# would abort here instead of falling through to the empty-value guard below
+# (snapshot date is optional — its absence only disables the CVE-date filter).
+SNAPSHOT_NAME=$(yq eval '.spec.snapshot' "$STAGE_YAML" 2>/dev/null || true)
 SNAPSHOT_DATE=""
 if [[ -n "$SNAPSHOT_NAME" && "$SNAPSHOT_NAME" != "null" ]]; then
-  SNAP_DATE_RAW=$(echo "$SNAPSHOT_NAME" | grep -oE '[0-9]{8}' | head -1)
+  SNAP_DATE_RAW=$(echo "$SNAPSHOT_NAME" | grep -oE '[0-9]{8}' | head -1 || true)
   if [[ -n "$SNAP_DATE_RAW" ]]; then
     SNAPSHOT_DATE="${SNAP_DATE_RAW:0:4}-${SNAP_DATE_RAW:4:2}-${SNAP_DATE_RAW:6:2}"
     echo "Snapshot date: $SNAPSHOT_DATE (CVEs filed after this are excluded)"
@@ -133,7 +136,7 @@ echo "Version clause: $VERSION_CLAUSE"
 
 banner "Checking for Existing Issues"
 
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || true
 if [[ -z "$GIT_ROOT" ]]; then
   echo "❌ ERROR: Not in a git repository" >&2
   echo "Run this script from within the repository" >&2
@@ -263,7 +266,15 @@ else
     fi
 
     COMPONENT_MAPPED=$(map_component_name "$PSCOMPONENT" "$VERSION_MAJOR_MINOR_DASH")
-    [[ "$COMPONENT_MAPPED" == "EXCLUDE" || "$COMPONENT_MAPPED" == "UNKNOWN" ]] && continue
+    # EXCLUDE is intentional (e.g. addon is built separately); UNKNOWN means a
+    # pscomponent label map_component_name didn't recognize — warn so a drifted
+    # label format can't silently drop a real Submariner CVE from the RHSA.
+    if [[ "$COMPONENT_MAPPED" == "EXCLUDE" ]]; then
+      continue
+    elif [[ "$COMPONENT_MAPPED" == "UNKNOWN" ]]; then
+      echo "⚠️  $KEY: Unrecognized pscomponent '$PSCOMPONENT', skipping (update map_component_name)" >&2
+      continue
+    fi
 
     RESOLVED=$(jq -r '(.fields.resolutiondate // "")[:10]' <<< "$ISSUE_JSON")
     RESOLUTION=$(jq -r '.fields.resolution.name // "Unresolved"' <<< "$ISSUE_JSON")
@@ -335,8 +346,15 @@ else
     STATUS=$(jq -r '.fields.status.name' <<< "$ISSUE_JSON")
     LINK_COUNT=$(jq '[.fields.issuelinks[]? | select(.type.name != "Cloners")] | length' <<< "$ISSUE_JSON")
     if [[ "$RESOLUTION" == "Unresolved" && "$LINK_COUNT" -eq 0 ]] && echo "$STATUS" | grep -qiE "^(New|Backlog|To Do)$"; then
-      if ! gh search prs "$KEY" --owner submariner-io --state merged --json url --limit 1 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1 && \
-         ! gh search prs "$KEY" --owner stolostron --state merged --json url --limit 1 2>/dev/null | jq -e 'length > 0' >/dev/null 2>&1; then
+      # Fail-safe merged-PR check. Count matches via gh's built-in --jq; on a gh
+      # error (rate-limit/network) the `|| VAR=""` leaves "" (not "0"), so we KEEP
+      # the issue rather than silently dropping a shipped fix. Skip only when BOTH
+      # queries SUCCEED and return 0 matches. (review.sh only re-examines issues
+      # already in the YAML, so a drop here is unrecoverable — hence keep-on-error,
+      # matching the rest of this deliberately fail-safe subsystem.)
+      SUBM_PRS=$(gh search prs "$KEY" --owner submariner-io --state merged --json url --limit 1 --jq 'length' 2>/dev/null) || SUBM_PRS=""
+      STOL_PRS=$(gh search prs "$KEY" --owner stolostron --state merged --json url --limit 1 --jq 'length' 2>/dev/null) || STOL_PRS=""
+      if [[ "$SUBM_PRS" == "0" && "$STOL_PRS" == "0" ]]; then
         echo "  $KEY: Skipping ($STATUS, unresolved, no links, no merged PRs)"
         continue
       fi

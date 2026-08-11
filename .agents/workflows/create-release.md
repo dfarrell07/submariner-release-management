@@ -46,6 +46,6 @@ Markdown: `npx markdownlint-cli2 "**/*.md"`
 Base stage YAML created, committed, and pushed. Step 9 will add notes and commit again, then Step 10 will apply.
 
 ```bash
-# Verify file pushed to remote
-git ls-tree -r --name-only HEAD releases/0.X/stage/submariner-0-X-Y-stage-*.yaml
+# Verify file pushed to remote (origin/main advances only on an actual push)
+git ls-tree -r --name-only origin/main releases/0.X/stage/submariner-0-X-Y-stage-*.yaml
 ```

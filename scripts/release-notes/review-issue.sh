@@ -120,8 +120,7 @@ for REPO in submariner submariner-operator lighthouse subctl shipyard cloud-prep
 
   HITS=""
   SEEN_SHAS=()
-  # Collect useful keywords (skip noisy ones with >15 hits in this repo)
-  USEFUL_KWS=()
+  # Skip noisy keywords (>15 hits in this repo); scan the rest for evidence
   NOISY_KWS=()
   for KW in $KEYWORDS; do
     HIT_COUNT=$(cd "$REPO_DIR" && git log "origin/release-${VERSION_MAJOR_MINOR}" --oneline -i --grep="$KW" 2>/dev/null | wc -l || true)
@@ -129,7 +128,6 @@ for REPO in submariner submariner-operator lighthouse subctl shipyard cloud-prep
       NOISY_KWS+=("$KW")
       continue
     fi
-    USEFUL_KWS+=("$KW")
     while IFS= read -r SHA; do
       [[ -z "$SHA" ]] && continue
       printf '%s\n' "${SEEN_SHAS[@]}" | grep -qx "$SHA" 2>/dev/null && continue
@@ -220,7 +218,10 @@ if [[ "$IS_CVE" == "true" ]]; then
       COREDNS_GO_MOD=$(git -C "$REPO_DIR" show "origin/release-${VERSION_MAJOR_MINOR}:coredns/go.mod" 2>/dev/null || echo "")
       ALL_GO_MODS=$(printf '%s\n%s\n%s' "$GO_MOD" "$TOOLS_GO_MOD" "$COREDNS_GO_MOD")
 
-      GO_VERSION=$(echo "$GO_MOD" | grep "^go " | awk '{print $2}')
+      # `|| true`: GO_MOD may be empty (fetch failed above), so grep finds no
+      # "go " line and exits non-zero; under set -e/pipefail that would abort
+      # the script. Siblings below already guard the same way.
+      GO_VERSION=$(echo "$GO_MOD" | grep "^go " | awk '{print $2}' || true)
       GRPC_VERSION=$(echo "$ALL_GO_MODS" | grep "google.golang.org/grpc " | head -1 | awk '{print $2}' || true)
       COREDNS_VERSION=$(echo "$ALL_GO_MODS" | grep "github.com/coredns/coredns " | head -1 | awk '{print $2}' || true)
 
@@ -364,10 +365,18 @@ OUTPUT=$(claude -p "$PROMPT" \
   --dangerously-skip-permissions \
   2>&1) || true
 
-# Extract and display result (flexible matching — agent may indent, use markdown, etc.)
-# Use tail -1 to prefer the agent's final decision line over prompt quotes in reasoning
-if echo "$OUTPUT" | grep -qiE "^\*{0,2}REMOVE"; then
-  REASON=$(echo "$OUTPUT" | grep -oiE "REMOVE:?\*{0,2} .*" | tail -1 | sed 's/^[*]*REMOVE:*[*]* *//')
+# The prompt contracts that the verdict is the LAST line beginning with KEEP or REMOVE
+# (the reasoning above it may quote either word). Select that final verdict line, then
+# branch on it — scanning every line for REMOVE would let a stray "Remove ..." in the
+# reasoning trigger a false removal even when the real verdict is KEEP.
+# Flexible matching: agent may indent or wrap the verdict in markdown (**REMOVE**).
+# `|| true`: OUTPUT (from `claude -p ... || true` above) can be empty or verdict-less;
+# grep then exits 1 and, under pipefail + set -e, would abort here — making the
+# "output unclear, keeping by default" else branch below dead code.
+VERDICT_LINE=$(echo "$OUTPUT" | grep -iE "^\*{0,2}(KEEP|REMOVE)" | tail -1 || true)
+
+if echo "$VERDICT_LINE" | grep -qiE "^\*{0,2}REMOVE"; then
+  REASON=$(echo "$VERDICT_LINE" | sed 's/^[*]*REMOVE:*[*]* *//')
   echo "  ✗ REMOVE $ISSUE_KEY - $REASON"
 
   # Execute removal deterministically (don't rely on agent running bash)
@@ -380,11 +389,9 @@ if echo "$OUTPUT" | grep -qiE "^\*{0,2}REMOVE"; then
 
 ${CLEAN_REASON:0:78}" || true
 
-elif echo "$OUTPUT" | grep -qiE "KEEP:"; then
-  REASON=$(echo "$OUTPUT" | grep -oiE "KEEP:?\*{0,2} .*" | tail -1 | sed 's/^[*]*KEEP:*[*]* *//')
+elif echo "$VERDICT_LINE" | grep -qiE "^\*{0,2}KEEP"; then
+  REASON=$(echo "$VERDICT_LINE" | sed 's/^[*]*KEEP:*[*]* *//')
   echo "  ✓ KEEP  $ISSUE_KEY - ${REASON:-issue passes review}"
-elif echo "$OUTPUT" | grep -qiE "KEEP"; then
-  echo "  ✓ KEEP  $ISSUE_KEY - issue passes review"
 else
   echo "  ? KEEP  $ISSUE_KEY - agent output unclear, keeping by default"
 fi

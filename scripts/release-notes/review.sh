@@ -77,19 +77,24 @@ if [[ -z "$ALL_ISSUE_KEYS" ]]; then
   exit 0
 fi
 
-# Get CVE issue keys to skip (security-critical, always included)
-CVE_ISSUE_KEYS=""
+# Get CVE issue keys to skip (security-critical, always included). These keys come
+# only from collect.sh's structured output (/tmp/release-notes-data.json) — the stage
+# YAML has no per-issue CVE marker. Re-collect whenever that file is missing OR for the
+# wrong version: otherwise CVE_ISSUE_KEYS would be empty, every CVE issue would fall
+# through to the removal agent, and a shipped security CVE could be silently dropped.
+DATA_VERSION=""
 if [[ -f /tmp/release-notes-data.json ]]; then
-  DATA_VERSION=$(jq -r '.metadata.version // ""' /tmp/release-notes-data.json 2>/dev/null)
-  if [[ "$DATA_VERSION" == "$VERSION" ]]; then
-    CVE_ISSUE_KEYS=$(jq -r '.cve_issues[].issue_key // empty' /tmp/release-notes-data.json 2>/dev/null || echo "")
-  else
-    echo "⚠️  Data file is for $DATA_VERSION, not $VERSION — re-collecting..."
-    # Re-run collect to get correct CVE keys for this version
-    "$SCRIPT_DIR/collect.sh" "$VERSION" --stage-yaml "$STAGE_YAML" >/dev/null 2>&1 || true
-    CVE_ISSUE_KEYS=$(jq -r '.cve_issues[].issue_key // empty' /tmp/release-notes-data.json 2>/dev/null || echo "")
+  DATA_VERSION=$(jq -r '.metadata.version // ""' /tmp/release-notes-data.json 2>/dev/null || echo "")
+fi
+if [[ "$DATA_VERSION" != "$VERSION" ]]; then
+  echo "⚠️  Data file missing or for '${DATA_VERSION:-none}', not $VERSION — re-collecting..."
+  if ! "$SCRIPT_DIR/collect.sh" "$VERSION" --stage-yaml "$STAGE_YAML" >/dev/null 2>&1; then
+    echo "❌ collect.sh failed (Jira auth/network?) — cannot build the CVE-skip list." >&2
+    echo "   Aborting: reviewing without it could drop a shipped CVE from the release notes." >&2
+    exit 1
   fi
 fi
+CVE_ISSUE_KEYS=$(jq -r '.cve_issues[].issue_key // empty' /tmp/release-notes-data.json 2>/dev/null || echo "")
 
 # Build list of non-CVE issue keys to review
 REVIEW_KEYS=()

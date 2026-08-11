@@ -29,12 +29,14 @@ SNAPSHOT="$2"
 RELEASE_TYPE="$3"
 RELEASE_DATE="$4"
 
-# Validate OCP version format (4-16 through 4-22)
+# Validate OCP version format. Regex is deliberately permissive (4-14 through
+# 4-29) so add-fbc-ocp-version can introduce new OCP versions without editing
+# this generator; the actively-shipped set is 4-16 through 4-22.
 if [[ "$OCP_VERSION" =~ ^4-(1[4-9]|2[0-9])$ ]]; then
   :  # OCP version is valid
 else
   echo "❌ ERROR: Invalid OCP version: $OCP_VERSION" >&2
-  echo "Expected: 4-14 or higher" >&2
+  echo "Expected: 4-14 through 4-29" >&2
   exit 1
 fi
 

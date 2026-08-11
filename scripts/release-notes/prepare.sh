@@ -152,7 +152,7 @@ EXCLUDED_CVES=$(jq -r '
     (if ($meta.last_published_date != "" and .resolved != "")
      then (.resolved < $meta.last_published_date) else false end)
   ) | "\(.issue_key) (\(.resolution // "Unresolved")): \(.cve_key)"] | .[]
-' "$INPUT_JSON" 2>/dev/null)
+' "$INPUT_JSON" 2>/dev/null || true)
 
 if [[ -n "$EXCLUDED_CVES" ]]; then
   echo ""
@@ -171,7 +171,7 @@ EXCLUDED_NON_CVE=$(jq -r '
     (if ($meta.last_published_date != "" and .resolved != "")
      then (.resolved < $meta.last_published_date) else false end)
   ) | "\(.issue_key) (\(.resolution))"] | .[]
-' "$INPUT_JSON" 2>/dev/null)
+' "$INPUT_JSON" 2>/dev/null || true)
 
 if [[ -n "$EXCLUDED_NON_CVE" ]]; then
   echo ""
@@ -192,4 +192,4 @@ jq -r '
 "Recommendation:",
 "  Release type: \(.recommendation.release_type)",
 "  Reason: \(.recommendation.reason)"
-' "$OUTPUT_JSON"
+' "$OUTPUT_JSON" || true

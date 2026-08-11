@@ -8,6 +8,9 @@
 
 set -euo pipefail
 
+# Resolve script location before any cd so lib paths work from any clone location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Constants
 readonly SUBMARINER_BASE="${HOME}/go/src/submariner-io"
 readonly COMPONENT_PATTERN="^(gateway|globalnet|route-agent|nettest)$"
@@ -86,7 +89,7 @@ parse_arguments() {
         ;;
       [0-9].[0-9]*)
         VERSION="$BRANCH_ARG"
-        BRANCH="release-${VERSION}"
+        BRANCH="release-$(echo "$VERSION" | cut -d. -f1-2)"
         ;;
       *)
         BRANCH="$BRANCH_ARG"
@@ -174,7 +177,7 @@ update_lockfiles() {
     git show-ref --verify --quiet "refs/remotes/$BRANCH_REF" || {
       BRANCH_REF="$REPO_BRANCH"
       git show-ref --verify --quiet "refs/heads/$BRANCH_REF" || {
-        REPOS_SKIPPED+=("$DISPLAY_NAME:branch-not-found")
+        REPOS_FAILED+=("$DISPLAY_NAME:branch-not-found")
         continue
       }
     }
@@ -292,8 +295,17 @@ print_summary() {
       echo "# $display"
       echo "cd $SUBMARINER_BASE/$repo"
       echo "git show"
-      echo "git push origin update-rpm-lockfiles-${version}"
+      # --force-with-lease is safe for a re-run (idempotent if the remote matches
+      # our last fetch), and required if the branch was already pushed and the
+      # conductor re-ran after a silent tracker write failure.
+      echo "git push --force-with-lease origin update-rpm-lockfiles-${version}"
       echo "gh pr create --base $branch --head update-rpm-lockfiles-${version}"
+      # Append to push summary if conductor is running
+      if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
+        printf '\n  cd %s/%s\n  git push --force-with-lease origin update-rpm-lockfiles-%s\n  gh pr create --base %s --head update-rpm-lockfiles-%s\n' \
+          "$SUBMARINER_BASE" "$repo" "$version" "$branch" "$version" \
+          >> "$AUTORELEASE_PUSH_LOG"
+      fi
     done
   fi
 
@@ -306,16 +318,35 @@ main() {
   parse_arguments "$@"
 
   # Tracker integration
-  TRACKER_LIB="${TRACKER_LIB:-$HOME/konflux/submariner-release-management/scripts/lib/jira-tracker.sh}"
+  TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
   # shellcheck source=/dev/null
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
   TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
-  [ -n "${TRACKER:-}" ] && update_step "$VERSION" "rpmLockfiles" "in_progress" '{}' "$TRACKER"
+  # Only move tracker state on a full run. A filtered (single-component) run is a manual
+  # partial retry: guarding in_progress the same way as completion (below) keeps it
+  # from flipping an already-complete step back to in_progress and never restoring it.
+  [ -n "${TRACKER:-}" ] && [ "$COMPONENT_FILTER" = "all" ] && update_step "$VERSION" "rpmLockfiles" "in_progress" '{}' "$TRACKER"
 
   update_lockfiles
 
-  # Record completion before print_summary (which returns non-zero on partial failure)
-  if [ -n "${TRACKER:-}" ] && [ "${#REPOS_UPDATED[@]}" -gt 0 ]; then
+  # Record completion only for a full run (COMPONENT_FILTER=all) with no
+  # failures and no problem-skips. Benign skips — no-changes (already current)
+  # and no-lockfiles (repo has none) — still count as done, so an all-current
+  # re-run completes. But repo-not-found / no-current-branch mean a repo could
+  # not be processed (problem-skips); branch-not-found is a hard failure
+  # (REPOS_FAILED). A single-component run must not complete the whole step.
+  local problem_skips=0 skip_entry
+  if [ "${#REPOS_SKIPPED[@]}" -gt 0 ]; then
+    for skip_entry in "${REPOS_SKIPPED[@]}"; do
+      case "${skip_entry##*:}" in
+        no-changes|no-lockfiles) ;;
+        *) problem_skips=$((problem_skips + 1)) ;;
+      esac
+    done
+  fi
+
+  if [ -n "${TRACKER:-}" ] && [ "$COMPONENT_FILTER" = "all" ] && \
+     [ "${#REPOS_FAILED[@]}" -eq 0 ] && [ "$problem_skips" -eq 0 ]; then
     local data
     data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" '{reposUpdated:($count|tonumber)}' | jq -c .) || data="{}"
     update_step "$VERSION" "rpmLockfiles" "complete" "$data" "$TRACKER"

@@ -106,8 +106,10 @@ find_stage_yaml() {
   local VERSION_FULL_DASH="${VERSION//./-}"
 
   # Find git repository root
+  # `|| true`: outside a git repo `git rev-parse` exits non-zero, which under
+  # set -e would abort before the friendly "Not in a git repository" guard below.
   local GIT_ROOT
-  GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || true
   if [[ -z "$GIT_ROOT" ]]; then
     echo "❌ ERROR: Not in a git repository" >&2
     return 1
@@ -230,7 +232,10 @@ update_stage_yaml_data_section() {
   trap 'rm -f "$TMPFILE"' RETURN
 
   local DATA_LINE
-  DATA_LINE=$(grep -n -m1 '^  data:' "$STAGE_YAML" | cut -d: -f1)
+  # `|| true`: no data: section is a valid input (the else branch appends one);
+  # without it, pipefail + set -e would abort here before that branch is reached
+  # (matches the guarded sibling greps at the DATA_COUNT and NEXT_KEY_LINE reads).
+  DATA_LINE=$(grep -n -m1 '^  data:' "$STAGE_YAML" | cut -d: -f1 || true)
 
   if [[ -n "$DATA_LINE" ]]; then
     # YAML has existing data: section - replace it
@@ -283,8 +288,10 @@ validate_stage_yaml() {
   echo "✓ YAML syntax valid"
 
   # Find git root for make command
+  # `|| true`: outside a git repo `git rev-parse` exits non-zero, which under
+  # set -e would abort before the skip-validation warning below.
   local GIT_ROOT
-  GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || true
   if [[ -z "$GIT_ROOT" ]]; then
     echo "⚠️  WARNING: Not in git repository - skipping validation" >&2
   else
