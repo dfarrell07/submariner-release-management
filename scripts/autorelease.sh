@@ -107,6 +107,8 @@ _resolve_version() {
     latest=$(printf '%s\n%s\n' "$ds_prod" "$upstream" | sort -V | tail -1)
   fi
 
+  # upstream > ds_prod: a GitHub release exists that hasn't shipped through Konflux yet — target it.
+  # Otherwise: latest shipped, so bump to the next patch as the new target.
   if [ -n "$upstream" ] && [ "$upstream" != "$ds_prod" ] && [ "$latest" = "$upstream" ]; then
     echo "${upstream}:upstream"
     return 0
@@ -181,18 +183,11 @@ find_next_step() {
   local release_type="$2"
   local tracker="$3"
 
-  # Single-fetch cache: fetch all comments once, parse all step statuses.
-  # Skip the fetch under _AUTORELEASE_TESTING (tests seed step_statuses) AND
-  # under _AUTORELEASE_NOFETCH (run_dry_run freezes the array after one real
-  # fetch and re-walks it in memory). Both must skip the `step_statuses=()` reset
-  # below too, or the frozen/seeded state is wiped before the walk reads it.
+  # Safety: jq -e 'type=="array"' rejects null/object returns from acli
+  # (jq empty would accept them), preventing re-dispatch from step 1 on
+  # partial reads, rate-limits, or auth failures.
+  # Skip entirely under _AUTORELEASE_TESTING/NOFETCH — seeded state must not be wiped.
   if [ "${_AUTORELEASE_TESTING:-}" != "true" ] && [ "${_AUTORELEASE_NOFETCH:-}" != "1" ]; then
-    # Capture acli's exit code separately from its output. A failed fetch
-    # (auth blip, network, rate limit) must NOT be treated as "zero steps
-    # complete" — that would re-dispatch from the top of STEP_ORDER and
-    # re-run already-completed steps (creating commits, and eventually
-    # `oc apply`). A genuinely empty tracker (fresh release, no STEP_DATA
-    # comments yet) still returns exit 0 and proceeds normally.
     local all_comments fetch_rc=0
     all_comments=$(_fetch_tracker_comments "$tracker") || fetch_rc=$?
     if [ "$fetch_rc" -ne 0 ]; then
@@ -203,15 +198,6 @@ find_next_step() {
       exit 1
     fi
 
-    # An acli success (exit 0) can still yield empty, malformed, or unexpected
-    # output — a truncated --paginate response, or a JSON error body / bare
-    # `null` on some error modes. Treat any of those like a failed fetch rather
-    # than a zero-step tracker: a real tracker read is always a JSON *array*
-    # (`[]` when empty). Require exactly that. `jq empty` is too weak here — it
-    # exits 0 on empty input AND on `null`/objects, any of which would sail past
-    # and leave the walk to re-dispatch from the top of STEP_ORDER; `jq -e
-    # 'type=="array"'` rejects empty (exit 4), null/object (exit 1), and garbled
-    # payloads (exit 5), accepting only a genuine array.
     if [ -z "$all_comments" ] || ! printf '%s' "$all_comments" | jq -e 'type=="array"' >/dev/null 2>&1; then
       echo "" >&2
       echo "❌ Tracker read from Jira was empty or not a JSON array" >&2
@@ -362,7 +348,63 @@ handle_step_override() {
 
   update_step "$version" "$step_key" "$action" "$data" "$tracker"
   echo "Step '$step_key' marked as $action for $version (tracker: $tracker)" >&2
+
+  # Cascade: when --refresh resets a step, downstream steps that depended on it
+  # become stale. Reset them to not_started so the conductor doesn't skip them
+  # on the next run with stale "complete" status.
+  if [ "$action" = "in_progress" ]; then
+    _cascade_refresh "$version" "$step_key" "$tracker"
+  fi
+
   return 0
+}
+
+# Build reverse-dependency map and BFS from the refreshed step, resetting each
+# downstream step to not_started in Jira. Called only by handle_step_override
+# when action=in_progress (i.e., --refresh).
+_cascade_refresh() {
+  local version="$1"
+  local refresh_step="$2"
+  local tracker="$3"
+
+  # Build reverse deps: for each step, record which steps depend on it.
+  declare -A _reverse_deps=()
+  local step dep
+  for step in "${!STEP_DEPENDENCIES[@]}"; do
+    IFS=',' read -ra _deps <<< "${STEP_DEPENDENCIES[$step]}"
+    for dep in "${_deps[@]}"; do
+      dep="${dep// /}"  # strip spaces
+      [ -z "$dep" ] && continue
+      _reverse_deps[$dep]+=" $step"
+    done
+  done
+
+  # BFS from the refreshed step to collect all transitive dependents.
+  local queue=("$refresh_step")
+  local cascade=()
+  local visited=" $refresh_step "
+
+  while [ "${#queue[@]}" -gt 0 ]; do
+    local cur="${queue[0]}"
+    queue=("${queue[@]:1}")
+    for ds in ${_reverse_deps[$cur]:-}; do
+      if [[ "$visited" != *" $ds "* ]]; then
+        visited+="$ds "
+        cascade+=("$ds")
+        queue+=("$ds")
+      fi
+    done
+  done
+
+  if [ "${#cascade[@]}" -eq 0 ]; then
+    return 0
+  fi
+
+  echo "  Cascading --refresh to downstream steps: ${cascade[*]}" >&2
+  for ds in "${cascade[@]}"; do
+    update_step "$version" "$ds" "not_started" "{}" "$tracker"
+    echo "  Step '$ds' reset to not_started" >&2
+  done
 }
 
 # --- Mark a finished release's tracker done (resolve parent + subtasks) ---
@@ -502,8 +544,19 @@ try_auto_verify() {
   # was verified, falling back to "{}" if empty. TRACKER is passed for verifiers
   # that cross-check the tracker (verify_ecFixes verifies EC on the recorded
   # bundleShas snapshot); others ignore it.
-  local vdata
-  if vdata=$("$verifier" "$VERSION" "$TRACKER"); then
+  #
+  # Exit-code contract:
+  #   0  — step verified complete; caller should `continue` the walk
+  #   1  — step not yet complete; caller stops or handles terminals
+  #   2  — precondition failure (no oc, no network, missing repo); cannot tell
+  #          whether step is done — caller should surface a diagnostic and stop
+  local vdata="" verify_rc=0
+  vdata=$("$verifier" "$VERSION" "$TRACKER") || verify_rc=$?
+  if [ "$verify_rc" -eq 2 ]; then
+    # Precondition failure — cannot determine step status; propagate to caller.
+    return 2
+  fi
+  if [ "$verify_rc" -eq 0 ]; then
     echo "  ✓ ${STEP_TITLES[$step]:-$step}: verified externally" >&2
     [ -n "$vdata" ] || vdata="{}"
     update_step "$VERSION" "$step" "complete" "$vdata" "$TRACKER"
@@ -523,8 +576,12 @@ verify_createBranches() {
   local major_minor="${1%.*}"
   local operator_sha=""
   for repo in $SUBMARINER_UPSTREAM_REPOS; do
-    local ls_out ref
-    ls_out=$(git ls-remote --heads "https://github.com/submariner-io/$repo" "refs/heads/release-$major_minor" 2>/dev/null || true)
+    local ls_out ref ls_rc=0
+    ls_out=$(git ls-remote --heads "https://github.com/submariner-io/$repo" "refs/heads/release-$major_minor" 2>/dev/null) || ls_rc=$?
+    if [ "$ls_rc" -ne 0 ]; then
+      echo "  ls-remote failed (exit $ls_rc) — network or rate-limit issue for submariner-io/$repo" >&2
+      return 2
+    fi
     ref=$(echo "$ls_out" | grep -o "refs/heads/release-$major_minor" || true)
     if [ -z "$ref" ]; then
       echo "  could not confirm refs/heads/release-$major_minor on submariner-io/$repo — re-run to retry" >&2
@@ -539,8 +596,12 @@ verify_createBranches() {
 
 verify_upstreamRelease() {
   local version="$1"
-  local ls_out
-  ls_out=$(git ls-remote --tags "https://github.com/submariner-io/submariner-operator" "refs/tags/v$version" 2>/dev/null || true)
+  local ls_out ls_rc=0
+  ls_out=$(git ls-remote --tags "https://github.com/submariner-io/submariner-operator" "refs/tags/v$version" 2>/dev/null) || ls_rc=$?
+  if [ "$ls_rc" -ne 0 ]; then
+    echo "  ls-remote failed (exit $ls_rc) — network or rate-limit issue" >&2
+    return 2
+  fi
   if ! echo "$ls_out" | grep -q "refs/tags/v$version"; then
     echo "  v$version tag not found on submariner-io/submariner-operator" >&2
     return 1
@@ -550,14 +611,34 @@ verify_upstreamRelease() {
   jq -cn --arg tag "v$version" --arg sha "$sha" '{tag:$tag,operatorSha:$sha}'
 }
 
+# Extract EC test status from a single snapshot object (stdin).
+# Returns "TestPassed", "TestFailed", "no-ec-result", or "parse-error".
+_ec_status_from_snap() {
+  jq -r '.metadata.annotations["test.appstudio.openshift.io/status"] // "[]" | fromjson |
+    [.[] | select(.scenario | contains("enterprise-contract"))][0] | .status // "no-ec-result"' \
+    2>/dev/null || echo "parse-error"
+}
+
 verify_ecFixes() {
   local version="$1"
   local tracker="${2:-}"
   local dash_mm="${version%.*}"
   dash_mm="${dash_mm//./-}"
-  command -v oc &>/dev/null && oc whoami &>/dev/null 2>&1 || return 1
-  local snaps snap_name
-  snaps=$(oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp -o json 2>/dev/null) || return 1
+  if ! command -v oc &>/dev/null; then
+    echo "  oc not installed — install OpenShift CLI first" >&2
+    return 2
+  fi
+  if ! oc whoami &>/dev/null 2>&1; then
+    echo "  Not logged in — run: oc login --web https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443/" >&2
+    return 2
+  fi
+  local snaps snap_name oc_snaps_rc=0
+  snaps=$(oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp -o json 2>/dev/null) || oc_snaps_rc=$?
+  if [ "$oc_snaps_rc" -ne 0 ]; then
+    echo "  oc get snapshots failed (exit $oc_snaps_rc) — check context: $(oc config current-context 2>/dev/null || echo unknown)" >&2
+    echo "  Expected namespace: submariner-tenant on kflux-prd-rh02" >&2
+    return 2
+  fi
 
   # If bundleShas has already chosen the component build we're shipping, verify EC
   # on THAT exact snapshot and record its name. This keeps the ecFixes
@@ -594,10 +675,7 @@ verify_ecFixes() {
       echo "  Snapshot $target_snap (from bundleShas) not found on cluster" >&2
       return 1
     fi
-    ec_status_t=$(printf '%s' "$snap_json" | jq -r '
-      .metadata.annotations["test.appstudio.openshift.io/status"] // "[]" | fromjson |
-      [.[] | select(.scenario | contains("enterprise-contract"))][0] | .status // "no-ec-result"
-    ' 2>/dev/null || echo "parse-error")
+    ec_status_t=$(printf '%s' "$snap_json" | _ec_status_from_snap)
     if [ "$ec_status_t" != "TestPassed" ]; then
       echo "ecFixes: bundleShas snapshot: $target_snap (ec: $ec_status_t)" >&2
       return 1
@@ -619,11 +697,10 @@ verify_ecFixes() {
       echo "  No qualifying main-branch snapshot for prefix submariner-${dash_mm}-" >&2
       return 1
     fi
-    ec_status_f=$(echo "$snaps" | jq -r --arg n "$latest_candidate" '
-      [.items[] | select(.metadata.name == $n)] | last |
-      .metadata.annotations["test.appstudio.openshift.io/status"] // "[]" | fromjson |
-      [.[] | select(.scenario | contains("enterprise-contract"))][0] | .status // "no-ec-result"
-    ' 2>/dev/null || echo "parse-error")
+    local snap_obj_f
+    snap_obj_f=$(echo "$snaps" | jq --arg n "$latest_candidate" \
+      '[.items[] | select(.metadata.name == $n)] | last' 2>/dev/null) || snap_obj_f="null"
+    ec_status_f=$(printf '%s' "$snap_obj_f" | _ec_status_from_snap)
     if [ "$ec_status_f" != "TestPassed" ]; then
       echo "ecFixes: Latest snapshot: $latest_candidate (ec: $ec_status_f)" >&2
       return 1
@@ -636,29 +713,43 @@ verify_ecFixes() {
 
 verify_fbcProdUrls() {
   local version="$1"
-  local fbc_repo="$HOME/konflux/submariner-operator-fbc"
-  [ -d "$fbc_repo" ] || return 1
+  # Use FBC_REPO env-var override when set (e.g. set in the environment or
+  # injected by tests); otherwise fall back to FBC_REPO_DEFAULT which is
+  # the canonical path defined once in lib/jira-tracker.sh (sourced above).
+  local fbc_repo="${FBC_REPO:-$FBC_REPO_DEFAULT}"
+  if [ ! -d "$fbc_repo" ]; then
+    echo "  FBC repo not found at $fbc_repo — clone it first: git clone https://github.com/stolostron/submariner-operator-fbc $fbc_repo" >&2
+    return 2
+  fi
   local template="$fbc_repo/catalog-template.yaml"
   [ -f "$template" ] || return 1
 
-  # olm.bundle entries are three lines; the image is on the line directly
-  # after the bundle's name. Bundle names are indented 2 spaces ("  - name:"),
-  # while the same version's channel entry is indented 6 spaces, so the
-  # "^  - name:" anchor selects the bundle and the "$" anchor avoids matching
-  # a longer name (e.g. "0.17.2" must not match "0.17.2-0.<ts>.p").
+  # Find the olm.bundle image for this version using grep-based detection.
+  # Searches for "submariner.v<version>" as a name field (any indentation),
+  # then grabs the image: line that immediately follows it. The "$" anchor
+  # in the name pattern prevents "0.17.2" from matching "0.17.2-0.<ts>.p".
+  # This is intentionally indent-agnostic so format tweaks don't break the check.
   local image_line
-  image_line=$(awk -v n="submariner.v${version}" '
-    $0 ~ ("^  - name: " n "$") { found=1; next }
-    found { print; exit }
-  ' "$template")
+  image_line=$(grep -A1 "name: submariner\.v${version}$" "$template" \
+    | grep "image:" | head -1)
 
   # No bundle entry for this version yet → step not done.
-  [ -n "$image_line" ] || return 1
+  if [ -z "$image_line" ]; then
+    echo "  (verify_fbcProdUrls: no bundle entry found for submariner.v${version} in $template)" >&2
+    return 1
+  fi
 
   # Done once the temporary quay.io build URL has been replaced by the
   # permanent registry.redhat.io URL.
-  echo "$image_line" | grep -q "quay.io/redhat-user-workloads" && return 1
-  echo "$image_line" | grep -q "registry.redhat.io" || return 1
+  if echo "$image_line" | grep -q "quay.io/redhat-user-workloads"; then
+    echo "  (verify_fbcProdUrls: bundle image still has temp quay.io build URL — prod URL not yet applied)" >&2
+    return 1
+  fi
+  if ! echo "$image_line" | grep -q "registry.redhat.io"; then
+    echo "  (verify_fbcProdUrls: bundle image URL not from registry.redhat.io — unexpected registry)" >&2
+    return 1
+  fi
+
   # Record the resolved prod bundle image for tracker legibility.
   local bundle_image
   bundle_image=$(echo "$image_line" | awk '{print $NF}')
@@ -673,10 +764,8 @@ declare -A STEP_VERIFIER=(
   ["fbcProdUrls"]="verify_fbcProdUrls"
 )
 
-# Steps whose script writes a release CR YAML into this repo rather than opening
-# a PR. Their load-bearing next actions are `make apply`/`make watch` (the
-# scripts append those to AUTORELEASE_PUSH_LOG), so the pending-actions trailer
-# must say "After apply/watch succeeds" rather than "After PRs merge".
+# RELEASE_YAML_STEPS and DIRECT_PUSH_STEPS are defined in jira-tracker.sh
+# (sourced above) alongside the other step metadata.
 #
 # NOTE: a single conductor run can in principle produce BOTH kinds of pending
 # work (a PR-based git-push block AND a release-YAML apply/watch block), so the
@@ -686,20 +775,6 @@ declare -A STEP_VERIFIER=(
 # occurred. (The original concrete trigger was bundleShas auto-chaining straight
 # into componentStage; bundleShas is now `review` (AUTOMATION_LEVEL), so it stops
 # the chain — the two-flag design is kept as the correct defensive shape.)
-declare -A RELEASE_YAML_STEPS=(
-  ["componentStage"]=1
-  ["componentProd"]=1
-  ["fbcStageReleases"]=1
-  ["fbcProdReleases"]=1
-)
-
-# Steps that push directly to main/branch (no PR). Their trailer must say
-# "After push + rebuild" rather than "After PRs merge" to avoid misleading
-# the operator into waiting for a PR that will never exist.
-declare -A DIRECT_PUSH_STEPS=(
-  ["bundleShas"]=1
-  ["fbcCatalogUpdate"]=1
-)
 
 # Classify a step's push-log growth and echo the trailer flag it should set:
 # "ran_release_yaml_step" (apply/watch block), "ran_direct_push_step" (direct
@@ -843,6 +918,7 @@ run_dry_run() {
   # Seed call: genuine fetch (skipped when no tracker, NOFETCH=1 set above).
   # A bad read exits 1 here via find_next_step's own refusal — the dry run
   # declines too, exactly like a real run.
+  # find_next_step sets NEXT_STEP and NEXT_REASON as side effects.
   find_next_step "$VERSION" "$RELEASE_TYPE" "$TRACKER"
 
   # Freeze: every later walk runs against the in-memory step_statuses array, and
@@ -902,7 +978,7 @@ run_dry_run() {
             ecFixes)         _vdesc="EC passes on Konflux snapshot" ;;
             *)               _vdesc="${STEP_VERIFIER[$NEXT_STEP]}" ;;
           esac
-          echo "       ${gate_prefix}auto-verifies: ${_vdesc} (${STEP_VERIFIER[$NEXT_STEP]}; chains only if it passes)" >&2
+          echo "       ${gate_prefix}auto-verifies: ${_vdesc} (${STEP_VERIFIER[$NEXT_STEP]}; chains if passes, breaks if preconditions unmet)" >&2
           local _hint="${STEP_SKILL_HINT[$NEXT_STEP]:-}"
           [ -n "$_hint" ] && echo "       hint: $_hint" >&2
           if [ -z "$first_gate" ]; then
@@ -910,6 +986,7 @@ run_dry_run() {
             first_gate_title="${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}"
           fi
           step_statuses[$NEXT_STEP]=complete
+          # find_next_step sets NEXT_STEP and NEXT_REASON as side effects.
           find_next_step "$VERSION" "$RELEASE_TYPE" "$TRACKER"
           continue
         fi
@@ -959,6 +1036,7 @@ run_dry_run() {
           stop_reason="runs the script then pauses for review — re-run /autorelease $VERSION to execute"
           break
         fi
+        # find_next_step sets NEXT_STEP and NEXT_REASON as side effects.
         find_next_step "$VERSION" "$RELEASE_TYPE" "$TRACKER"
         continue
         ;;
@@ -1022,10 +1100,15 @@ run_preflight() {
     fi
   done
 
-  # acli — Jira reads drive step detection. Same probe as create-release-tracker.
+  # acli — Jira reads drive step detection.  Exit-code-only probe: run
+  # "acli jira auth status" and trust its exit code (0 = authenticated, non-zero
+  # = not authenticated).  All output is discarded so substring matches in negation
+  # messages (e.g., "Unauthenticated" contains "authenticated"; "You are not logged
+  # in" contains "logged in") cannot produce false positives.  This is also a simple
+  # command rather than a pipeline, so set -o pipefail does not interfere.
   if ! command -v acli >/dev/null 2>&1; then
     echo "  ⚠ acli not found — install it (Jira reads drive step detection)" >&2
-  elif acli jira auth status </dev/null 2>/dev/null | grep -qi "authenticated\|Logged in"; then
+  elif acli jira auth status </dev/null >/dev/null 2>&1; then
     echo "  ✓ acli — Jira authenticated" >&2
   else
     echo "  ⚠ acli — not authenticated to Jira; run: acli jira auth login --web" >&2
@@ -1052,160 +1135,74 @@ run_preflight() {
     echo "  ⚠ oc — not logged in; verifier gate steps can't self-confirm until you run: oc login --web <cluster>" >&2
   fi
 
+  # registry.redhat.io / ~/.docker/config.json — prod index probes (auto-close) use
+  # "oc image extract" (reads ~/.docker/config.json) and "skopeo inspect" (reads
+  # /run/containers/auth.json, then falls back to ~/.docker/config.json). Checking
+  # ~/.docker/config.json covers both tools; podman users who ran "podman login"
+  # without --authfile wrote to /run/containers/auth.json only, so the warning fires
+  # for them — the fix includes the podman-compatible alternative below.
+  # Warn-only: blocking on registry auth would prevent all pre-prod steps from running.
+  # _PREFLIGHT_DOCKER_CFG may be set by tests to override the default path.
+  local _docker_cfg="${_PREFLIGHT_DOCKER_CFG:-$HOME/.docker/config.json}"
+  if [ ! -f "$_docker_cfg" ]; then
+    echo "  ⚠ registry.redhat.io: $_docker_cfg not found — prod index probes will" >&2
+    echo "    return unreachable. To fix: docker login registry.redhat.io" >&2
+    echo "    (or podman: podman login --authfile ~/.docker/config.json registry.redhat.io)" >&2
+  elif ! command -v jq >/dev/null 2>&1; then
+    : # jq absent — jq-missing warning already emitted above; skip registry check
+  elif ! jq -e '.auths["registry.redhat.io"]' "$_docker_cfg" >/dev/null 2>&1; then
+    echo "  ⚠ registry.redhat.io: not in $_docker_cfg — prod index probes will" >&2
+    echo "    return unreachable. To fix: docker login registry.redhat.io" >&2
+    echo "    (or podman: podman login --authfile ~/.docker/config.json registry.redhat.io)" >&2
+  elif ! jq -e '.auths["registry.redhat.io"] | (.auth // .identitytoken // "") | length > 0' \
+         "$_docker_cfg" >/dev/null 2>&1; then
+    echo "  ⚠ registry.redhat.io: credentials empty in $_docker_cfg — prod index probes will" >&2
+    echo "    return unreachable. To fix: docker login registry.redhat.io" >&2
+    echo "    (or podman: podman login --authfile ~/.docker/config.json registry.redhat.io)" >&2
+  else
+    echo "  ✓ registry.redhat.io — credentials in $_docker_cfg" >&2
+  fi
+
   echo "" >&2
   return 0
 }
 
-# --- Main execution (guarded for testability) ---
-
-if [ "${_AUTORELEASE_TESTING:-}" != "true" ]; then
-
-  # Arg handling
-  COMPLETE_STEP=""
-  REFRESH_STEP=""
-  CLOSE=""
-  DRY_RUN=""
-  VERSION=""
-
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --help|-h) usage; exit 0 ;;
-      --complete)
-        [ $# -lt 2 ] && { echo "ERROR: --complete requires a STEP argument" >&2; exit 1; }
-        COMPLETE_STEP="$2"; shift 2 ;;
-      --refresh)
-        [ $# -lt 2 ] && { echo "ERROR: --refresh requires a STEP argument" >&2; exit 1; }
-        REFRESH_STEP="$2"; shift 2 ;;
-      --close)
-        CLOSE=true; shift ;;
-      --dry-run)
-        DRY_RUN=true; shift ;;
-      -*)
-        echo "ERROR: Unknown flag '$1'" >&2; usage >&2; exit 1 ;;
-      *)
-        [ -n "$VERSION" ] && { echo "ERROR: Too many arguments" >&2; usage >&2; exit 1; }
-        VERSION="$1"; shift ;;
-    esac
-  done
-
-  if [ -z "$VERSION" ]; then
-    usage >&2
-    exit 1
+# _print_step_hint: display a gate/hint stop line with its skill hint and
+# the appropriate re-run or --complete instruction.
+# Args: $1=step_key  $2=reason ("gate"|"hint")
+# Reads globals: STEP_TITLES, STEP_SKILL_HINT, STEP_VERIFIER, VERSION.
+# All output to stderr.
+_print_step_hint() {
+  local step="$1" reason="$2"
+  if [ "$reason" = "gate" ]; then
+    echo "⏸ ${STEP_TITLES[$step]:-$step}: GATE" >&2
+  else
+    echo "→ ${STEP_TITLES[$step]:-$step}" >&2
   fi
-
-  # --complete / --refresh / --close / --dry-run are all mutually
-  # exclusive one-shot actions.
-  _action_count=0
-  [ -n "$COMPLETE_STEP" ] && _action_count=$((_action_count + 1))
-  [ -n "$REFRESH_STEP" ] && _action_count=$((_action_count + 1))
-  [ -n "$CLOSE" ] && _action_count=$((_action_count + 1))
-  [ -n "$DRY_RUN" ] && _action_count=$((_action_count + 1))
-  if [ "$_action_count" -gt 1 ]; then
-    echo "ERROR: --complete, --refresh, --close, and --dry-run are mutually exclusive" >&2
-    exit 1
+  local _hint="${STEP_SKILL_HINT[$step]:-Complete this step manually}"
+  echo "  $_hint" >&2
+  # Verifier-backed steps can be re-detected on the next run; --complete is the
+  # manual escape. Steps without verifiers ONLY advance via --complete.
+  if [ -n "${STEP_VERIFIER[$step]:-}" ]; then
+    echo "  Re-run once done: /autorelease $VERSION" >&2
+    echo "  Or mark done manually: /autorelease $VERSION --complete $step" >&2
+  else
+    echo "  When done: /autorelease $VERSION --complete $step" >&2
   fi
+}
 
-  # If 2-segment version, resolve to specific patch
-  if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-    ORIGINAL="$VERSION"
-    RESOLVED=$(_resolve_version "$VERSION")
-    VERSION="${RESOLVED%%:*}"
-    RESOLVE_SOURCE="${RESOLVED#*:}"
-    case "$RESOLVE_SOURCE" in
-      tracker)     echo "Resolved $ORIGINAL → $VERSION (from Jira release tracker)" >&2 ;;
-      in-progress) echo "Resolved $ORIGINAL → $VERSION (in-progress release)" >&2 ;;
-      upstream)    echo "Resolved $ORIGINAL → $VERSION (released on GitHub, Konflux release pending)" >&2 ;;
-      released)    echo "Resolved $ORIGINAL → $VERSION (next after ${ORIGINAL}.$(( ${VERSION##*.} - 1 )))" >&2 ;;
-      default)     echo "Resolved $ORIGINAL → $VERSION (no prior releases, starting at .0)" >&2 ;;
-    esac
-  fi
-
-  VERSION=$(_normalize_version "$VERSION")
-  _validate_version "$VERSION" || exit 1
-
-  RELEASE_TYPE=$(_detect_release_type "$VERSION")
-
-  # Find tracker (required for completion detection). A Jira query failure
-  # (auth/network) returns 2 — report it distinctly so a transient outage never
-  # steers the user to create a tracker that may already exist. A genuinely
-  # absent tracker (return 0, empty) keeps the "create one first" path.
-  TRACKER=$(find_release_tracker "$VERSION") || {
-    echo "❌ Could not reach Jira (auth/network) — cannot resolve tracker for $VERSION" >&2
-    echo "   Check Jira auth/network, then re-run: /autorelease $VERSION" >&2
-    exit 1
-  }
-  # Dispatch --dry-run BEFORE the tracker guard: a preview must work even when
-  # no tracker exists yet (fresh release). run_dry_run handles the empty-TRACKER
-  # case itself by treating it as all-steps-pending. Must still be BEFORE the
-  # header echo and AUTORELEASE_PUSH_LOG mktemp/trap — a "nothing written"
-  # preview must not create a temp file or arm the EXIT trap.
-  if [ -n "$DRY_RUN" ]; then
-    run_dry_run
-    exit $?
-  fi
-
-  if [ -z "$TRACKER" ]; then
-    echo "❌ No release tracker found for $VERSION" >&2
-    echo "   Create one first: /create-release-tracker $VERSION" >&2
-    exit 1
-  fi
-
-  # Handle step overrides (--complete / --refresh) before entering the loop
-  if [ -n "$COMPLETE_STEP" ]; then
-    handle_step_override "$VERSION" "$COMPLETE_STEP" "complete" "$TRACKER"
-    exit 0
-  fi
-  if [ -n "$REFRESH_STEP" ]; then
-    handle_step_override "$VERSION" "$REFRESH_STEP" "in_progress" "$TRACKER"
-    exit 0
-  fi
-  if [ -n "$CLOSE" ]; then
-    handle_close "$VERSION"
-    exit $?
-  fi
-
-  echo "Submariner $VERSION ($RELEASE_TYPE)" >&2
-  echo "Tracker: $TRACKER" >&2
-  echo "" >&2
-
-  # Readiness report (never blocks) — surfaces gh/oc cred gaps up front instead
-  # of as a cryptic mid-run failure or a silently non-chaining verifier gate.
-  run_preflight
-
-  # --- Push summary: temp file for scripts to append push/PR commands ---
-  AUTORELEASE_PUSH_LOG=$(mktemp "${TMPDIR:-/tmp}/autorelease-pushes-XXXXXX")
-  export AUTORELEASE_PUSH_LOG
-
-  # Track which kinds of pending work grew the push log this run (both can occur
-  # in one run — see RELEASE_YAML_STEPS note). Drives the trailer line(s).
-  ran_pr_step=""
-  ran_release_yaml_step=""
-  ran_direct_push_step=""
-
-  _autorelease_cleanup() {
-    local _exit_code=$?
-    set +e
-    if [ -s "$AUTORELEASE_PUSH_LOG" ]; then
-      echo "" >&2
-      echo "━━━ Pending Actions ━━━" >&2
-      cat "$AUTORELEASE_PUSH_LOG" >&2
-      echo "" >&2
-      if [ "$_exit_code" -ne 0 ]; then
-        echo "Note: the step above also failed — fix that error before re-running." >&2
-      else
-        print_pending_trailer "$ran_pr_step" "$ran_release_yaml_step" "$VERSION" "$ran_direct_push_step" >&2
-      fi
-    fi
-    rm -f "$AUTORELEASE_PUSH_LOG"
-  }
-  trap _autorelease_cleanup EXIT
-
-  # --- Multi-step loop with same-step guard ---
-  declare -A step_statuses=()
-  declare -A verified_steps=()
-  prev_step=""
+# run_conductor: multi-step dispatch loop.
+# Callable from tests (outside the _AUTORELEASE_TESTING guard).
+# Caller must set globals: VERSION, RELEASE_TYPE, TRACKER, AUTORELEASE_PUSH_LOG,
+#   ran_pr_step, ran_release_yaml_step, ran_direct_push_step.
+# Caller must declare+initialize: step_statuses, verified_steps (assoc arrays).
+run_conductor() {
+  local prev_step="" _tav_rc=0
+  local local_script="" local_args="" local_title="" local_level="" local_exit=0
+  local _log_before=0 _log_after=0 _growth_flag="" _rstep_status=""
 
   while true; do
+    # find_next_step sets NEXT_STEP and NEXT_REASON as side effects.
     find_next_step "$VERSION" "$RELEASE_TYPE" "$TRACKER"
 
     case "$NEXT_REASON" in
@@ -1230,8 +1227,15 @@ if [ "${_AUTORELEASE_TESTING:-}" != "true" ]; then
 
       gate|hint)
         # Chain past the step if an external verifier confirms it already happened.
-        if try_auto_verify "$NEXT_STEP"; then
+        # Capture exit code to distinguish: 0=verified, 1=not done, 2=precondition failure.
+        _tav_rc=0; try_auto_verify "$NEXT_STEP" || _tav_rc=$?
+        if [ "$_tav_rc" -eq 0 ]; then
           continue
+        fi
+        if [ "$_tav_rc" -eq 2 ]; then
+          echo "  ⚠ Cannot verify ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP} — check preconditions above" >&2
+          echo "  Re-run once done: /autorelease $VERSION" >&2
+          break
         fi
         # Terminal-message special case: fbcProdUrls is last in STEP_ORDER and
         # its deps cover every other step, so reaching it here means every
@@ -1249,24 +1253,7 @@ if [ "${_AUTORELEASE_TESTING:-}" != "true" ]; then
 
         # Verifier failed or doesn't exist — stop with hint
         echo "" >&2
-        if [ "$NEXT_REASON" = "gate" ]; then
-          echo "⏸ ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}: GATE" >&2
-        else
-          echo "→ ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}" >&2
-        fi
-        local_hint="${STEP_SKILL_HINT[$NEXT_STEP]:-Complete this step manually}"
-        echo "  $local_hint" >&2
-        # How to advance depends on whether this step can self-verify. With a
-        # verifier, re-running lets the conductor detect completion and chain
-        # on, so that's the primary action; --complete is the manual fallback.
-        # Without one, re-running just stops here again — --complete is the only
-        # way forward, so present it as the action.
-        if [ -n "${STEP_VERIFIER[$NEXT_STEP]:-}" ]; then
-          echo "  Re-run once done: /autorelease $VERSION" >&2
-          echo "  Or mark done manually: /autorelease $VERSION --complete $NEXT_STEP" >&2
-        else
-          echo "  When done: /autorelease $VERSION --complete $NEXT_STEP" >&2
-        fi
+        _print_step_hint "$NEXT_STEP" "$NEXT_REASON"
         break
         ;;
 
@@ -1371,5 +1358,176 @@ if [ "${_AUTORELEASE_TESTING:-}" != "true" ]; then
         ;;
     esac
   done
+}
+
+# =================================================================
+# Main execution — functions above are the testable unit; this block
+# is the real entrypoint, skipped under _AUTORELEASE_TESTING=true.
+# =================================================================
+
+if [ "${_AUTORELEASE_TESTING:-}" != "true" ]; then
+
+  # Arg handling
+  COMPLETE_STEP=""
+  REFRESH_STEP=""
+  CLOSE=""
+  DRY_RUN=""
+  VERSION=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --help|-h) usage; exit 0 ;;
+      --complete)
+        [ $# -lt 2 ] && { echo "ERROR: --complete requires a STEP argument" >&2; exit 1; }
+        COMPLETE_STEP="$2"; shift 2 ;;
+      --refresh)
+        [ $# -lt 2 ] && { echo "ERROR: --refresh requires a STEP argument" >&2; exit 1; }
+        REFRESH_STEP="$2"; shift 2 ;;
+      --close)
+        CLOSE=true; shift ;;
+      --dry-run)
+        DRY_RUN=true; shift ;;
+      -*)
+        echo "ERROR: Unknown flag '$1'" >&2; usage >&2; exit 1 ;;
+      *)
+        [ -n "$VERSION" ] && { echo "ERROR: Too many arguments" >&2; usage >&2; exit 1; }
+        VERSION="$1"; shift ;;
+    esac
+  done
+
+  if [ -z "$VERSION" ]; then
+    usage >&2
+    exit 1
+  fi
+
+  # --complete / --refresh / --close / --dry-run are all mutually
+  # exclusive one-shot actions.
+  _action_count=0
+  [ -n "$COMPLETE_STEP" ] && _action_count=$((_action_count + 1))
+  [ -n "$REFRESH_STEP" ] && _action_count=$((_action_count + 1))
+  [ -n "$CLOSE" ] && _action_count=$((_action_count + 1))
+  [ -n "$DRY_RUN" ] && _action_count=$((_action_count + 1))
+  if [ "$_action_count" -gt 1 ]; then
+    echo "ERROR: --complete, --refresh, --close, and --dry-run are mutually exclusive" >&2
+    exit 1
+  fi
+
+  # If 2-segment version, resolve to specific patch
+  if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    ORIGINAL="$VERSION"
+    RESOLVED=$(_resolve_version "$VERSION")
+    VERSION="${RESOLVED%%:*}"
+    RESOLVE_SOURCE="${RESOLVED#*:}"
+    case "$RESOLVE_SOURCE" in
+      tracker)     echo "Resolved $ORIGINAL → $VERSION (from Jira release tracker)" >&2 ;;
+      in-progress) echo "Resolved $ORIGINAL → $VERSION (in-progress release)" >&2 ;;
+      upstream)    echo "Resolved $ORIGINAL → $VERSION (released on GitHub, Konflux release pending)" >&2 ;;
+      released)    echo "Resolved $ORIGINAL → $VERSION (next after ${ORIGINAL}.$(( ${VERSION##*.} - 1 )))" >&2 ;;
+      default)     echo "Resolved $ORIGINAL → $VERSION (no prior releases, starting at .0)" >&2 ;;
+    esac
+  fi
+
+  VERSION=$(_normalize_version "$VERSION")
+  _validate_version "$VERSION" || exit 1
+
+  RELEASE_TYPE=$(_detect_release_type "$VERSION")
+
+  # Find tracker (required for completion detection). A Jira query failure
+  # (auth/network) returns 2 — report it distinctly so a transient outage never
+  # steers the user to create a tracker that may already exist. A genuinely
+  # absent tracker (return 0, empty) keeps the "create one first" path.
+  TRACKER=$(find_release_tracker "$VERSION") || {
+    echo "❌ Could not reach Jira (auth/network) — cannot resolve tracker for $VERSION" >&2
+    echo "   Check Jira auth/network, then re-run: /autorelease $VERSION" >&2
+    exit 1
+  }
+  # Dispatch --dry-run BEFORE the tracker guard: a preview must work even when
+  # no tracker exists yet (fresh release). run_dry_run handles the empty-TRACKER
+  # case itself by treating it as all-steps-pending. Must still be BEFORE the
+  # header echo and AUTORELEASE_PUSH_LOG mktemp/trap — a "nothing written"
+  # preview must not create a temp file or arm the EXIT trap.
+  if [ -n "$DRY_RUN" ]; then
+    run_dry_run
+    exit $?
+  fi
+
+  if [ -z "$TRACKER" ]; then
+    echo "❌ No release tracker found for $VERSION" >&2
+    echo "   Create one first: /create-release-tracker $VERSION" >&2
+    exit 1
+  fi
+
+  # Validate --complete / --refresh step keys before use (fast-fail with helpful
+  # error; handle_step_override would also reject unknown keys, but its message
+  # comes after a Jira fetch — this surfaces the typo immediately).
+  if [ -n "$COMPLETE_STEP" ]; then
+    if ! printf '%s\n' "${STEP_ORDER[@]}" | grep -qxF "$COMPLETE_STEP"; then
+      echo "❌ Unknown step: $COMPLETE_STEP" >&2
+      echo "   Valid steps: ${STEP_ORDER[*]}" >&2
+      exit 1
+    fi
+  fi
+  if [ -n "$REFRESH_STEP" ]; then
+    if ! printf '%s\n' "${STEP_ORDER[@]}" | grep -qxF "$REFRESH_STEP"; then
+      echo "❌ Unknown step: $REFRESH_STEP" >&2
+      echo "   Valid steps: ${STEP_ORDER[*]}" >&2
+      exit 1
+    fi
+  fi
+
+  # Handle step overrides (--complete / --refresh) before entering the loop
+  if [ -n "$COMPLETE_STEP" ]; then
+    handle_step_override "$VERSION" "$COMPLETE_STEP" "complete" "$TRACKER"
+    exit 0
+  fi
+  if [ -n "$REFRESH_STEP" ]; then
+    handle_step_override "$VERSION" "$REFRESH_STEP" "in_progress" "$TRACKER"
+    exit 0
+  fi
+  if [ -n "$CLOSE" ]; then
+    handle_close "$VERSION"
+    exit $?
+  fi
+
+  echo "Submariner $VERSION ($RELEASE_TYPE)" >&2
+  echo "Tracker: $TRACKER" >&2
+  echo "" >&2
+
+  # Readiness report (never blocks) — surfaces gh/oc cred gaps up front instead
+  # of as a cryptic mid-run failure or a silently non-chaining verifier gate.
+  run_preflight
+
+  # --- Push summary: temp file for scripts to append push/PR commands ---
+  AUTORELEASE_PUSH_LOG=$(mktemp "${TMPDIR:-/tmp}/autorelease-pushes-XXXXXX")
+  export AUTORELEASE_PUSH_LOG
+
+  # Track which kinds of pending work grew the push log this run (both can occur
+  # in one run — see RELEASE_YAML_STEPS note). Drives the trailer line(s).
+  ran_pr_step=""
+  ran_release_yaml_step=""
+  ran_direct_push_step=""
+
+  _autorelease_cleanup() {
+    local _exit_code=$?
+    set +e
+    if [ -s "$AUTORELEASE_PUSH_LOG" ]; then
+      echo "" >&2
+      echo "━━━ Pending Actions ━━━" >&2
+      cat "$AUTORELEASE_PUSH_LOG" >&2
+      echo "" >&2
+      if [ "$_exit_code" -ne 0 ]; then
+        echo "Note: the step above also failed — fix that error before re-running." >&2
+      else
+        print_pending_trailer "$ran_pr_step" "$ran_release_yaml_step" "$VERSION" "$ran_direct_push_step" >&2
+      fi
+    fi
+    rm -f "$AUTORELEASE_PUSH_LOG"
+  }
+  trap _autorelease_cleanup EXIT
+
+  # --- Multi-step loop with same-step guard ---
+  declare -A step_statuses=()
+  declare -A verified_steps=()
+  run_conductor
 
 fi

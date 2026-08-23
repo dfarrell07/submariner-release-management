@@ -2,6 +2,9 @@
 
 **When:** After QE approval (following Step 14)
 
+> **Automated:** `/autorelease` handles this step automatically. Follow the manual
+> steps below only if debugging or running without the conductor.
+
 ## Process
 
 Create prod YAML with QE-verified release notes.

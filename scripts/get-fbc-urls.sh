@@ -7,7 +7,7 @@
 #   version:     Submariner version (e.g., 0.24.0 or 0.24)
 #
 # Options:
-#   --ocp 4.XX:    Single OCP version (default: all supported, see ALL_OCP_VERSIONS)
+#   --ocp 4.XX:    Single OCP version (default: all supported, see FBC_OCP_VERSIONS in lib/fbc-scope.sh)
 #   --raw-url:     Print only URLs (one per line, for automation)
 #   --prod-index:  Check prod operator index at registry.redhat.io (requires skopeo)
 #
@@ -28,7 +28,8 @@ set -euo pipefail
 
 readonly KONFLUX_UI="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com"
 readonly NAMESPACE="submariner-tenant"
-readonly ALL_OCP_VERSIONS=(16 17 18 19 20 21 22)
+# ALL_OCP_VERSIONS is populated from FBC_OCP_VERSIONS (lib/fbc-scope.sh) after
+# SCRIPT_DIR is set below — single source of truth for the supported OCP range.
 
 # ━━━ GLOBAL VARIABLES ━━━
 
@@ -145,6 +146,10 @@ parse_arguments() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/parallel-jobs.sh
 source "$SCRIPT_DIR/lib/parallel-jobs.sh"
+# shellcheck source=lib/fbc-scope.sh
+source "$SCRIPT_DIR/lib/fbc-scope.sh"
+# Convert space-separated FBC_OCP_VERSIONS string to array for indexed access.
+read -ra ALL_OCP_VERSIONS <<< "$FBC_OCP_VERSIONS"
 
 setup_tmpdir() {
   if [ -z "$TMPDIR" ]; then

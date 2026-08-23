@@ -12,6 +12,8 @@
 # non-zero on a failed/unreliable read so evidence recorders can tell a Jira
 # blip apart from a genuinely absent step (empty output, exit 0).
 
+# shellcheck disable=SC2034  # All STEP_* arrays are read by callers (autorelease.sh, release-status.sh, etc.)
+
 # Include guard — prevent crash from re-sourcing readonly variables
 if [ "${_JIRA_TRACKER_SOURCED:-}" = "true" ]; then
   return 0 2>/dev/null || true
@@ -22,33 +24,214 @@ _JIRA_TRACKER_SOURCED=true
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=release-notes-common.sh
 source "$SCRIPT_DIR/release-notes-common.sh" 2>/dev/null || true
+# shellcheck source=fbc-scope.sh
+source "$SCRIPT_DIR/fbc-scope.sh"
 
 # ============================================================================
 # Constants
 # ============================================================================
 
-# Step keys to subtask summary titles
-declare -A STEP_TITLES=(
-  ["createBranches"]="Create upstream release branches"
-  ["configureDownstream"]="Configure Konflux downstream"
-  ["tektonComponents"]="Tekton component setup"
-  ["tektonBundle"]="Tekton bundle setup"
-  ["cveFixes"]="CVE fixes"
-  ["ecFixes"]="EC compliance fixes"
-  ["rpmLockfiles"]="RPM lockfile updates"
-  ["tektonTasks"]="Tekton task updates"
-  ["versionLabels"]="Version label updates"
-  ["upstreamRelease"]="Cut upstream release"
-  ["bundleShas"]="Update bundle SHAs"
-  ["componentStage"]="Component stage release"
-  ["releaseNotes"]="Release notes"
-  ["fbcCatalogUpdate"]="FBC catalog update"
-  ["fbcStageReleases"]="FBC stage releases"
-  ["qeValidation"]="QE testing"
-  ["componentProd"]="Component prod release"
-  ["fbcProdReleases"]="FBC prod releases"
-  ["fbcProdUrls"]="FBC prod URL conversion"
-)
+# Canonical FBC repo path — shared by autorelease.sh, fbc-catalog-update.sh,
+# and tekton-task-refs-update.sh so the path is defined once. Override via the
+# FBC_REPO_DEFAULT env var (e.g. in tests or when the repo lives elsewhere).
+readonly FBC_REPO_DEFAULT="${FBC_REPO_DEFAULT:-$HOME/konflux/submariner-operator-fbc}"
+
+# ============================================================================
+# Step Metadata (per-step co-located layout)
+# ============================================================================
+# Arrays declared here; entries grouped by step below for readability — a reader
+# can find all metadata for any step in one block.
+#
+# Arrays read by callers (autorelease, release-ls, etc.) — SC2034 suppressed file-wide above.
+# Note: STEP_VERIFIER is NOT here — it is defined in autorelease.sh alongside each function body.
+declare -A STEP_TITLES
+declare -A STEP_PHASE
+declare -A STALENESS_RULES
+declare -A STEP_DEPENDENCIES
+declare -A AUTOMATION_LEVEL
+declare -A STEP_SCRIPT
+declare -A STEP_SKILL_HINT
+declare -A STEP_EXTRA_ARGS
+# Git-output classifiers: steps that create release CRs (apply/watch) or push
+# directly to main (no PR). Used by autorelease.sh classify_log_growth and run_dry_run.
+declare -A RELEASE_YAML_STEPS
+declare -A DIRECT_PUSH_STEPS
+
+# === Branch Setup steps ===
+
+# ── createBranches ──────────────────────────────────────────────────────────
+STEP_TITLES["createBranches"]="Create upstream release branches"
+STEP_PHASE["createBranches"]="Branch Setup"
+STEP_DEPENDENCIES["createBranches"]=""
+AUTOMATION_LEVEL["createBranches"]="review"
+STEP_SKILL_HINT["createBranches"]="See .agents/workflows/create-release-branch.md"
+
+# ── configureDownstream ─────────────────────────────────────────────────────
+STEP_TITLES["configureDownstream"]="Configure Konflux downstream"
+STEP_PHASE["configureDownstream"]="Branch Setup"
+STEP_DEPENDENCIES["configureDownstream"]="createBranches"
+AUTOMATION_LEVEL["configureDownstream"]="auto"
+STEP_SCRIPT["configureDownstream"]="scripts/configure-downstream.sh"
+
+# ── tektonComponents ────────────────────────────────────────────────────────
+STEP_TITLES["tektonComponents"]="Tekton component setup"
+STEP_PHASE["tektonComponents"]="Branch Setup"
+STEP_DEPENDENCIES["tektonComponents"]="configureDownstream"
+AUTOMATION_LEVEL["tektonComponents"]="auto"
+STEP_SCRIPT["tektonComponents"]="scripts/tekton-component-setup.sh"
+
+# ── tektonBundle ────────────────────────────────────────────────────────────
+STEP_TITLES["tektonBundle"]="Tekton bundle setup"
+STEP_PHASE["tektonBundle"]="Branch Setup"
+STEP_DEPENDENCIES["tektonBundle"]="configureDownstream"
+AUTOMATION_LEVEL["tektonBundle"]="auto"
+STEP_SCRIPT["tektonBundle"]="scripts/konflux-bundle-setup.sh"
+
+# === Build Readiness steps ===
+
+# ── cveFixes ────────────────────────────────────────────────────────────────
+STEP_TITLES["cveFixes"]="CVE fixes"
+STEP_PHASE["cveFixes"]="Build Readiness"
+STEP_DEPENDENCIES["cveFixes"]=""
+STALENESS_RULES["cveFixes"]="3d"
+AUTOMATION_LEVEL["cveFixes"]="review"
+STEP_SCRIPT["cveFixes"]="scripts/cve-fixes-update.sh"
+
+# ── ecFixes ─────────────────────────────────────────────────────────────────
+STEP_TITLES["ecFixes"]="EC compliance fixes"
+STEP_PHASE["ecFixes"]="Build Readiness"
+STEP_DEPENDENCIES["ecFixes"]=""
+STALENESS_RULES["ecFixes"]="snapshot"
+AUTOMATION_LEVEL["ecFixes"]="auto"
+STEP_SKILL_HINT["ecFixes"]="/konflux-ci-fix (EC passes only after Build Readiness PRs merge and Konflux rebuilds — snapshots from in-flight builds will not pass)"
+
+# ── rpmLockfiles ────────────────────────────────────────────────────────────
+STEP_TITLES["rpmLockfiles"]="RPM lockfile updates"
+STEP_PHASE["rpmLockfiles"]="Build Readiness"
+STEP_DEPENDENCIES["rpmLockfiles"]=""
+STALENESS_RULES["rpmLockfiles"]="3d"
+AUTOMATION_LEVEL["rpmLockfiles"]="auto"
+STEP_SCRIPT["rpmLockfiles"]="scripts/rpm-lockfile-update.sh"
+
+# ── tektonTasks ─────────────────────────────────────────────────────────────
+STEP_TITLES["tektonTasks"]="Tekton task updates"
+STEP_PHASE["tektonTasks"]="Build Readiness"
+STEP_DEPENDENCIES["tektonTasks"]=""
+AUTOMATION_LEVEL["tektonTasks"]="auto"
+STEP_SCRIPT["tektonTasks"]="scripts/tekton-task-refs-update.sh"
+
+# ── versionLabels ───────────────────────────────────────────────────────────
+STEP_TITLES["versionLabels"]="Version label updates"
+STEP_PHASE["versionLabels"]="Build Readiness"
+STEP_DEPENDENCIES["versionLabels"]=""
+AUTOMATION_LEVEL["versionLabels"]="auto"
+STEP_SCRIPT["versionLabels"]="scripts/update-version-labels.sh"
+
+# ── upstreamRelease ─────────────────────────────────────────────────────────
+STEP_TITLES["upstreamRelease"]="Cut upstream release"
+STEP_PHASE["upstreamRelease"]="Build Readiness"
+STEP_DEPENDENCIES["upstreamRelease"]="cveFixes,ecFixes,rpmLockfiles,tektonTasks,versionLabels,tektonComponents,tektonBundle"
+AUTOMATION_LEVEL["upstreamRelease"]="gate"
+STEP_SKILL_HINT["upstreamRelease"]="See .agents/workflows/cut-upstream-release.md"
+
+# ── bundleShas ──────────────────────────────────────────────────────────────
+STEP_TITLES["bundleShas"]="Update bundle SHAs"
+STEP_PHASE["bundleShas"]="Build Readiness"
+STEP_DEPENDENCIES["bundleShas"]="upstreamRelease"
+STALENESS_RULES["bundleShas"]="snapshot"
+# review (not auto): breaks the bundleShas → componentStage auto-chain so the
+# human pushes/merges the SHA-bump PR and waits for the Konflux bundle rebuild
+# before componentStage runs. Complementary to create-component-release.sh's
+# in-script bundle-freshness gate (see "Chain hazards" in the plan).
+AUTOMATION_LEVEL["bundleShas"]="review"
+STEP_SCRIPT["bundleShas"]="scripts/bundle-image-update.sh"
+DIRECT_PUSH_STEPS["bundleShas"]=1
+
+# === Stage Release steps ===
+
+# ── componentStage ──────────────────────────────────────────────────────────
+STEP_TITLES["componentStage"]="Component stage release"
+STEP_PHASE["componentStage"]="Stage Release"
+STEP_DEPENDENCIES["componentStage"]="bundleShas"
+# componentStage records the snapshot it released; if bundleShas later records
+# a newer snapshot, componentStage is stale — the stage YAML references the old
+# snapshot. release-ls surfaces this; operator runs --refresh componentStage.
+STALENESS_RULES["componentStage"]="snapshot"
+# review (not auto): stops the conductor after create-component-release.sh runs
+# so the operator applies/watches the stage release pipeline before advancing to
+# releaseNotes and fbcCatalogUpdate. Without this stop, a silent apply failure
+# leaves those downstream steps completed against an unapplied stage release.
+AUTOMATION_LEVEL["componentStage"]="review"
+STEP_SCRIPT["componentStage"]="scripts/create-component-release.sh"
+STEP_EXTRA_ARGS["componentStage"]="stage"
+RELEASE_YAML_STEPS["componentStage"]=1
+
+# ── releaseNotes ────────────────────────────────────────────────────────────
+STEP_TITLES["releaseNotes"]="Release notes"
+STEP_PHASE["releaseNotes"]="Stage Release"
+STEP_DEPENDENCIES["releaseNotes"]="componentStage"
+AUTOMATION_LEVEL["releaseNotes"]="review"
+STEP_SCRIPT["releaseNotes"]="scripts/add-release-notes.sh"
+
+# ── fbcCatalogUpdate ────────────────────────────────────────────────────────
+STEP_TITLES["fbcCatalogUpdate"]="FBC catalog update"
+STEP_PHASE["fbcCatalogUpdate"]="Stage Release"
+STEP_DEPENDENCIES["fbcCatalogUpdate"]="componentStage"
+STALENESS_RULES["fbcCatalogUpdate"]="snapshot"
+AUTOMATION_LEVEL["fbcCatalogUpdate"]="review"
+STEP_SCRIPT["fbcCatalogUpdate"]="scripts/fbc-catalog-update.sh"
+DIRECT_PUSH_STEPS["fbcCatalogUpdate"]=1
+
+# ── fbcStageReleases ────────────────────────────────────────────────────────
+STEP_TITLES["fbcStageReleases"]="FBC stage releases"
+STEP_PHASE["fbcStageReleases"]="Stage Release"
+STEP_DEPENDENCIES["fbcStageReleases"]="fbcCatalogUpdate"
+AUTOMATION_LEVEL["fbcStageReleases"]="review"
+STEP_SCRIPT["fbcStageReleases"]="scripts/create-fbc-releases.sh"
+STEP_EXTRA_ARGS["fbcStageReleases"]="stage"
+RELEASE_YAML_STEPS["fbcStageReleases"]=1
+
+# === QE Validation ===
+
+# ── qeValidation ────────────────────────────────────────────────────────────
+STEP_TITLES["qeValidation"]="QE testing"
+STEP_PHASE["qeValidation"]="QE Validation"
+STEP_DEPENDENCIES["qeValidation"]="fbcStageReleases"
+STALENESS_RULES["qeValidation"]="snapshot"
+AUTOMATION_LEVEL["qeValidation"]="gate"
+STEP_SKILL_HINT["qeValidation"]="Share URLs with /get-fbc-urls, then await QE approval"
+
+# === Production Release steps ===
+
+# ── componentProd ───────────────────────────────────────────────────────────
+STEP_TITLES["componentProd"]="Component prod release"
+STEP_PHASE["componentProd"]="Production Release"
+STEP_DEPENDENCIES["componentProd"]="qeValidation,componentStage,releaseNotes"
+AUTOMATION_LEVEL["componentProd"]="review"
+STEP_SCRIPT["componentProd"]="scripts/create-component-release.sh"
+STEP_EXTRA_ARGS["componentProd"]="prod"
+RELEASE_YAML_STEPS["componentProd"]=1
+
+# ── fbcProdReleases ─────────────────────────────────────────────────────────
+STEP_TITLES["fbcProdReleases"]="FBC prod releases"
+STEP_PHASE["fbcProdReleases"]="Production Release"
+STEP_DEPENDENCIES["fbcProdReleases"]="componentProd"
+AUTOMATION_LEVEL["fbcProdReleases"]="review"
+STEP_SCRIPT["fbcProdReleases"]="scripts/create-fbc-releases.sh"
+STEP_EXTRA_ARGS["fbcProdReleases"]="prod"
+RELEASE_YAML_STEPS["fbcProdReleases"]=1
+
+# ── fbcProdUrls ─────────────────────────────────────────────────────────────
+STEP_TITLES["fbcProdUrls"]="FBC prod URL conversion"
+STEP_PHASE["fbcProdUrls"]="Production Release"
+STEP_DEPENDENCIES["fbcProdUrls"]="fbcProdReleases"
+# No staleness rule for fbcProdUrls: the quay.io→registry.redhat.io conversion
+# is a one-time permanent action. Once it marks the step complete, a time-based
+# rule would spuriously re-flag it as stale forever.
+AUTOMATION_LEVEL["fbcProdUrls"]="auto"
+STEP_SKILL_HINT["fbcProdUrls"]="See .agents/workflows/update-fbc-templates-prod.md"
+
+# === Ordering and stream membership ===
 
 # Step display order (workflow sequence)
 readonly STEP_ORDER=(
@@ -65,142 +248,6 @@ readonly YSTREAM_STEPS=("createBranches" "configureDownstream" "tektonComponents
 
 # Z-stream only steps (omitted for Y-stream)
 readonly ZSTREAM_STEPS=("versionLabels")
-
-# Phase groupings for display
-declare -A STEP_PHASE=(
-  ["createBranches"]="Branch Setup"
-  ["configureDownstream"]="Branch Setup"
-  ["tektonComponents"]="Branch Setup"
-  ["tektonBundle"]="Branch Setup"
-  ["cveFixes"]="Build Readiness"
-  ["ecFixes"]="Build Readiness"
-  ["rpmLockfiles"]="Build Readiness"
-  ["tektonTasks"]="Build Readiness"
-  ["versionLabels"]="Build Readiness"
-  ["upstreamRelease"]="Build Readiness"
-  ["bundleShas"]="Build Readiness"
-  ["componentStage"]="Stage Release"
-  ["releaseNotes"]="Stage Release"
-  ["fbcCatalogUpdate"]="Stage Release"
-  ["fbcStageReleases"]="Stage Release"
-  ["qeValidation"]="QE Validation"
-  ["componentProd"]="Production Release"
-  ["fbcProdReleases"]="Production Release"
-  ["fbcProdUrls"]="Production Release"
-)
-
-# Staleness rules: time-based (Nd) or snapshot-triggered
-declare -A STALENESS_RULES=(
-  ["cveFixes"]="3d"
-  ["rpmLockfiles"]="3d"
-  ["ecFixes"]="snapshot"
-  ["bundleShas"]="snapshot"
-  # componentStage records the snapshot it released; if bundleShas later records
-  # a newer snapshot, componentStage is stale — the stage YAML references the old
-  # snapshot. release-ls surfaces this; operator runs --refresh componentStage.
-  ["componentStage"]="snapshot"
-  ["fbcCatalogUpdate"]="snapshot"
-  ["qeValidation"]="snapshot"
-  # No rule for fbcProdUrls: the quay.io→registry.redhat.io conversion is a
-  # one-time permanent action. Once it marks the step complete, a time-based rule
-  # would spuriously re-flag it as stale forever.
-)
-
-# Step dependencies (comma-separated prerequisite step keys)
-# shellcheck disable=SC2034  # Exported for use by callers (agentic automation, release-ls)
-declare -A STEP_DEPENDENCIES=(
-  ["createBranches"]=""
-  ["configureDownstream"]="createBranches"
-  ["tektonComponents"]="configureDownstream"
-  ["tektonBundle"]="configureDownstream"
-  ["cveFixes"]=""
-  ["ecFixes"]=""
-  ["rpmLockfiles"]=""
-  ["tektonTasks"]=""
-  ["versionLabels"]=""
-  ["upstreamRelease"]="cveFixes,ecFixes,rpmLockfiles,tektonTasks,versionLabels,tektonComponents,tektonBundle"
-  ["bundleShas"]="upstreamRelease"
-  ["componentStage"]="bundleShas"
-  ["releaseNotes"]="componentStage"
-  ["fbcCatalogUpdate"]="componentStage"
-  ["fbcStageReleases"]="fbcCatalogUpdate"
-  ["qeValidation"]="fbcStageReleases"
-  ["componentProd"]="qeValidation,componentStage,releaseNotes"
-  ["fbcProdReleases"]="componentProd"
-  ["fbcProdUrls"]="fbcProdReleases"
-)
-
-# Automation levels: auto, review, gate
-# shellcheck disable=SC2034  # Exported for use by callers (agentic automation, release-ls)
-declare -A AUTOMATION_LEVEL=(
-  ["createBranches"]="review"
-  ["configureDownstream"]="auto"
-  ["tektonComponents"]="auto"
-  ["tektonBundle"]="auto"
-  ["cveFixes"]="review"
-  ["ecFixes"]="auto"
-  ["rpmLockfiles"]="auto"
-  ["tektonTasks"]="auto"
-  ["versionLabels"]="auto"
-  ["upstreamRelease"]="gate"
-  # review (not auto): breaks the bundleShas → componentStage auto-chain so the
-  # human pushes/merges the SHA-bump PR and waits for the Konflux bundle rebuild
-  # before componentStage runs. Complementary to create-component-release.sh's
-  # in-script bundle-freshness gate (see "Chain hazards" in the plan).
-  ["bundleShas"]="review"
-  # review (not auto): stops the conductor after create-component-release.sh runs
-  # so the operator applies/watches the stage release pipeline before advancing to
-  # releaseNotes and fbcCatalogUpdate. Without this stop, a silent apply failure
-  # leaves those downstream steps completed against an unapplied stage release.
-  ["componentStage"]="review"
-  ["releaseNotes"]="review"
-  ["fbcCatalogUpdate"]="review"
-  ["fbcStageReleases"]="review"
-  ["qeValidation"]="gate"
-  ["componentProd"]="review"
-  ["fbcProdReleases"]="review"
-  ["fbcProdUrls"]="auto"
-)
-
-# Scripts the conductor can execute directly (step key → script path)
-# shellcheck disable=SC2034  # Exported for use by autorelease conductor
-declare -A STEP_SCRIPT=(
-  ["configureDownstream"]="scripts/configure-downstream.sh"
-  ["tektonComponents"]="scripts/tekton-component-setup.sh"
-  ["tektonBundle"]="scripts/konflux-bundle-setup.sh"
-  ["rpmLockfiles"]="scripts/rpm-lockfile-update.sh"
-  ["versionLabels"]="scripts/update-version-labels.sh"
-  ["tektonTasks"]="scripts/tekton-task-refs-update.sh"
-  ["cveFixes"]="scripts/cve-fixes-update.sh"
-  ["bundleShas"]="scripts/bundle-image-update.sh"
-  ["componentStage"]="scripts/create-component-release.sh"
-  ["releaseNotes"]="scripts/add-release-notes.sh"
-  ["fbcStageReleases"]="scripts/create-fbc-releases.sh"
-  ["fbcCatalogUpdate"]="scripts/fbc-catalog-update.sh"
-  ["componentProd"]="scripts/create-component-release.sh"
-  ["fbcProdReleases"]="scripts/create-fbc-releases.sh"
-)
-
-# Guidance for steps without backing scripts (step key → hint text)
-# shellcheck disable=SC2034  # Exported for use by autorelease conductor
-declare -A STEP_SKILL_HINT=(
-  ["createBranches"]="See .agents/workflows/create-release-branch.md"
-  ["tektonComponents"]="/konflux-component-setup — run once per component (8 total): submariner-operator, submariner-{gateway,globalnet,route-agent}, lighthouse-{agent,coredns}, nettest, subctl. Or: --complete tektonComponents once all bot PRs are enhanced and pushed."
-  ["cveFixes"]="See .agents/workflows/scan-cves.md"
-  ["ecFixes"]="/konflux-ci-fix (EC passes only after Build Readiness PRs merge and Konflux rebuilds — snapshots from in-flight builds will not pass)"
-  ["upstreamRelease"]="See .agents/workflows/cut-upstream-release.md"
-  ["qeValidation"]="Share URLs with /get-fbc-urls, then await QE approval"
-  ["fbcProdUrls"]="See .agents/workflows/update-fbc-templates-prod.md"
-)
-
-# Extra arguments for step scripts (appended after VERSION)
-# shellcheck disable=SC2034  # Exported for use by autorelease conductor
-declare -A STEP_EXTRA_ARGS=(
-  ["componentStage"]="stage"
-  ["componentProd"]="prod"
-  ["fbcStageReleases"]="stage"
-  ["fbcProdReleases"]="prod"
-)
 
 # Jira status names (overridable via env for project-specific names)
 readonly JIRA_STATUS_IN_PROGRESS="${JIRA_STATUS_IN_PROGRESS:-In Progress}"
@@ -363,7 +410,8 @@ _generate_subtask_description() {
   local step_key="$1"
   local version="$2"
   local major_minor="${version%.*}"
-  local _ocp="${FBC_OCP_VERSIONS:-16 17 18 19 20 21 22}"
+  # FBC_OCP_VERSIONS is set by fbc-scope.sh, sourced at the top of this file.
+  local _ocp="${FBC_OCP_VERSIONS:?FBC_OCP_VERSIONS must be set (source fbc-scope.sh first)}"
   local _first _last
   read -r _first _ <<< "$_ocp"
   _last=$(echo "$_ocp" | awk '{print $NF}')

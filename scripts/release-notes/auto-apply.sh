@@ -1,6 +1,6 @@
 #!/bin/bash
 # Phase 3: Auto-apply ALL filtered issues to stage YAML
-# Input: /tmp/release-notes-topics.json, /tmp/release-notes-data.json
+# Input: ${RELEASE_NOTES_TOPICS:-/tmp/release-notes-topics.json}, ${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}
 # Output: Updated stage YAML + git commit
 set -euo pipefail
 
@@ -14,8 +14,8 @@ LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
 # shellcheck source=../lib/release-notes-common.sh
 source "$LIB_DIR/release-notes-common.sh"
 
-TOPICS_JSON="/tmp/release-notes-topics.json"
-DATA_JSON="/tmp/release-notes-data.json"
+TOPICS_JSON="${RELEASE_NOTES_TOPICS:-/tmp/release-notes-topics.json}"
+DATA_JSON="${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}"
 
 if [[ ! -f "$TOPICS_JSON" ]]; then
   echo "❌ ERROR: Topics file not found: '$TOPICS_JSON'" >&2

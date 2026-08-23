@@ -2,6 +2,9 @@
 
 **When:** After QE approval (Step 14 complete)
 
+> **Automated:** `/autorelease` handles this step automatically. Follow the manual
+> steps below only if debugging or running without the conductor.
+
 ## Process
 
 Create production Release CRs by copying stage YAMLs and changing 2 fields.

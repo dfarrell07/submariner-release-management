@@ -10,10 +10,8 @@
 #
 # Pure filesystem reads, no network — unit-testable against a fixture tree.
 #
-# Sourced by autorelease.sh (auto-close scope) and test-fbc-scope.sh.
-# release-status.sh carries an equivalent inline get_release_ocp_scope; pointing
-# it at this lib is a safe, behavior-preserving follow-up (kept separate to avoid
-# touching that cluster-coupled script here).
+# Sourced by autorelease.sh (auto-close scope), release-status.sh
+# (get_release_ocp_scope wrapper), and test-fbc-scope.sh.
 
 # Guard against double-sourcing.
 [ -n "${_FBC_SCOPE_SOURCED:-}" ] && return 0
@@ -25,7 +23,10 @@ _FBC_SCOPE_SOURCED=1
 
 # Supported OCP minors, newest last. The candidate set callers pass to
 # get_fbc_ocp_scope; kept here so the FBC OCP range lives in one place.
+# Tests may override by exporting FBC_OCP_VERSIONS *before* sourcing this file.
+# Once set (from env or the default), pinned readonly to catch mid-session mutations.
 : "${FBC_OCP_VERSIONS:=16 17 18 19 20 21 22}"
+readonly FBC_OCP_VERSIONS
 
 # get_fbc_ocp_scope <root> <major_minor> <full_version_dash> <env> <ocp_list>
 #   root              repo root (the directory that contains releases/)

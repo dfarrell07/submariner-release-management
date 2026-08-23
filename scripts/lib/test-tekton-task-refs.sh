@@ -31,6 +31,28 @@ assert_eq "fbc path (elsewhere)" "$(repo_path fbc)"                "$HOME/konflu
 assert_eq "component base = release-MM" "$(repo_base_branch submariner)" "release-0.23"
 assert_eq "fbc base = main"             "$(repo_base_branch fbc)"        "main"
 
+# FBC_REPO_DEFAULT propagation: jira-tracker.sh defines FBC_REPO_DEFAULT once;
+# tekton-task-refs-update.sh sources it before the readonly FBC_REPO_PATH
+# assignment so that a pre-set env var is respected. Test via subshell because
+# FBC_REPO_PATH is readonly in the current shell and cannot be re-assigned.
+_fbc_default_result=$(
+  env FBC_REPO_DEFAULT=/tmp/alt-fbc-$$ bash -c "
+    unset _JIRA_TRACKER_SOURCED
+    source '$SCRIPT_DIR/../tekton-task-refs-update.sh' 2>/dev/null || true
+    repo_path fbc
+  " 2>/dev/null
+)
+assert_eq "fbc path from FBC_REPO_DEFAULT env" "$_fbc_default_result" "/tmp/alt-fbc-$$"
+
+_fbc_override_result=$(
+  env FBC_REPO=/tmp/custom-fbc-$$ bash -c "
+    source '$SCRIPT_DIR/../tekton-task-refs-update.sh' 2>/dev/null || true
+    repo_path fbc
+  " 2>/dev/null
+)
+assert_eq "fbc path from FBC_REPO env override (beats FBC_REPO_DEFAULT)" \
+  "$_fbc_override_result" "/tmp/custom-fbc-$$"
+
 echo ""
 echo "=== parse_arguments Tests ==="
 

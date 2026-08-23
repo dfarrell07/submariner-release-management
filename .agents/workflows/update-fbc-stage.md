@@ -2,6 +2,9 @@
 
 **When:** After stage release completes (Step 10)
 
+> **Automated:** `/autorelease` handles this step automatically. Follow the manual
+> steps below only if debugging or running without the conductor.
+
 ## Process
 
 Update catalog in FBC repo with bundle from completed stage release.

@@ -2,6 +2,9 @@
 
 **When:** Y-stream only (0.20 → 0.21)
 
+> **Automated:** `/autorelease` handles this step automatically. Follow the manual
+> steps below only if debugging or running without the conductor.
+
 **Prerequisites:** Step 1 (Create Upstream Release Branch) must complete first. This step triggers the Konflux bot to
 detect new branches and generate Tekton config PRs for Step 3. If branches don't exist, manual bot re-triggering via UI
 would be required.

@@ -44,6 +44,15 @@ Release scripts automatically update tracker subtasks as they complete.
 
 **Alternative:** @.agents/workflows/fix-ec-violations.md (manual workflow)
 
+## 4b. Update RPM Lockfiles
+
+@/rpm-lockfile-update
+
+**Alternative:** `make rpm-lockfile-update VERSION=<version>`
+
+Automated step: updates RPM lockfiles across Submariner component repos. Runs after
+Tekton task updates, before CVE scanning.
+
 ## 5. Scan for CVEs
 
 @.agents/workflows/scan-cves.md

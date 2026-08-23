@@ -5,6 +5,9 @@
 - **Step 3b (Y-stream only):** Initial SHA update before bundle Konflux setup
 - **Step 7 (Y and Z stream):** Pre-release SHA update to get latest component builds
 
+> **Automated:** `/autorelease` handles this step automatically (Step 7 path). Follow
+> the manual steps below only if debugging or running without the conductor.
+
 ## Process
 
 Update bundle CSV with component image SHAs from Konflux snapshot builds.

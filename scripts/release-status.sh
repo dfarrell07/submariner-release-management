@@ -45,20 +45,21 @@ if echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[1-9][0-9]*$'; then
 fi
 
 # Constants
-readonly SECONDS_PER_DAY=86400
-readonly FBC_DATE_MATCH_WINDOW_DAYS=3
-readonly FBC_DATE_MATCH_WINDOW_SECS=$((FBC_DATE_MATCH_WINDOW_DAYS * SECONDS_PER_DAY))
 readonly BUNDLE_CLOCK_SKEW_SECS=300  # 5 minutes tolerance for clock skew
-readonly OCP_VERSIONS="16 17 18 19 20 21 22"
-# Count and "4.<first>-4.<last>" display range are both derived from OCP_VERSIONS
-# so status output can't drift behind the list (token count / first+last token).
-read -ra _OCP_VERSION_ARR <<< "$OCP_VERSIONS"
-readonly CURRENT_OCP_VERSION_COUNT=${#_OCP_VERSION_ARR[@]}
-readonly OCP_VERSION_RANGE="4.${OCP_VERSIONS%% *}-4.${OCP_VERSIONS##* }"
 
 # Prod-bundle shipped check (tag-scheme-aware; used by check_component_release_status).
 # shellcheck source=lib/prod-bundle.sh
 source "$(dirname "$0")/lib/prod-bundle.sh"
+
+# FBC OCP scope and FBC_OCP_VERSIONS (canonical; single source of truth for OCP list).
+# shellcheck source=lib/fbc-scope.sh
+source "$(dirname "$0")/lib/fbc-scope.sh"
+
+# Count and "4.<first>-4.<last>" display range derived from FBC_OCP_VERSIONS (sourced
+# above) so status output can't drift behind the list (token count / first+last token).
+read -ra _OCP_VERSION_ARR <<< "$FBC_OCP_VERSIONS"
+readonly CURRENT_OCP_VERSION_COUNT=${#_OCP_VERSION_ARR[@]}
+readonly OCP_VERSION_RANGE="4.${FBC_OCP_VERSIONS%% *}-4.${FBC_OCP_VERSIONS##* }"
 
 # Submariner component repos (for branch checks)
 readonly SUBMARINER_REPOS="submariner-operator submariner lighthouse shipyard subctl admiral cloud-prepare"
@@ -213,53 +214,11 @@ detect_release_state() {
 # NOTE: FBC YAML filenames don't contain Submariner version (catalogs are cumulative),
 # so we use date-matching to find FBC YAMLs created near the component release.
 get_release_ocp_scope() {
-  local env=$1
-  local versions=""
-
-  # Find the component YAML for this release to anchor the date window.
-  # sort | tail -1 = latest attempt = the successful release: FBC releases are
-  # cut right after the component release succeeds, so their dates cluster around
-  # the latest (not earliest) component YAML. Anchoring on an earlier failed retry
-  # would put the ±window days before the FBC YAMLs and match none of them.
-  # sort makes the selection deterministic (find output order is unspecified).
-  local component_yaml
-  component_yaml=$(find "releases/$MAJOR_MINOR/$env/" -name "submariner-$FULL_VERSION_DASH-$env-*.yaml" 2>/dev/null | sort | tail -1)
-  [ -z "$component_yaml" ] && return  # No component YAML, can't determine scope
-
-  # Extract date from component filename: submariner-0-22-0-stage-20251203-01.yaml → 20251203
-  local component_date_str
-  component_date_str=$(basename "$component_yaml" | grep -oP '\d{8}')
-  local component_epoch
-  component_epoch=$(date -d "$component_date_str" +%s 2>/dev/null || echo 0)
-
-  [ "$component_epoch" -eq 0 ] && return  # Invalid date, can't determine scope
-
-  # Find FBC YAMLs created within ±3 days of component release
-  for ocp_version in $OCP_VERSIONS; do
-    for yaml in releases/fbc/4-$ocp_version/$env/*.yaml; do
-      [ ! -f "$yaml" ] && continue
-
-      # Extract date from FBC filename: submariner-fbc-4-16-stage-20251204-01.yaml → 20251204
-      local fbc_date_str
-      fbc_date_str=$(basename "$yaml" | grep -oP '\d{8}')
-      local fbc_epoch
-      fbc_epoch=$(date -d "$fbc_date_str" +%s 2>/dev/null || echo 0)
-
-      [ "$fbc_epoch" -eq 0 ] && continue
-
-      # Calculate date difference (absolute value)
-      local date_diff=$((fbc_epoch - component_epoch))
-      local date_diff_abs=${date_diff#-}  # Remove leading minus if negative
-
-      # Check if within ±3 days
-      if [ "$date_diff_abs" -lt "$FBC_DATE_MATCH_WINDOW_SECS" ]; then
-        versions="$versions $ocp_version"
-        break  # Found match for this OCP version, move to next
-      fi
-    done
-  done
-
-  echo "$versions" | xargs  # Trim whitespace
+  # Thin wrapper — delegates to the canonical fbc-scope.sh implementation.
+  # Argument mapping: root=. (repo root), mm=MAJOR_MINOR, fvd=FULL_VERSION_DASH,
+  # env=$1, ocp_list=FBC_OCP_VERSIONS (single source of truth from fbc-scope.sh).
+  local env="${1:-prod}"
+  get_fbc_ocp_scope "." "$MAJOR_MINOR" "$FULL_VERSION_DASH" "$env" "$FBC_OCP_VERSIONS"
 }
 
 # Helper function: Extract date from component release YAML filename
@@ -320,8 +279,8 @@ find_fbc_yaml_by_date() {
     local diff=$((yaml_epoch - target_epoch))
     local abs_diff=${diff#-}  # Remove leading minus if negative (bash abs value)
 
-    # Within 3 days and closer than previous best?
-    if [ "$abs_diff" -lt "$FBC_DATE_MATCH_WINDOW_SECS" ] && [ "$abs_diff" -lt "$best_diff" ]; then
+    # Within 3 days (inclusive, matching get_fbc_ocp_scope -le boundary) and closer than previous best?
+    if [ "$abs_diff" -le "$FBC_DATE_MATCH_WINDOW_SECS" ] && [ "$abs_diff" -lt "$best_diff" ]; then
       best_yaml="$yaml"
       best_diff="$abs_diff"
     fi
@@ -541,7 +500,7 @@ detect_current_phase() {
 #              FBC_PROD_NOT_APPLIED, FBC_PROD_IN_PROGRESS, FBC_PROD_SUCCEEDED, FBC_PROD_FAILED (for prod)
 check_fbc_release_status() {
   local env=$1
-  local scope="${2:-$OCP_VERSIONS}"  # Default to all if not specified
+  local scope="${2:-$FBC_OCP_VERSIONS}"  # Default to all if not specified
 
   # Determine variable prefix based on environment: FBC_* for stage, FBC_PROD_*
   # for prod. Bind namerefs to the prefixed globals so consumers (detect_current_phase
@@ -998,7 +957,7 @@ check_step_11() {
     component_date=$(get_component_yaml_date "stage")
   fi
 
-  for ocp_version in $OCP_VERSIONS; do
+  for ocp_version in $FBC_OCP_VERSIONS; do
     local fbc_snapshot=""
 
     # State-aware snapshot selection

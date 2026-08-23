@@ -389,6 +389,46 @@ assert_eq "cveFixes (time rule) --complete → {} (not snapshot-stamped)" "${_UP
   '0.99.1|cveFixes|complete|{}|FAKE-123'
 eval "$_orig_snapshot_step_data"
 
+# Fix 5: --refresh cascade tests
+# 18f: --refresh on a step cascades to all transitive downstream steps.
+# bundleShas → componentStage → releaseNotes, fbcCatalogUpdate → fbcStageReleases
+# → qeValidation → componentProd → fbcProdReleases → fbcProdUrls
+_UPDATE_STEP_CALLS=()
+handle_step_override "0.99.1" "bundleShas" "in_progress" "FAKE-123" 2>/dev/null
+# First call is the direct refresh; subsequent calls are cascade resets.
+assert_eq "cascade: bundleShas refresh is first call" \
+  "${_UPDATE_STEP_CALLS[0]}" "0.99.1|bundleShas|in_progress|{}|FAKE-123"
+# At least one downstream step (componentStage) must be reset.
+_cascade_calls_all="${_UPDATE_STEP_CALLS[*]}"
+assert_contains "cascade: componentStage reset to not_started" \
+  "$_cascade_calls_all" "0.99.1|componentStage|not_started|{}|FAKE-123"
+# The full cascade reaches fbcProdUrls (end of chain).
+assert_contains "cascade: fbcProdUrls also reset" \
+  "$_cascade_calls_all" "0.99.1|fbcProdUrls|not_started|{}|FAKE-123"
+# Total calls = 1 (direct) + N (cascade); at least 2.
+assert_eq "cascade: multiple update_step calls (direct + cascade)" \
+  "$([[ ${#_UPDATE_STEP_CALLS[@]} -gt 1 ]] && echo many || echo one)" "many"
+
+# 18g: --complete does NOT cascade (only --refresh triggers cascade).
+_UPDATE_STEP_CALLS=()
+handle_step_override "0.99.1" "bundleShas" "complete" "FAKE-123" 2>/dev/null
+assert_eq "cascade: --complete does not cascade (exactly 1 call)" \
+  "${#_UPDATE_STEP_CALLS[@]}" "1"
+
+# 18h: --refresh on a leaf step (no dependents) produces no cascade calls.
+_UPDATE_STEP_CALLS=()
+handle_step_override "0.99.1" "fbcProdUrls" "in_progress" "FAKE-123" 2>/dev/null
+assert_eq "cascade: fbcProdUrls (leaf) produces exactly 1 call (no cascade)" \
+  "${#_UPDATE_STEP_CALLS[@]}" "1"
+
+# 18i: cascade message is emitted to stderr (not stdout) so machine consumers
+# can suppress it with 2>/dev/null.
+_UPDATE_STEP_CALLS=()
+cascade_err=$(handle_step_override "0.99.1" "bundleShas" "in_progress" "FAKE-123" 2>&1 >/dev/null)
+cascade_out=$(handle_step_override "0.99.1" "bundleShas" "in_progress" "FAKE-123" 2>/dev/null) || true
+assert_contains "cascade: cascade message goes to stderr" "$cascade_err" "Cascading --refresh"
+assert_eq "cascade: no cascade text on stdout" "$cascade_out" ""
+
 # Restore original update_step
 eval "$_orig_update_step"
 
@@ -548,12 +588,35 @@ assert_eq "22i: no snapshot exit 1" "$ec_exit" "1"
 assert_contains "22i: no snapshot stderr mentions prefix" "$ec_diag" "submariner-0-99-"
 
 eval "$_orig_get_step_ec"
+
+# Fix 2b: verify_ecFixes precondition cases → exit 2 (not exit 1)
+# 22j: oc not installed → exit 2 with diagnostic; stdout empty
+_orig_command=$(declare -f command 2>/dev/null || echo "")
+command() { if [ "$1" = "-v" ] && [ "$2" = "oc" ]; then return 1; fi; builtin command "$@"; }
+ec_exit=0 _ec_err_tmp=$(mktemp)
+ec_out=$(verify_ecFixes "0.99.1" 2>"$_ec_err_tmp") || ec_exit=$?
+ec_diag=$(cat "$_ec_err_tmp"); rm -f "$_ec_err_tmp"
+assert_eq "verify_ecFixes oc not installed → exit 2" "$ec_exit" "2"
+assert_eq "verify_ecFixes oc not installed → stdout empty" "$ec_out" ""
+assert_contains "verify_ecFixes oc not installed → stderr mentions oc" "$ec_diag" "oc not installed"
+[ -n "$_orig_command" ] && eval "$_orig_command" || unset -f command
+
+# 22k: oc installed but not logged in → exit 2 with login hint; stdout empty
+oc() { case "$1" in whoami) return 1 ;; get) echo "$_OC_SNAPSHOTS" ;; *) return 0 ;; esac; }
+ec_exit=0 _ec_err_tmp=$(mktemp)
+ec_out=$(verify_ecFixes "0.99.1" 2>"$_ec_err_tmp") || ec_exit=$?
+ec_diag=$(cat "$_ec_err_tmp"); rm -f "$_ec_err_tmp"
+assert_eq "verify_ecFixes not logged in → exit 2" "$ec_exit" "2"
+assert_eq "verify_ecFixes not logged in → stdout empty" "$ec_out" ""
+assert_contains "verify_ecFixes not logged in → stderr mentions login" "$ec_diag" "Not logged in"
+
 [ -n "$_orig_oc" ] && eval "$_orig_oc" || unset -f oc
 
 # 23/24: verify_createBranches / verify_upstreamRelease emit git evidence
 _orig_git=$(declare -f git 2>/dev/null || echo "")
 _MOCK_LSREMOTE=''
-git() { if [ "$1" = "ls-remote" ]; then echo "$_MOCK_LSREMOTE"; return 0; fi; command git "$@"; }
+_MOCK_GIT_RC=0
+git() { if [ "$1" = "ls-remote" ]; then echo "$_MOCK_LSREMOTE"; return "$_MOCK_GIT_RC"; fi; command git "$@"; }
 
 _MOCK_LSREMOTE=$'cafe123\trefs/heads/release-0.99'
 cb_exit=0
@@ -569,6 +632,17 @@ cb_out=$(verify_createBranches "0.99.1" 2>/dev/null) || cb_exit=$?
 assert_eq "verify_createBranches branch absent (exit 1)" "$cb_exit" "1"
 assert_eq "verify_createBranches no output when absent" "$cb_out" ""
 
+# Fix 2a: ls-remote failure → exit 2 (precondition, not step failure)
+_MOCK_GIT_RC=128
+_MOCK_LSREMOTE=''
+cb_exit=0 _cb_err_tmp=$(mktemp)
+cb_out=$(verify_createBranches "0.99.1" 2>"$_cb_err_tmp") || cb_exit=$?
+cb_diag=$(cat "$_cb_err_tmp"); rm -f "$_cb_err_tmp"
+assert_eq "verify_createBranches ls-remote fails → exit 2" "$cb_exit" "2"
+assert_eq "verify_createBranches ls-remote fails → stdout empty" "$cb_out" ""
+assert_contains "verify_createBranches ls-remote fails → stderr mentions exit code" "$cb_diag" "ls-remote failed"
+_MOCK_GIT_RC=0
+
 _MOCK_LSREMOTE=$'deadbeef\trefs/tags/v0.99.1'
 ur_exit=0
 ur_out=$(verify_upstreamRelease "0.99.1" 2>/dev/null) || ur_exit=$?
@@ -581,17 +655,28 @@ ur_exit=0
 ur_out=$(verify_upstreamRelease "0.99.1" 2>/dev/null) || ur_exit=$?
 assert_eq "verify_upstreamRelease not tagged (exit 1)" "$ur_exit" "1"
 assert_eq "verify_upstreamRelease no output when absent" "$ur_out" ""
+
+# Fix 2a: ls-remote failure → exit 2 (precondition, not step failure)
+_MOCK_GIT_RC=128
+ur_exit=0 _ur_err_tmp=$(mktemp)
+ur_out=$(verify_upstreamRelease "0.99.1" 2>"$_ur_err_tmp") || ur_exit=$?
+ur_diag=$(cat "$_ur_err_tmp"); rm -f "$_ur_err_tmp"
+assert_eq "verify_upstreamRelease ls-remote fails → exit 2" "$ur_exit" "2"
+assert_eq "verify_upstreamRelease ls-remote fails → stdout empty" "$ur_out" ""
+assert_contains "verify_upstreamRelease ls-remote fails → stderr mentions exit code" "$ur_diag" "ls-remote failed"
+_MOCK_GIT_RC=0
+
 [ -n "$_orig_git" ] && eval "$_orig_git" || unset -f git
 
-# 25: verify_fbcProdUrls emits the resolved registry.redhat.io bundle image
-_fbc_home=$(mktemp -d)
-mkdir -p "$_fbc_home/konflux/submariner-operator-fbc"
+# 25: verify_fbcProdUrls emits the resolved registry.redhat.io bundle image.
+# After the fix, the function uses ${FBC_REPO:-$FBC_REPO_DEFAULT}, so inject
+# the temp dir via FBC_REPO (not HOME, which is no longer the lookup path).
+_fbc_dir=$(mktemp -d)
 printf '  - name: submariner.v0.99.1\n    image: registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:abc\n' \
-  > "$_fbc_home/konflux/submariner-operator-fbc/catalog-template.yaml"
-_real_home="$HOME"; HOME="$_fbc_home"
+  > "$_fbc_dir/catalog-template.yaml"
 fp_exit=0
-fp_out=$(verify_fbcProdUrls "0.99.1" 2>/dev/null) || fp_exit=$?
-HOME="$_real_home"; rm -rf "$_fbc_home"
+fp_out=$(FBC_REPO="$_fbc_dir" verify_fbcProdUrls "0.99.1" 2>/dev/null) || fp_exit=$?
+rm -rf "$_fbc_dir"
 assert_eq "verify_fbcProdUrls verified (exit 0)" "$fp_exit" "0"
 assert_eq "verify_fbcProdUrls emits bundleImage" "$fp_out" \
   '{"bundleImage":"registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:abc","version":"0.99.1"}'
@@ -599,19 +684,18 @@ assert_eq "verify_fbcProdUrls emits bundleImage" "$fp_out" \
 # 25b-d: verify_fbcProdUrls failure paths must return 1 with NO stdout (no false
 # STEP_DATA). Helper writes a catalog-template with the given image line.
 _fbcprod_case() {
-  local image="$1" home; home=$(mktemp -d)
-  mkdir -p "$home/konflux/submariner-operator-fbc"
+  local image="$1" fbc_dir; fbc_dir=$(mktemp -d)
   if [ -n "$image" ]; then
     printf '  - name: submariner.v0.99.1\n    image: %s\n' "$image" \
-      > "$home/konflux/submariner-operator-fbc/catalog-template.yaml"
+      > "$fbc_dir/catalog-template.yaml"
   else
     # No bundle entry for this version.
     printf '  - name: submariner.v0.98.0\n    image: registry.redhat.io/x@sha256:old\n' \
-      > "$home/konflux/submariner-operator-fbc/catalog-template.yaml"
+      > "$fbc_dir/catalog-template.yaml"
   fi
-  local real="$HOME" out exit=0; HOME="$home"
-  out=$(verify_fbcProdUrls "0.99.1" 2>/dev/null) || exit=$?
-  HOME="$real"; rm -rf "$home"
+  local out exit=0
+  out=$(FBC_REPO="$fbc_dir" verify_fbcProdUrls "0.99.1" 2>/dev/null) || exit=$?
+  rm -rf "$fbc_dir"
   printf '%s|%s' "$exit" "$out"
 }
 # 25b: still on temporary quay.io build URL → not done
@@ -625,25 +709,94 @@ assert_eq "verify_fbcProdUrls missing bundle entry → exit 1, no output" \
   "$(_fbcprod_case '')" "1|"
 
 # 25e: real catalog templates interleave a 6-space channel entry and longer
-# ".p" pre-release bundles with the GA bundle. The "^  - name: ...$" anchors
-# (2-space indent + end-of-name) must resolve the GA bundle — not the channel
-# entry (which drops the leading indent anchor would match) nor the earlier
-# ".p" bundle (which dropping the "$" anchor would match). Ordering the decoys
-# before the GA entry is what makes each mutation observable.
-_fbc_home=$(mktemp -d)
-mkdir -p "$_fbc_home/konflux/submariner-operator-fbc"
+# ".p" pre-release bundles with the GA bundle. The grep-based implementation
+# uses "name: submariner.v<ver>$" (end-of-name anchor) then looks for an
+# "image:" line immediately after it via grep -A1 | grep image:. Channel
+# entries are skipped naturally because they have no "image:" line immediately
+# following their "name:" line; ".p" pre-release bundles are excluded by the
+# "$" anchor (prevents "0.99.1-0.123.p" from matching the "0.99.1" pattern).
+# Ordering the decoys before the GA entry is what makes each exclusion observable.
+_fbc_dir=$(mktemp -d)
 {
   printf '      - name: submariner.v0.99.1\n        replaces: submariner.v0.99.0\n'
   printf '  - name: submariner.v0.99.1-0.123.p\n    image: registry.redhat.io/rhacm2/x@sha256:PRE\n'
   printf '  - name: submariner.v0.99.1\n    image: registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:GA\n'
-} > "$_fbc_home/konflux/submariner-operator-fbc/catalog-template.yaml"
-_real_home="$HOME"; HOME="$_fbc_home"
+} > "$_fbc_dir/catalog-template.yaml"
 fp_exit=0
-fp_out=$(verify_fbcProdUrls "0.99.1" 2>/dev/null) || fp_exit=$?
-HOME="$_real_home"; rm -rf "$_fbc_home"
+fp_out=$(FBC_REPO="$_fbc_dir" verify_fbcProdUrls "0.99.1" 2>/dev/null) || fp_exit=$?
+rm -rf "$_fbc_dir"
 assert_eq "verify_fbcProdUrls resolves GA bundle past channel + .p decoys (exit 0)" "$fp_exit" "0"
 assert_eq "verify_fbcProdUrls emits GA image, not channel or .p" "$fp_out" \
   '{"bundleImage":"registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:GA","version":"0.99.1"}'
+
+
+# 25f (Fix 4): verify_fbcProdUrls must work regardless of indentation.
+# The old awk required exactly 2-space indent ("^  - name: ..."); the grep-based
+# implementation is indent-agnostic. Test with 4-space and 0-space indentation.
+_fbcprod_indent_case() {
+  local indent="$1" fbc_dir; fbc_dir=$(mktemp -d)
+  printf '%s- name: submariner.v0.99.1\n%s  image: registry.redhat.io/rhacm2/x@sha256:GA\n' \
+    "$indent" "$indent" \
+    > "$fbc_dir/catalog-template.yaml"
+  local out exit=0
+  out=$(FBC_REPO="$fbc_dir" verify_fbcProdUrls "0.99.1" 2>/dev/null) || exit=$?
+  rm -rf "$fbc_dir"
+  printf '%s|%s' "$exit" "$out"
+}
+assert_eq "verify_fbcProdUrls: indent-agnostic (4-space indent, exit 0)" \
+  "$(_fbcprod_indent_case '    ')" \
+  '0|{"bundleImage":"registry.redhat.io/rhacm2/x@sha256:GA","version":"0.99.1"}'
+assert_eq "verify_fbcProdUrls: indent-agnostic (0-space indent, exit 0)" \
+  "$(_fbcprod_indent_case '')" \
+  '0|{"bundleImage":"registry.redhat.io/rhacm2/x@sha256:GA","version":"0.99.1"}'
+
+# 25g (Fix 4): failure paths emit a diagnostic to stderr (not stdout) so the
+# caller can suppress with 2>/dev/null or surface for debugging.
+_fbc_dir2=$(mktemp -d)
+printf '  - name: submariner.v0.98.0\n    image: registry.redhat.io/x@sha256:old\n' \
+  > "$_fbc_dir2/catalog-template.yaml"
+fp_err=$(FBC_REPO="$_fbc_dir2" verify_fbcProdUrls "0.99.1" 2>&1 >/dev/null) || true
+fp_out=$(FBC_REPO="$_fbc_dir2" verify_fbcProdUrls "0.99.1" 2>/dev/null) || true
+rm -rf "$_fbc_dir2"
+assert_contains "verify_fbcProdUrls missing entry: stderr diagnostic" \
+  "$fp_err" "no bundle entry"
+assert_eq "verify_fbcProdUrls missing entry: stdout empty (no false data)" \
+  "$fp_out" ""
+
+# Fix 2c: verify_fbcProdUrls repo not found → exit 2 (precondition) with clone hint
+fp_exit=0 _fp_err_tmp=$(mktemp)
+fp_out=$(FBC_REPO="/nonexistent/fbc-repo-$$" verify_fbcProdUrls "0.99.1" 2>"$_fp_err_tmp") || fp_exit=$?
+fp_diag=$(cat "$_fp_err_tmp"); rm -f "$_fp_err_tmp"
+assert_eq "verify_fbcProdUrls repo missing → exit 2" "$fp_exit" "2"
+assert_eq "verify_fbcProdUrls repo missing → stdout empty" "$fp_out" ""
+assert_contains "verify_fbcProdUrls repo missing → stderr mentions clone" "$fp_diag" "clone"
+
+# 25h: verify_fbcProdUrls uses FBC_REPO_DEFAULT from jira-tracker.sh when FBC_REPO
+# is unset. FBC_REPO_DEFAULT is set once at source time (readonly). The canonical
+# way to override it is to export FBC_REPO_DEFAULT before the script starts; within
+# a running process FBC_REPO is the per-call injection mechanism. This test
+# verifies the FBC_REPO_DEFAULT fallback via a subshell where it can be pre-set.
+_fbc_default_dir=$(mktemp -d)
+printf '  - name: submariner.v0.99.1\n    image: registry.redhat.io/rhacm2/x@sha256:FROM_DEFAULT\n' \
+  > "$_fbc_default_dir/catalog-template.yaml"
+fp_exit=0
+fp_out=$(
+  env FBC_REPO_DEFAULT="$_fbc_default_dir" bash -c "
+    unset FBC_REPO
+    unset _JIRA_TRACKER_SOURCED
+    source '$_LIB_DIR/jira-tracker.sh' 2>/dev/null || true
+    export _AUTORELEASE_TESTING=true
+    query_jira() { echo '[]'; }
+    acli() { :; }
+    calculate_acm_version() { ACM_VERSION='ACM 2.17.0'; }
+    source '$_LIB_DIR/../autorelease.sh'
+    verify_fbcProdUrls '0.99.1'
+  " 2>/dev/null
+) || fp_exit=$?
+rm -rf "$_fbc_default_dir"
+assert_eq "verify_fbcProdUrls: FBC_REPO_DEFAULT fallback (exit 0)" "$fp_exit" "0"
+assert_eq "verify_fbcProdUrls: FBC_REPO_DEFAULT emits bundle" "$fp_out" \
+  '{"bundleImage":"registry.redhat.io/rhacm2/x@sha256:FROM_DEFAULT","version":"0.99.1"}'
 
 echo ""
 echo "=== snapshot_step_data Tests ==="
@@ -786,6 +939,36 @@ assert_eq "close: handle_close passes completion reason" "${_CLOSE_CALLS[0]#*|}"
 eval "$_orig_close"
 
 echo ""
+echo "=== _ec_status_from_snap Tests ==="
+
+# Pure helper: extracts EC scenario status from a snapshot JSON object via stdin.
+
+_mock_snap_json() {
+  # $1=status — build a minimal snapshot JSON with one EC scenario result
+  local status="$1"
+  jq -cn --arg s "$status" '{
+    metadata: {annotations: {"test.appstudio.openshift.io/status":
+      ([{scenario:"enterprise-contract-0-21",status:$s}] | tojson)}}}'
+}
+
+assert_eq "_ec_status_from_snap: TestPassed" \
+  "$(printf '%s' "$(_mock_snap_json TestPassed)" | _ec_status_from_snap)" \
+  "TestPassed"
+
+assert_eq "_ec_status_from_snap: TestFailed" \
+  "$(printf '%s' "$(_mock_snap_json TestFailed)" | _ec_status_from_snap)" \
+  "TestFailed"
+
+assert_eq "_ec_status_from_snap: missing annotation → no-ec-result" \
+  "$(printf '%s' '{"metadata":{"annotations":{}}}' | _ec_status_from_snap)" \
+  "no-ec-result"
+
+assert_eq "_ec_status_from_snap: no EC scenario → no-ec-result" \
+  "$(printf '%s' "$(_mock_snap_json TestPassed | jq '.metadata.annotations["test.appstudio.openshift.io/status"] = ([{scenario:"other-test",status:"TestPassed"}] | tojson)')" \
+  | _ec_status_from_snap)" \
+  "no-ec-result"
+
+echo ""
 echo "=== try_auto_verify Tests (gate/hint chaining decision) ==="
 
 # The gate|hint dispatch arm delegates its auto-verify-and-chain decision to
@@ -850,11 +1033,86 @@ assert_eq "verifier fails → verifier was invoked" "$(wc -l <"$_VCALL_FILE")" "
 assert_eq "verifier fails → still marked tried" "${verified_steps[faketest_fail]:-}" "1"
 assert_eq "verifier fails → no update_step" "${#_UPDATE_STEP_CALLS[@]}" "0"
 
+# F: verifier exits 2 (precondition failure) → try_auto_verify returns 2,
+#    step NOT marked complete, update_step NOT called, verified_steps still set
+#    (guard still activates to prevent re-checking same step twice per run).
+_fake_verify_precond() { echo x >>"$_VCALL_FILE"; echo "  precond error" >&2; return 2; }
+STEP_VERIFIER["faketest_precond"]="_fake_verify_precond"
+declare -A verified_steps=()
+_UPDATE_STEP_CALLS=(); : >"$_VCALL_FILE"; _AUTORELEASE_QUIET=""
+tav_exit=0; try_auto_verify "faketest_precond" || tav_exit=$?
+assert_eq "verifier exit-2 → try_auto_verify returns 2" "$tav_exit" "2"
+assert_eq "verifier exit-2 → verifier was invoked" "$(wc -l <"$_VCALL_FILE")" "1"
+assert_eq "verifier exit-2 → step marked tried (anti-loop guard)" "${verified_steps[faketest_precond]:-}" "1"
+assert_eq "verifier exit-2 → update_step NOT called" "${#_UPDATE_STEP_CALLS[@]}" "0"
+assert_eq "verifier exit-2 → quiet NOT set" "$_AUTORELEASE_QUIET" ""
+
+# G: already-tried guard fires even for exit-2 verifiers (no double-check)
+declare -A verified_steps=([faketest_precond]=1)
+_UPDATE_STEP_CALLS=(); : >"$_VCALL_FILE"
+tav_exit=0; try_auto_verify "faketest_precond" || tav_exit=$?
+assert_eq "exit-2 already-tried → exit 1 (guard, not 2)" "$tav_exit" "1"
+assert_eq "exit-2 already-tried → verifier NOT re-invoked" "$(wc -l <"$_VCALL_FILE")" "0"
+assert_eq "exit-2 already-tried → no update_step" "${#_UPDATE_STEP_CALLS[@]}" "0"
+
 # Cleanup: drop temp verifier map entries, restore real update_step
 rm -f "$_VCALL_FILE"
 unset 'STEP_VERIFIER[faketest_ok]' 'STEP_VERIFIER[faketest_empty]' \
-  'STEP_VERIFIER[faketest_guard]' 'STEP_VERIFIER[faketest_fail]'
+  'STEP_VERIFIER[faketest_guard]' 'STEP_VERIFIER[faketest_fail]' \
+  'STEP_VERIFIER[faketest_precond]'
 eval "$_orig_update_step3"
+
+echo ""
+echo "=== run_conductor gate|hint exit-2 Integration Tests ==="
+
+# H: a gate step's verifier returns 2 (precondition failure) → run_conductor
+# prints "⚠ Cannot verify <step>" AND "Re-run once done: /autorelease VERSION"
+# on stderr, then exits the while loop cleanly (returns 0, not exit 1).
+# Drives the _tav_rc -eq 2 branch at the conductor level — unit tests F and G
+# only exercise try_auto_verify in isolation.
+#
+# Seed z-stream deps through ecFixes so upstreamRelease (a real gate step) is
+# next. Override its verifier with one that returns 2.
+_orig_verify_upstream=$(declare -f verify_upstreamRelease)
+_orig_update_step_h=$(declare -f update_step)
+update_step() { :; }  # silence tracker writes
+verify_upstreamRelease() { echo "  oc not logged in" >&2; return 2; }
+
+declare -A step_statuses=([rpmLockfiles]=complete [versionLabels]=complete \
+  [tektonTasks]=complete [cveFixes]=complete [ecFixes]=complete)
+declare -A verified_steps=()
+AUTORELEASE_PUSH_LOG=$(mktemp)
+ran_pr_step=""; ran_release_yaml_step=""; ran_direct_push_step=""
+VERSION="0.99.1"; RELEASE_TYPE="z-stream"; TRACKER="FAKE-123"
+
+_cond_rc=0
+_cond_err=$(run_conductor 2>&1) || _cond_rc=$?
+rm -f "$AUTORELEASE_PUSH_LOG"
+
+assert_eq   "conductor exit-2: run_conductor returns 0 (loop breaks cleanly)" "$_cond_rc" "0"
+assert_contains "conductor exit-2: ⚠ Cannot verify message present" \
+  "$_cond_err" "⚠ Cannot verify"
+assert_contains "conductor exit-2: Re-run once done hint present" \
+  "$_cond_err" "Re-run once done: /autorelease 0.99.1"
+assert_contains "conductor exit-2: step title in message" \
+  "$_cond_err" "Cut upstream release"
+
+# Verify update_step was NOT called (step must not be marked complete on rc=2)
+_update_calls_h=()
+update_step() { _update_calls_h+=("$1"); }
+declare -A step_statuses=([rpmLockfiles]=complete [versionLabels]=complete \
+  [tektonTasks]=complete [cveFixes]=complete [ecFixes]=complete)
+declare -A verified_steps=()
+AUTORELEASE_PUSH_LOG=$(mktemp)
+run_conductor 2>/dev/null || true
+rm -f "$AUTORELEASE_PUSH_LOG"
+assert_eq "conductor exit-2: update_step not called (step not marked complete)" \
+  "${#_update_calls_h[@]}" "0"
+
+# Restore
+eval "$_orig_verify_upstream"
+eval "$_orig_update_step_h"
+unset _cond_rc _cond_err _update_calls_h
 
 echo ""
 echo "=== find_next_step Fetch/Parse Tests (real Jira read path) ==="
@@ -1139,13 +1397,32 @@ assert_eq "dry-run strictly read-only (2 seeds, no write fn called)" "$ro_rc" "0
 echo ""
 echo "=== run_preflight Tests (readiness report) ==="
 
-# run_preflight probes jq/git (real, present here) plus acli/gh/oc, which we stub
-# as shell functions so `command -v` sees them present and the auth/login
+# run_preflight probes jq/git (real, present here) plus acli/gh/oc/skopeo, which
+# we stub as shell functions so `command -v` sees them present and the auth/login
 # sub-probes read our canned exit/output. Restored to good stubs between cases.
-_pf_good_acli() { acli() { echo "Logged in as tester@example.com"; }; }
-_pf_good_gh()   { gh() { return 0; }; }
-_pf_good_oc()   { oc() { [ "$1" = whoami ] && { echo "kube:admin"; return 0; }; return 0; }; }
-_pf_good_acli; _pf_good_gh; _pf_good_oc
+# acli stub: exits 0 (authenticated) — the probe calls "acli jira auth status"
+# and trusts its exit code (0 = authenticated, non-zero = not authenticated).
+_pf_good_acli()   { acli() { return 0; }; }
+_pf_good_gh()     { gh() { return 0; }; }
+_pf_good_oc()     { oc() { [ "$1" = whoami ] && { echo "kube:admin"; return 0; }; return 0; }; }
+# registry.redhat.io credential helper: creates a temp ~/.docker/config.json with a
+# registry.redhat.io entry and sets _PREFLIGHT_DOCKER_CFG to point at it. The
+# preflight reads this file (prod_index_has_bundle uses oc image extract which reads
+# ~/.docker/config.json, not skopeo's /run/containers/auth.json).
+_pf_reg_dir=""
+_pf_good_registry() {
+  _pf_reg_dir=$(mktemp -d)
+  mkdir -p "$_pf_reg_dir/.docker"
+  printf '{"auths":{"registry.redhat.io":{"auth":"dXNlcjpwYXNz"}}}\n' \
+    > "$_pf_reg_dir/.docker/config.json"
+  _PREFLIGHT_DOCKER_CFG="$_pf_reg_dir/.docker/config.json"
+}
+_pf_cleanup_registry() {
+  rm -rf "${_pf_reg_dir:-}"
+  _pf_reg_dir=""
+  unset _PREFLIGHT_DOCKER_CFG
+}
+_pf_good_acli; _pf_good_gh; _pf_good_oc; _pf_good_registry
 
 # All good → every line ✓, no warnings, returns 0.
 pf=$(run_preflight 2>&1); pf_rc=$?
@@ -1155,6 +1432,7 @@ assert_contains "preflight all-good: git ✓" "$pf" "✓ git"
 assert_contains "preflight all-good: acli authed"  "$pf" "✓ acli — Jira authenticated"
 assert_contains "preflight all-good: gh authed"    "$pf" "✓ gh — authenticated"
 assert_contains "preflight all-good: oc logged in (user shown)" "$pf" "✓ oc — logged in (kube:admin)"
+assert_contains "preflight all-good: registry.redhat.io ✓" "$pf" "✓ registry.redhat.io — credentials in"
 assert_not_contains "preflight all-good: no warnings" "$pf" "⚠"
 
 # gh unauthed → ⚠ with the login hint; unrelated probes stay ✓.
@@ -1170,18 +1448,60 @@ pf=$(run_preflight 2>&1)
 assert_contains "preflight oc-logged-out: ⚠ verifier note" "$pf" "verifier gate steps can't self-confirm"
 _pf_good_oc
 
-# acli output lacking the authenticated marker → ⚠ + login hint.
-acli() { echo "No active session"; }
+# acli exits non-zero (not authenticated) → ⚠ + login hint.
+acli() { return 1; }
 pf=$(run_preflight 2>&1)
 assert_contains "preflight acli-unauthed: ⚠ + login hint" "$pf" \
   "acli — not authenticated to Jira; run: acli jira auth login --web"
 _pf_good_acli
 
 # Never blocks: every cred failing still returns 0 (purely additive, per plan).
-acli() { echo ""; }; gh() { return 1; }; oc() { return 1; }
+# For the registry check, point at a non-existent config file to simulate missing creds.
+acli() { return 1; }; gh() { return 1; }; oc() { return 1; }
+_PREFLIGHT_DOCKER_CFG="/nonexistent/docker/config.json"
 run_preflight >/dev/null 2>&1; pf_rc=$?
 assert_eq "preflight all-fail: still returns 0 (never blocks)" "$pf_rc" "0"
-_pf_good_acli; _pf_good_gh; _pf_good_oc
+_pf_cleanup_registry
+_pf_good_acli; _pf_good_gh; _pf_good_oc; _pf_good_registry
+
+# Fix 3: acli auth check calls "jira auth status" (not a remote API endpoint like
+# "jira project list").  acli runs as a simple command (not a pipeline), so
+# variable assignments in the function body execute in the current shell; a temp
+# file is still used to be robust against any future refactoring.
+_acli_args_file=$(mktemp)
+acli() { echo "$*" >"$_acli_args_file"; return 0; }
+run_preflight >/dev/null 2>&1
+assert_eq "preflight acli: calls jira auth status" \
+  "$(cat "$_acli_args_file")" "jira auth status"
+rm -f "$_acli_args_file"
+_pf_good_acli
+
+# Exit-code-only: acli exits 0 → authenticated regardless of output text.
+# The probe discards all output, so any text (including absence of keywords) is
+# irrelevant; only the exit code matters.
+acli() { echo "Token expired or unavailable"; return 0; }
+pf=$(run_preflight 2>&1)
+assert_contains "preflight acli exit-0: treated as authed (exit code trusted)" "$pf" \
+  "✓ acli — Jira authenticated"
+_pf_good_acli
+
+# False-positive prevention: 'Unauthenticated' contains the substring 'authenticated'
+# — a grep-based probe would match and incorrectly report authenticated.  The
+# exit-code probe correctly reports unauthed when acli exits non-zero.
+acli() { echo "Unauthenticated"; return 1; }
+pf=$(run_preflight 2>&1)
+assert_contains "preflight acli 'Unauthenticated' exit-1: no false positive (unauthed)" "$pf" \
+  "acli — not authenticated to Jira"
+_pf_good_acli
+
+# False-positive prevention: 'You are not logged in' contains 'logged in' — a
+# case-insensitive grep for 'Logged in' would match.  Exit-code probe correctly
+# reports unauthed.
+acli() { echo "You are not logged in"; return 1; }
+pf=$(run_preflight 2>&1)
+assert_contains "preflight acli 'not logged in' exit-1: no false positive (unauthed)" "$pf" \
+  "acli — not authenticated to Jira"
+_pf_good_acli
 
 # Strictly read-only: redefine a write function to trip a sentinel; preflight
 # (all reads) must never touch it.
@@ -1191,7 +1511,74 @@ update_step() { touch "$_PF_SENT"; }
 run_preflight >/dev/null 2>&1
 assert_eq "preflight strictly read-only (no update_step)" \
   "$([ -e "$_PF_SENT" ] && echo touched || echo clean)" "clean"
-eval "$_pf_orig_update"; rm -f "$_PF_SENT"
+eval "$_pf_orig_update"; rm -f "$_PF_SENT"; _pf_good_registry
+
+# Fix 4: registry.redhat.io / ~/.docker/config.json checks.
+# prod_index_has_bundle uses "oc image extract" which reads ~/.docker/config.json
+# (not skopeo's /run/containers/auth.json). The preflight checks the correct store.
+#
+# ~/.docker/config.json missing → ⚠ "not found" with docker-login hint.
+_pf_cleanup_registry  # start clean
+_PREFLIGHT_DOCKER_CFG="/tmp/pf4-nonexistent-$$/config.json"
+pf=$(run_preflight 2>&1)
+assert_contains "preflight docker-cfg-missing: ⚠ not found" "$pf" "not found"
+assert_contains "preflight docker-cfg-missing: docker-login hint" "$pf" \
+  "docker login registry.redhat.io"
+assert_contains "preflight docker-cfg-missing: acli still ✓" "$pf" "✓ acli — Jira authenticated"
+_pf_cleanup_registry; _pf_good_registry  # restore good config
+
+# ~/.docker/config.json exists but registry.redhat.io key missing → ⚠ + docker-login hint.
+_pf_no_reg_dir=$(mktemp -d)
+printf '{"auths":{}}\n' > "$_pf_no_reg_dir/config.json"
+_PREFLIGHT_DOCKER_CFG="$_pf_no_reg_dir/config.json"
+pf=$(run_preflight 2>&1)
+assert_contains "preflight registry-missing-from-cfg: ⚠ not in config" "$pf" \
+  "not in"
+assert_contains "preflight registry-missing-from-cfg: docker-login hint" "$pf" \
+  "docker login registry.redhat.io"
+assert_contains "preflight registry-missing-from-cfg: oc still ✓" "$pf" "✓ oc — logged in"
+rm -rf "$_pf_no_reg_dir"
+_pf_cleanup_registry; _pf_good_registry  # restore good config
+
+# Empty-object auth entry (docker logout residue) → ⚠, not false ✓.
+# `docker logout` on many systems leaves {"auths":{"registry.redhat.io":{}}} rather
+# than removing the key. The old jq '.auths["registry.redhat.io"] // empty' exits 0
+# for {} (empty object is truthy), producing a false ✓. The new expression checks
+# that .auth or .identitytoken is present and non-empty.
+_pf_empty_auth_dir=$(mktemp -d)
+printf '{"auths":{"registry.redhat.io":{}}}\n' > "$_pf_empty_auth_dir/config.json"
+_PREFLIGHT_DOCKER_CFG="$_pf_empty_auth_dir/config.json"
+pf=$(run_preflight 2>&1)
+assert_contains "preflight registry-empty-obj: ⚠ credentials empty" "$pf" \
+  "credentials empty"
+assert_contains "preflight registry-empty-obj: login hint present" "$pf" \
+  "docker login registry.redhat.io"
+assert_not_contains "preflight registry-empty-obj: no false ✓" "$pf" \
+  "✓ registry.redhat.io — credentials in"
+rm -rf "$_pf_empty_auth_dir"
+_pf_cleanup_registry; _pf_good_registry  # restore good config
+
+# Good config → ✓ line, no registry warning.
+pf=$(run_preflight 2>&1)
+assert_contains "preflight registry-ok: ✓ credentials found" "$pf" \
+  "✓ registry.redhat.io — credentials in"
+assert_not_contains "preflight registry-ok: no registry warning" "$pf" \
+  "docker login registry.redhat.io"
+
+# Argument verification: jq must be called with '.auths["registry.redhat.io"]' to
+# read the correct key. Capture all jq invocations and assert the registry key is queried.
+_pf_jq_args_file=$(mktemp)
+_orig_jq=$(declare -f jq 2>/dev/null || echo "")
+jq() {
+  # Record first invocation; delegate to real jq for all calls so the preflight works.
+  [ ! -s "$_pf_jq_args_file" ] && echo "$*" > "$_pf_jq_args_file"
+  builtin command jq "$@"
+}
+run_preflight >/dev/null 2>&1
+assert_contains "preflight registry: jq queries registry.redhat.io key" \
+  "$(cat "$_pf_jq_args_file")" 'registry.redhat.io'
+rm -f "$_pf_jq_args_file"
+[ -n "$_orig_jq" ] && eval "$_orig_jq" || unset -f jq
 
 echo ""
 echo "=== Snapshot Staleness Warning Tests ==="
@@ -1283,6 +1670,49 @@ step_timestamps=()
 step_snaps=()
 
 echo ""
+echo "=== Staleness Rule Configuration Tests (Fix 4) ==="
+
+# Fix 4a: fbcProdUrls must have NO staleness rule.
+# The quay.io→registry.redhat.io conversion is a one-time permanent action;
+# a time-based rule would falsely re-flag it as stale 75+ days after release.
+if [ -n "${STALENESS_RULES[fbcProdUrls]+_}" ]; then
+  assert_eq "Fix 4a: fbcProdUrls has no STALENESS_RULES entry (permanent action)" \
+    "present" "absent"
+else
+  assert_eq "Fix 4a: fbcProdUrls has no STALENESS_RULES entry (permanent action)" \
+    "absent" "absent"
+fi
+
+# Fix 4b: componentStage must have the "snapshot" staleness rule.
+# If bundleShas records a newer snapshot after componentStage completes, the
+# stage YAML references the old snapshot — release-ls surfaces this so the
+# operator can --refresh componentStage before proceeding.
+assert_eq "Fix 4b: componentStage STALENESS_RULES entry is 'snapshot'" \
+  "${STALENESS_RULES[componentStage]:-}" "snapshot"
+
+# Sanity: other snapshot-rule steps retained (guards against accidental removal).
+assert_eq "Fix 4b: ecFixes staleness rule retained" \
+  "${STALENESS_RULES[ecFixes]:-}" "snapshot"
+assert_eq "Fix 4b: bundleShas staleness rule retained" \
+  "${STALENESS_RULES[bundleShas]:-}" "snapshot"
+
+# Sanity: componentStage staleness triggers warning when snapshots differ.
+# Uses the same find_next_step path already tested for ecFixes; verifies that
+# the rule applies to componentStage specifically.
+_AUTORELEASE_QUIET=""
+step_snaps=([componentStage]="submariner-0-99-OLD" [bundleShas]="submariner-0-99-NEW")
+declare -A step_statuses=([cveFixes]=complete [ecFixes]=complete \
+  [rpmLockfiles]=complete [tektonTasks]=complete [versionLabels]=complete \
+  [upstreamRelease]=complete [bundleShas]=complete [componentStage]=complete)
+_stale_err=$(find_next_step "0.99.1" "z-stream" "FAKE-123" 2>&1 >/dev/null)
+assert_contains "Fix 4b: componentStage staleness warning fires" \
+  "$_stale_err" "Component stage release"
+assert_contains "Fix 4b: componentStage --refresh suggestion" \
+  "$_stale_err" "--refresh componentStage"
+step_snaps=()
+declare -A step_statuses=()
+
+echo ""
 echo "=== Dry-run In-Progress Annotation Tests ==="
 
 # run_dry_run annotates in_progress steps inline (e.g., "RPM lockfile updates
@@ -1325,6 +1755,171 @@ assert_eq "unreachable bundle -> skip" \
 # Undeterminable scope (0 OCP versions) -> skip, never a vacuous close.
 assert_eq "shipped + empty scope -> skip" \
   "$(auto_close_verdict shipped 0 0)" "skip"
+
+echo ""
+echo "=== STEP_SKILL_HINT Consistency Tests (jira-tracker.sh Fix 2) ==="
+
+# tektonComponents has a STEP_SCRIPT entry so the conductor dispatches via the
+# "run" arm.  A STEP_SKILL_HINT entry for it would be dead code and show stale
+# text in --dry-run output.  Verify the entry was removed.
+if [ -n "${STEP_SKILL_HINT[tektonComponents]+_}" ]; then
+  assert_eq "tektonComponents: no STEP_SKILL_HINT (dead code removed)" \
+    "present" "absent"
+else
+  assert_eq "tektonComponents: no STEP_SKILL_HINT (dead code removed)" \
+    "absent" "absent"
+fi
+
+# Sanity: createBranches has NO STEP_SCRIPT so its hint must still exist.
+if [ -n "${STEP_SKILL_HINT[createBranches]+_}" ]; then
+  assert_eq "createBranches: STEP_SKILL_HINT retained (no script)" \
+    "present" "present"
+else
+  assert_eq "createBranches: STEP_SKILL_HINT retained (no script)" \
+    "absent" "present"
+fi
+
+# Every step that has a STEP_SKILL_HINT must NOT also have a STEP_SCRIPT (the
+# hint is only reachable when the conductor falls to the "hint" arm, which only
+# fires when there is no backing script).
+for _hint_step in "${!STEP_SKILL_HINT[@]}"; do
+  if [ -n "${STEP_SCRIPT[$_hint_step]+_}" ]; then
+    assert_eq "STEP_SKILL_HINT[$_hint_step] has no STEP_SCRIPT (dead-hint guard)" \
+      "script-present" "no-script"
+  else
+    assert_eq "STEP_SKILL_HINT[$_hint_step] has no STEP_SCRIPT (dead-hint guard)" \
+      "no-script" "no-script"
+  fi
+done
+
+echo ""
+echo "=== check_bot_branches Tests (tekton-component-setup.sh Fix 1) ==="
+
+# Source tekton-component-setup.sh in test mode so main() doesn't run.
+# NOTE: autorelease.sh (sourced above) resets SCRIPT_DIR to scripts/ when
+# sourced, so use that value directly — it points to the scripts/ directory.
+export _TEKTON_COMPONENT_SETUP_TESTING=true
+source "$SCRIPT_DIR/tekton-component-setup.sh"
+
+# gh present, bot branch found → returns 0 (proceed).
+gh() {
+  echo "konflux-submariner-operator-0-25"
+  echo "main"
+  echo "release-0.25"
+}
+cb_rc=0; check_bot_branches "0.25" 2>/dev/null || cb_rc=$?
+assert_eq "bot-branch check: branch found → exit 0" "$cb_rc" "0"
+
+# gh present, no matching bot branch → returns 1 with helpful message.
+gh() {
+  echo "main"
+  echo "release-0.25"
+}
+cb_rc=0; cb_err=""
+cb_err=$(check_bot_branches "0.25" 2>&1) || cb_rc=$?
+assert_eq "bot-branch check: branch absent → exit 1" "$cb_rc" "1"
+assert_contains "bot-branch check: error mentions branch pattern" "$cb_err" "Tekton config PR branches not found"
+assert_contains "bot-branch check: error includes gh check command" "$cb_err" "gh api --paginate repos/submariner-io/submariner-operator/branches"
+
+# gh auth/network failure → returns 0 with a non-blocking warning (never blocks).
+gh() { return 1; }
+cb_rc=0; cb_err=""
+cb_err=$(check_bot_branches "0.25" 2>&1) || cb_rc=$?
+assert_eq "bot-branch check: gh failure → exit 0 (non-blocking)" "$cb_rc" "0"
+assert_contains "bot-branch check: gh failure emits advisory warning" "$cb_err" "Could not reach GitHub"
+
+# gh not present → returns 0 (skip check, not available in all envs).
+# Strip PATH so even a real gh binary is invisible to command -v.
+_orig_gh_cb=$(declare -f gh)
+_no_gh_dir=$(mktemp -d)
+_orig_PATH="$PATH"
+unset -f gh
+PATH="$_no_gh_dir"
+cb_rc=0; check_bot_branches "0.25" 2>/dev/null || cb_rc=$?
+assert_eq "bot-branch check: gh absent → exit 0 (skip)" "$cb_rc" "0"
+PATH="$_orig_PATH"
+rm -rf "$_no_gh_dir"
+eval "$_orig_gh_cb"  # restore
+
+# Dash version derived correctly: 0.25 → 0-25 in the grep pattern.
+gh() { echo "konflux-submariner-operator-0-25"; }
+cb_rc=0; check_bot_branches "0.25" 2>/dev/null || cb_rc=$?
+assert_eq "bot-branch check: dash-version conversion 0.25→0-25 matches" "$cb_rc" "0"
+
+# Exact version suffix anchor: 0-25 must NOT match 0-250 (longer version).
+gh() { echo "konflux-submariner-operator-0-250"; }
+cb_rc=0; check_bot_branches "0.25" 2>/dev/null || cb_rc=$?
+assert_eq "bot-branch check: suffix anchor prevents 0-250 matching 0-25" "$cb_rc" "1"
+
+# Start-of-line anchor: branch name containing "konflux-" not at position 0
+# must NOT produce a false-positive match.
+gh() { echo "docs-konflux-bundle-sha-check-0-25"; echo "wip-for-konflux-operator-0-25"; }
+cb_rc=0; check_bot_branches "0.25" 2>/dev/null || cb_rc=$?
+assert_eq "bot-branch check: ^-anchor rejects mid-name konflux- match" "$cb_rc" "1"
+
+# --paginate must be present in the gh api invocation.  Because check_bot_branches
+# calls gh inside a command substitution subshell, a plain variable assignment
+# would be lost.  Use a temp file to capture args across the subshell boundary.
+_gh_args_file=$(mktemp)
+gh() { echo "$*" > "$_gh_args_file"; echo "konflux-submariner-operator-0-25"; }
+check_bot_branches "0.25" 2>/dev/null || true
+_gh_args_seen=$(cat "$_gh_args_file")
+rm -f "$_gh_args_file"
+assert_contains "bot-branch check: gh api call includes --paginate" "$_gh_args_seen" "--paginate"
+
+# Restore gh stub for any later tests.
+gh() { return 0; }
+
+echo ""
+echo "=== get_fbc_ocp_scope Boundary Test (Fix 5a) ==="
+
+# Verify the <= boundary: a FBC YAML dated exactly FBC_DATE_MATCH_WINDOW_SECS
+# before the component release must be INCLUDED (the condition is -le, not -lt).
+# FBC_DATE_MATCH_WINDOW_SECS = 259200 s = exactly 3 days.
+# Choosing dates 3 full days apart (20260103 and 20260106) gives a diff of
+# exactly 259200 s at midnight, which must satisfy date_diff_abs -le 259200.
+_scope_fixture=$(mktemp -d)
+_scope_mm="0.99"
+_scope_fvd="0-99-1"
+_scope_env="prod"
+mkdir -p "$_scope_fixture/releases/$_scope_mm/$_scope_env"
+mkdir -p "$_scope_fixture/releases/fbc/4-21/$_scope_env"
+# Component release date: 20260106
+touch "$_scope_fixture/releases/$_scope_mm/$_scope_env/submariner-$_scope_fvd-$_scope_env-20260106-01.yaml"
+# FBC date: exactly 3 days (259200 s) before component = 20260103
+touch "$_scope_fixture/releases/fbc/4-21/$_scope_env/submariner-fbc-4-21-$_scope_env-20260103-01.yaml"
+_scope_result=$(get_fbc_ocp_scope "$_scope_fixture" "$_scope_mm" "$_scope_fvd" "$_scope_env" "21")
+assert_contains "fbc-scope boundary: date diff == window → included (≤ not <)" \
+  "$_scope_result" "21"
+
+# One day beyond the window (4 days apart) must be EXCLUDED.
+rm -rf "$_scope_fixture/releases/fbc/4-21"
+mkdir -p "$_scope_fixture/releases/fbc/4-21/$_scope_env"
+# FBC date: 4 days before component = 20260102 → diff = 345600 > 259200
+touch "$_scope_fixture/releases/fbc/4-21/$_scope_env/submariner-fbc-4-21-$_scope_env-20260102-01.yaml"
+_scope_result2=$(get_fbc_ocp_scope "$_scope_fixture" "$_scope_mm" "$_scope_fvd" "$_scope_env" "21")
+assert_eq "fbc-scope boundary: date diff > window → excluded" "$_scope_result2" ""
+
+rm -rf "$_scope_fixture"
+
+echo ""
+echo "=== Empty-auth Registry Preflight Test (Fix 5b) ==="
+
+# Complement to the existing empty-object test: verify that an auth key present
+# but holding an empty string is also treated as missing credentials (not a
+# false ✓). {'auths':{'registry.redhat.io':{'auth':''}}} is produced by some
+# credential helpers that blank rather than remove the token on logout.
+_pf_empty_str_dir=$(mktemp -d)
+printf '{"auths":{"registry.redhat.io":{"auth":""}}}\n' > "$_pf_empty_str_dir/config.json"
+_PREFLIGHT_DOCKER_CFG="$_pf_empty_str_dir/config.json"
+pf_str=$(run_preflight 2>&1)
+assert_contains "preflight registry-empty-str: ⚠ credentials empty" "$pf_str" "credentials empty"
+assert_contains "preflight registry-empty-str: docker-login hint" "$pf_str" \
+  "docker login registry.redhat.io"
+assert_not_contains "preflight registry-empty-str: no false ✓" "$pf_str" \
+  "✓ registry.redhat.io — credentials in"
+rm -rf "$_pf_empty_str_dir"
+_pf_cleanup_registry; _pf_good_registry  # restore good config
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

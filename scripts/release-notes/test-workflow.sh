@@ -5,6 +5,10 @@ set -euo pipefail
 
 VERSION="${1:-0.23.1}"
 
+# Use version-namespaced temp files (same contract as add-release-notes.sh)
+export RELEASE_NOTES_DATA="/tmp/release-notes-${VERSION}-data.json"
+export RELEASE_NOTES_TOPICS="/tmp/release-notes-${VERSION}-topics.json"
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Testing add-release-notes Workflow: $VERSION"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

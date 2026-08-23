@@ -44,6 +44,51 @@ die() {
   exit 1
 }
 
+# ━━━ BOT PRECONDITION ━━━
+# Check that Konflux bot has already created tekton config PR branches on
+# submariner-io/submariner-operator. These branches are created automatically
+# after configureDownstream merges. Running before they exist produces
+# confusing failures deep inside konflux-component-setup.sh.
+check_bot_branches() {
+  local major_minor="$1"
+  local dash_ver="${major_minor//./-}"   # 0.25 → 0-25
+
+  # Skip the check when gh is not available (e.g. CI/test environments).
+  if ! command -v gh >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local branches
+  branches=$(gh api --paginate repos/submariner-io/submariner-operator/branches \
+    --jq '.[].name' 2>/dev/null) || {
+    # Network/auth failure — don't block, inner script will surface the real error.
+    echo "  ⚠ Could not reach GitHub to verify bot branches (gh auth/network) — continuing" >&2
+    return 0
+  }
+
+  # Bot branches follow the pattern "konflux-<component>-<major>-<minor>"
+  # e.g. konflux-submariner-operator-0-25
+  if echo "$branches" | grep -q "^konflux-.*-${dash_ver}$"; then
+    return 0
+  fi
+
+  echo "" >&2
+  echo "❌ Tekton config PR branches not found for ${major_minor}." >&2
+  echo "" >&2
+  echo "   These branches are created automatically by the Konflux bot after" >&2
+  echo "   the configureDownstream step (ReleasePlan) merges into" >&2
+  echo "   konflux-release-data. The bot detects the new release-${major_minor}" >&2
+  echo "   branches and opens tekton-config PR branches within a few minutes." >&2
+  echo "" >&2
+  echo "   Check whether the branches exist yet:" >&2
+  echo "     gh api --paginate repos/submariner-io/submariner-operator/branches --jq '.[].name' | grep '^konflux-'" >&2
+  echo "" >&2
+  echo "   If the branches are missing, wait for the bot or verify that" >&2
+  echo "   configureDownstream completed successfully, then re-run:" >&2
+  echo "     /autorelease $major_minor" >&2
+  return 1
+}
+
 # ━━━ ARGUMENTS ━━━
 
 parse_arguments() {
@@ -203,6 +248,18 @@ print_summary() {
 main() {
   parse_arguments "$@"
 
+  # Fail early with a human-readable message if bot branches not yet created.
+  # Always run this check, including single-component (filtered) invocations, so
+  # that a user who passes a component filter before bot branches exist still gets
+  # the helpful error rather than a confusing failure deep in
+  # konflux-component-setup.sh.
+  #
+  # NOTE: This checks only submariner-operator as a proxy for all 5 repos.
+  # A partial bot run (branches on some repos but not all) will pass this
+  # check and may fail later in the per-repo setup. Full 5-repo checking
+  # would require querying all repos individually.
+  check_bot_branches "$MAJOR_MINOR" || exit 1
+
   # Tracker integration (sourced via TRACKER_LIB set by conductor, or default path).
   TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
   # shellcheck source=/dev/null
@@ -228,4 +285,6 @@ main() {
   print_summary
 }
 
-main "$@"
+if [ "${_TEKTON_COMPONENT_SETUP_TESTING:-}" != "true" ]; then
+  main "$@"
+fi

@@ -2,6 +2,9 @@
 
 **When:** After FBC catalog updated (Step 11) and FBC snapshots rebuilt
 
+> **Automated:** `/autorelease` handles this step automatically. Follow the manual
+> steps below only if debugging or running without the conductor.
+
 **Prerequisites:**
 
 - Step 10: Component stage release completed (bundle now in registry.redhat.io)

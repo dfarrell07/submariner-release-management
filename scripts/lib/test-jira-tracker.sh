@@ -594,6 +594,20 @@ for key in "${STEP_ORDER[@]}"; do
 done
 assert_eq "all step keys have templates" "$fallback_found" "0"
 
+# OCP range in FBC subtask descriptions reflects FBC_OCP_VERSIONS (no hardcoded fallback)
+_first_ocp=$(echo "$FBC_OCP_VERSIONS" | awk '{print $1}')
+_last_ocp=$(echo "$FBC_OCP_VERSIONS" | awk '{print $NF}')
+_expected_ocp_range="4.$_first_ocp through 4.$_last_ocp"
+ocp_range_ok=0
+for _fbc_step in fbcCatalogUpdate fbcStageReleases fbcProdReleases; do
+  _desc=$(_generate_subtask_description "$_fbc_step" "0.24.0")
+  if ! printf '%s' "$_desc" | grep -qF "$_expected_ocp_range"; then
+    echo "  ✗ OCP range missing from $_fbc_step description (want: '$_expected_ocp_range')"
+    ocp_range_ok=$((ocp_range_ok + 1))
+  fi
+done
+assert_eq "FBC subtask descriptions contain OCP range from FBC_OCP_VERSIONS" "$ocp_range_ok" "0"
+
 # create_release_tracker: ACM version failure
 find_release_tracker() { :; }
 query_jira() { echo "[]"; }

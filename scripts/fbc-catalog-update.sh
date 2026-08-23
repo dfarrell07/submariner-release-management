@@ -12,6 +12,12 @@ set -euo pipefail
 # Resolve script location before any cd so lib paths work from any clone location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Source jira-tracker.sh early to provide FBC_REPO_DEFAULT before we use it
+# below. The include guard makes the later tracker-integration source a no-op.
+TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
+# shellcheck source=lib/jira-tracker.sh
+[ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
+
 usage() { echo "Usage: $0 <version> [--snapshot <name>] [--replace <old-version>]" >&2; }
 
 VERSION=""
@@ -27,7 +33,8 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$VERSION" ] && { usage; exit 1; }
 
-FBC_REPO="$HOME/konflux/submariner-operator-fbc"
+# FBC_REPO_DEFAULT is the canonical path defined once in lib/jira-tracker.sh.
+FBC_REPO="${FBC_REPO:-$FBC_REPO_DEFAULT}"
 [ -d "$FBC_REPO" ] || { echo "❌ FBC repo not found at $FBC_REPO" >&2; echo "   Clone: gh repo clone stolostron/submariner-operator-fbc $FBC_REPO" >&2; exit 1; }
 
 # Fail early with a friendly message if not authenticated (make update-bundle

@@ -1,4 +1,4 @@
-.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope
+.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-parallel
 
 .DEFAULT_GOAL := help
 
@@ -179,6 +179,9 @@ test-tracker:
 test-autorelease:
 	./scripts/lib/test-autorelease.sh
 
+test-conductor:
+	./scripts/lib/test-conductor-integration.sh
+
 test-component:
 	./scripts/lib/test-component-release.sh
 
@@ -200,7 +203,10 @@ test-prod-bundle:
 test-fbc-scope:
 	./scripts/lib/test-fbc-scope.sh
 
-test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-autorelease test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope
+test-parallel:
+	./scripts/lib/test-parallel-jobs.sh
+
+test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

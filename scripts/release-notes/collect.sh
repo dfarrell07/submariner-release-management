@@ -1,6 +1,6 @@
 #!/bin/bash
 # Phase 1: Collect raw release notes data from Jira and filesystem
-# Output: /tmp/release-notes-data.json
+# Output: ${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}
 set -euo pipefail
 
 # ============================================================================
@@ -58,7 +58,7 @@ LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
 # shellcheck source=../lib/release-notes-common.sh
 source "$LIB_DIR/release-notes-common.sh"
 
-OUTPUT_JSON="/tmp/release-notes-data.json"
+OUTPUT_JSON="${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}"
 
 # JQL text search filter to find Submariner component mentions
 readonly JQL_TEXT_FILTER="(text ~ submariner OR text ~ lighthouse OR text ~ subctl OR text ~ nettest)"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Phase 2: Filter and group release notes data
-# Input: /tmp/release-notes-data.json
-# Output: /tmp/release-notes-topics.json
+# Input: ${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}
+# Output: ${RELEASE_NOTES_TOPICS:-/tmp/release-notes-topics.json}
 set -euo pipefail
 
 # ============================================================================
@@ -14,8 +14,8 @@ LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
 # shellcheck source=../lib/release-notes-common.sh
 source "$LIB_DIR/release-notes-common.sh"
 
-INPUT_JSON="/tmp/release-notes-data.json"
-OUTPUT_JSON="/tmp/release-notes-topics.json"
+INPUT_JSON="${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}"
+OUTPUT_JSON="${RELEASE_NOTES_TOPICS:-/tmp/release-notes-topics.json}"
 
 if [[ ! -f "$INPUT_JSON" ]]; then
   echo "❌ ERROR: Input file not found: '$INPUT_JSON'" >&2

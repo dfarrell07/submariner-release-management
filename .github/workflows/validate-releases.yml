@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install yq
         run: |
@@ -22,8 +24,8 @@ jobs:
           sudo wget -qO /usr/bin/yq ${url}/yq_linux_amd64
           sudo chmod +x /usr/bin/yq
 
-      - name: Release CRD fields
-        run: make validate-fields
+      - name: Install Python tools
+        run: pip install gitlint yamllint
 
-      - name: Data formats
-        run: make validate-data
+      - name: Run unit tests
+        run: make test

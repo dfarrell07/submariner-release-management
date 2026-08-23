@@ -63,6 +63,8 @@ echo "" >&2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/parallel-jobs.sh
 source "$SCRIPT_DIR/lib/parallel-jobs.sh"
+# shellcheck source=lib/fbc-scope.sh
+source "$SCRIPT_DIR/lib/fbc-scope.sh"
 
 # ============================================================================
 # Step 1: Verify GitHub Catalog Consistency
@@ -74,7 +76,10 @@ declare -A BUNDLE_SHAS
 declare -a APPLICABLE_VERSIONS
 SKIPPED=0
 
-for VERSION in 14 15 16 17 18 19 20 21 22; do
+# Check all OCP versions that have ever been supported (including retired 4.14 and 4.15):
+# bundles that no longer exist return 404 and are skipped gracefully, so over-including
+# older versions is safe and prevents silently missing a catalog inconsistency.
+for VERSION in 14 15 $FBC_OCP_VERSIONS; do
   CATALOG_URL="https://raw.githubusercontent.com/stolostron/submariner-operator-fbc/main/catalog-4-${VERSION}/bundles/bundle-v${FULL_VERSION}.yaml"
 
   # Fetch bundle by HTTP status, not curl's -f exit code: -f collapses 404

@@ -72,6 +72,10 @@ TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
 
 banner "Add Release Notes for $VERSION"
 
+# Namespace temp files by version so concurrent releases don't corrupt each other.
+export RELEASE_NOTES_DATA="${RELEASE_NOTES_DATA:-/tmp/release-notes-${VERSION}-data.json}"
+export RELEASE_NOTES_TOPICS="${RELEASE_NOTES_TOPICS:-/tmp/release-notes-${VERSION}-topics.json}"
+
 # Phase 1: Collect raw data from Jira and existing releases
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Phase 1: Collect raw data"
@@ -82,7 +86,7 @@ else
   "$SCRIPT_DIR/release-notes/collect.sh" "$VERSION"
 fi
 
-if [[ ! -f /tmp/release-notes-data.json ]]; then
+if [[ ! -f "$RELEASE_NOTES_DATA" ]]; then
   echo "❌ ERROR: Phase 1 failed (no data file)" >&2
   exit 1
 fi
@@ -95,7 +99,7 @@ echo "Phase 2: Filter and group issues"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 "$SCRIPT_DIR/release-notes/prepare.sh"
 
-if [[ ! -f /tmp/release-notes-topics.json ]]; then
+if [[ ! -f "$RELEASE_NOTES_TOPICS" ]]; then
   echo "❌ ERROR: Phase 2 failed (no topics file)" >&2
   exit 1
 fi
@@ -111,13 +115,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Phase 4: Verify CVE fixes in Clair reports (if CVEs present)
-CVE_COUNT=$(jq -r '.cve_topics | length' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
+CVE_COUNT=$(jq -r '.cve_topics | length' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
 if [[ "$CVE_COUNT" -gt 0 ]]; then
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "Phase 4: Verify CVE fixes in snapshot images"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-  STAGE_YAML=$(jq -r '.metadata.stage_yaml' /tmp/release-notes-data.json)
+  STAGE_YAML=$(jq -r '.metadata.stage_yaml' "$RELEASE_NOTES_DATA")
   if ! "$SCRIPT_DIR/release-notes/verify-cve-fixes.sh" "$STAGE_YAML"; then
     echo ""
     echo "⚠️  Some CVEs are NOT actually fixed - see verification output above"
@@ -132,8 +136,8 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # plausible (a patch with no Jira coverage) but also the signature of an
 # untriaged Jira backlog — surface it prominently so the operator reviews
 # before pushing the commit.
-_notes_cve=$(jq -r '.cve_topics | length' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
-_notes_non=$(jq -r '.non_cve_topics | length' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
+_notes_cve=$(jq -r '.cve_topics | length' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
+_notes_non=$(jq -r '.non_cve_topics | length' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
 if [ "$_notes_cve" -eq 0 ] && [ "$_notes_non" -eq 0 ]; then
   echo "⚠️  WARNING: 0 Jira issues found for $VERSION — Jira may not be triaged yet."
   echo "   Review before pushing: make review-release-notes VERSION=$VERSION"
@@ -148,10 +152,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Record completion
 if [ -n "${TRACKER:-}" ]; then
-  local_cve_count=$(jq -r '.cve_topics | length' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
+  local_cve_count=$(jq -r '.cve_topics | length' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
   # Total issue count lives in topics.json statistics; data.json has no
   # total_issues key, so the old read here always recorded 0.
-  local_total=$(jq -r '(.statistics.cve_count + .statistics.non_cve_total)' /tmp/release-notes-topics.json 2>/dev/null || echo "0")
+  local_total=$(jq -r '(.statistics.cve_count + .statistics.non_cve_total)' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
   local_type=$( [ "$local_cve_count" -gt 0 ] && echo "RHSA" || echo "RHBA" )
   data=$(jq -n --arg type "$local_type" --arg total "$local_total" --arg cves "$local_cve_count" \
     '{advisoryType:$type,totalIssues:($total|tonumber),cveCount:($cves|tonumber)}' | jq -c .) || data="{}"

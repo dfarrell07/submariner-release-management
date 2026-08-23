@@ -229,6 +229,62 @@ misroute the bundle-SHA commit. Check out the release branch and re-run:
 
 # ━━━ STEP 1: QUERY SNAPSHOT AND EXTRACT SHAS ━━━
 
+# _parse_epoch DATE_STRING
+# Converts an ISO-8601/RFC-3339 date string to Unix epoch seconds.
+# Tries GNU date (-d) first, then BSD date (-j -f), returns 0 on any failure.
+# Redirect stderr: both variants print errors for strings they don't understand.
+_parse_epoch() {
+  date -d "$1" +%s 2>/dev/null || \
+  date -j -f "%Y-%m-%dT%H:%M:%SZ" "$1" +%s 2>/dev/null || \
+  echo 0
+}
+
+# _get_tag_creation_time REPO TAG
+# Returns the git tag's creation timestamp via GitHub API.
+# For annotated tags: tagger.date from the tag object (when the tag was signed/pushed).
+# For lightweight tags: committer.date from the tagged commit.
+# Returns empty on any failure (gh absent, no auth, tag not found, jq missing).
+_get_tag_creation_time() {
+  local repo="$1" tag="$2"
+  local ref_json obj_type obj_url
+  ref_json=$(gh api "repos/$repo/git/refs/tags/$tag" 2>/dev/null || true)
+  [ -z "$ref_json" ] && return
+  obj_type=$(echo "$ref_json" | jq -r '.object.type // empty' 2>/dev/null || true)
+  obj_url=$(echo "$ref_json" | jq -r '.object.url // empty' 2>/dev/null || true)
+  [ -z "$obj_url" ] && return
+  if [ "$obj_type" = "tag" ]; then
+    # Annotated tag: follow to the tag object for tagger.date
+    gh api "$obj_url" --jq '.tagger.date // empty' 2>/dev/null || true
+  else
+    # Lightweight tag: the object is the commit itself
+    gh api "$obj_url" --jq '.committer.date // empty' 2>/dev/null || true
+  fi
+}
+
+# _check_stale_snapshot SNAPSHOT CREATION_TIME
+# Warns (stderr) when the snapshot predates the upstream git tag creation.
+# Using git tag creation time — not GitHub release publishedAt — avoids false
+# positives on snapshots built between the tag push and release page publication.
+# Warn-only; callers continue regardless. Silently skips when gh is absent or
+# date parsing fails (both scenarios return 0, guard condition stays false).
+_check_stale_snapshot() {
+  local snapshot="$1" creation_time="$2"
+  local _tag_time _tag_ep _snap_ep
+  _tag_time=$(_get_tag_creation_time \
+    "submariner-io/submariner-operator" "v$TARGET_VERSION")
+  [ -z "$_tag_time" ] && return
+  _tag_ep=$(_parse_epoch "$_tag_time")
+  _snap_ep=$(_parse_epoch "$creation_time")
+  if [ "$_tag_ep" -gt 0 ] && [ "$_snap_ep" -gt 0 ] && [ "$_snap_ep" -lt "$_tag_ep" ]; then
+    local _lag=$(( (_tag_ep - _snap_ep) / 60 ))
+    echo "⚠  WARNING: snapshot predates release tag v$TARGET_VERSION by ~${_lag} min" >&2
+    echo "   Konflux typically rebuilds 30-90 min after a tag push." >&2
+    echo "   Snapshot: $snapshot (created $creation_time)" >&2
+    echo "   Tag created: $_tag_time" >&2
+    echo "   Wait for a newer snapshot or verify this one reflects the release commit." >&2
+  fi
+}
+
 find_snapshot() {
   echo "Querying Konflux snapshots..."
 
@@ -243,6 +299,9 @@ find_snapshot() {
       die "Snapshot not found: $SNAPSHOT"
     fi
     echo "Using specified snapshot: $SNAPSHOT (created $CREATION_TIME)"
+    # Stale guard applies on the --snapshot path too: an operator may pass a
+    # pre-tag snapshot name explicitly (e.g., in conductor-driven automation).
+    _check_stale_snapshot "$SNAPSHOT" "$CREATION_TIME"
   else
     # Get snapshot names only (avoids JSON corruption with large result sets)
     local SNAPSHOT_NAMES
@@ -281,6 +340,12 @@ find_snapshot() {
     CREATION_TIME=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null || true)
     [ -z "$CREATION_TIME" ] && die "Snapshot disappeared or oc error: $SNAPSHOT"
     echo "Using snapshot: $SNAPSHOT (created $CREATION_TIME)"
+
+    # Stale-snapshot guard: warn if snapshot predates the upstream git tag.
+    # GitHub tag push triggers Konflux rebuilds (typically 30-90 min later).
+    # Warn-only: operator may run before rebuild completes, or gh auth may be absent.
+    _check_stale_snapshot "$SNAPSHOT" "$CREATION_TIME"
+
     [ "$FALLBACK" = true ] && {
       echo "  ⚠️  WARNING: this snapshot's tests did NOT pass (no passing snapshot was found)."
       echo "     Verify its test/EC status in the Konflux UI before pushing the bundle."

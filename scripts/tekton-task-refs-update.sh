@@ -23,12 +23,23 @@ set -euo pipefail
 
 # Resolve script location before any cd so lib paths work from any clone location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Capture the lib dir before sourcing: jira-tracker.sh (line 22) unconditionally
+# resets SCRIPT_DIR to its own directory (scripts/lib/). Using _LIB_DIR for all
+# subsequent lib sources prevents that contamination from corrupting our paths.
+_LIB_DIR="$SCRIPT_DIR/lib"
+
+# Source jira-tracker.sh early to provide FBC_REPO_DEFAULT before we assign
+# FBC_REPO_PATH below. The include guard makes the later tracker-integration
+# source inside main() a no-op.
+# shellcheck source=lib/jira-tracker.sh
+source "$_LIB_DIR/jira-tracker.sh" 2>/dev/null || true
 
 # ━━━ CONSTANTS ━━━
 
 readonly SUBMARINER_BASE="$HOME/go/src/submariner-io"
-# FBC lives outside the upstream Go tree (see fbc-catalog-update.sh)
-readonly FBC_REPO_PATH="$HOME/konflux/submariner-operator-fbc"
+# FBC lives outside the upstream Go tree (see fbc-catalog-update.sh).
+# FBC_REPO_DEFAULT is the canonical path defined once in lib/jira-tracker.sh.
+readonly FBC_REPO_PATH="${FBC_REPO:-$FBC_REPO_DEFAULT}"
 
 # Ordered repo list. Component repos live under $SUBMARINER_BASE and bump on
 # release-<mm>; the FBC repo lives elsewhere and bumps on main (see repo_path /
@@ -355,14 +366,14 @@ main() {
   # Download + verify the pipeline-patcher once (shared helper: pinned SHA +
   # checksum). Reused per-repo in update_repo.
   # shellcheck source=/dev/null
-  source "$SCRIPT_DIR/lib/pipeline-patcher.sh"
+  source "$_LIB_DIR/pipeline-patcher.sh"
   PATCHER_SCRIPT=$(download_and_verify_patcher) || \
     die "Failed to download/verify pipeline-patcher" \
       "Check network connectivity and GitHub access"
   echo "✓ Pipeline-patcher checksum verified"
 
   # Tracker integration
-  TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
+  TRACKER_LIB="${TRACKER_LIB:-$_LIB_DIR/jira-tracker.sh}"
   # shellcheck source=/dev/null
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
   TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)

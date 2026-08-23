@@ -2,6 +2,9 @@
 
 **When:** After creating stage release (Step 8)
 
+> **Automated:** `/autorelease` handles this step automatically. Follow the manual
+> steps below only if debugging or running without the conductor.
+
 ## Process
 
 Automated workflow: query Jira, filter, auto-apply, verify CVEs,

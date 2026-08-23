@@ -25,7 +25,7 @@ Requires a Jira release tracker. Run `/create-release-tracker` first if one does
 /autorelease 0.25.1 --close                # after the release has shipped
 ```
 
-**Requires:** `acli jira auth login --web`, `jq`, `gh`
+**Requires:** `acli jira auth login --web`, `jq`, `gh`, `oc` (logged in for verifier steps), `skopeo` (for auto-close registry probes)
 
 **Arguments:** $ARGUMENTS
 
@@ -44,5 +44,6 @@ if [ ! -x "$GIT_ROOT/scripts/autorelease.sh" ]; then
   echo "This skill requires: scripts/autorelease.sh" >&2
   exit 1
 fi
-exec "$GIT_ROOT/scripts/autorelease.sh" $ARGUMENTS
+IFS=" " read -ra _args <<< "$ARGUMENTS"
+exec "$GIT_ROOT/scripts/autorelease.sh" "${_args[@]}"
 ```
