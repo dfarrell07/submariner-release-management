@@ -36,6 +36,26 @@ source "$SCRIPT_DIR/fbc-scope.sh"
 # FBC_REPO_DEFAULT env var (e.g. in tests or when the repo lives elsewhere).
 readonly FBC_REPO_DEFAULT="${FBC_REPO_DEFAULT:-$HOME/konflux/submariner-operator-fbc}"
 
+# Maximum seconds any single acli network call is allowed to run before being
+# killed. A silent TCP drop would otherwise cause an indefinite hang on any
+# acli invocation. Override via ACLI_TIMEOUT env var (e.g. ACLI_TIMEOUT=60
+# on slow networks). timeout exits 124 on expiry; the || return $? / || { … }
+# guards already present at every call site propagate that code to callers.
+readonly ACLI_TIMEOUT="${ACLI_TIMEOUT:-30}"
+
+# Thin wrapper that applies ACLI_TIMEOUT to every acli network call.
+# Uses GNU timeout(1) when acli resolves to an external binary (production),
+# and falls back to a direct call when acli is a shell function (test mocks) —
+# timeout(1) uses exec and cannot invoke shell functions, so the direct path
+# keeps all existing test mocks working without modification.
+_acli() {
+  if [[ "$(type -t acli 2>/dev/null)" == "function" ]]; then
+    acli "$@"
+  else
+    timeout "${ACLI_TIMEOUT}" acli "$@"
+  fi
+}
+
 # ============================================================================
 # Step Metadata (per-step co-located layout)
 # ============================================================================
@@ -342,7 +362,7 @@ _transition_issue() {
   local status="$2"
 
   # Try the transition directly — Jira auto-sets resolution for most workflows
-  acli jira workitem transition --key "$key" --status "$status" --yes </dev/null 2>/dev/null
+  _acli jira workitem transition --key "$key" --status "$status" --yes </dev/null 2>/dev/null
 }
 
 # Write a structured comment on a Jira issue
@@ -356,7 +376,7 @@ _add_comment() {
   printf '%s\n' "$body" > "$body_file"
 
   local result=0
-  acli jira workitem comment create --key "$key" --body-file "$body_file" </dev/null 2>/dev/null || result=$?
+  _acli jira workitem comment create --key "$key" --body-file "$body_file" </dev/null 2>/dev/null || result=$?
 
   rm -f "$body_file"
   return "$result"
@@ -693,7 +713,7 @@ create_release_tracker() {
     echo "[DRY RUN] Would create: Task 'Release Submariner $version'" >&2
     parent_key="ACM-DRY-RUN"
   else
-    parent_output=$(acli jira workitem create \
+    parent_output=$(_acli jira workitem create \
       --project ACM \
       --type Task \
       --summary "Release Submariner $version" \
@@ -759,7 +779,7 @@ create_release_tracker() {
       subtask_count=$((subtask_count + 1))
     else
       local sub_output
-      if sub_output=$(acli jira workitem create "${create_args[@]}" </dev/null 2>/dev/null); then
+      if sub_output=$(_acli jira workitem create "${create_args[@]}" </dev/null 2>/dev/null); then
         local sub_key
         sub_key=$(echo "$sub_output" | jq -r '.key // empty' 2>/dev/null) || sub_key=""
         echo "  ✓ $title ($sub_key)" >&2
@@ -892,7 +912,7 @@ $step_json
 # rejects it exactly as before. Args: $1=parent_key.
 _fetch_tracker_comments() {
   local raw
-  raw=$(acli jira workitem comment list --key "$1" --json --paginate </dev/null 2>/dev/null) || return $?
+  raw=$(_acli jira workitem comment list --key "$1" --json --paginate </dev/null 2>/dev/null) || return $?
   [ -z "$raw" ] && return 0
   printf '%s' "$raw" | jq -s '[ .[] |
     if type == "object" and (.comments | type) == "array" then .comments[]
@@ -1130,7 +1150,7 @@ _update_subtask_description_impl() {
   desc_file=$(mktemp)
   printf '%s\n' "$content" > "$desc_file"
 
-  acli jira workitem edit --key "$subtask_key" --description-file "$desc_file" --yes </dev/null 2>/dev/null || {
+  _acli jira workitem edit --key "$subtask_key" --description-file "$desc_file" --yes </dev/null 2>/dev/null || {
     echo "⚠️  Failed to update description for $step_key ($subtask_key)" >&2
   }
 
