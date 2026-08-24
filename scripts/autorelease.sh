@@ -1184,8 +1184,7 @@ _print_step_hint() {
   else
     echo "→ ${STEP_TITLES[$step]:-$step}" >&2
   fi
-  local _hint="${STEP_SKILL_HINT[$step]:-Complete this step manually}"
-  echo "  $_hint" >&2
+  echo "  ${STEP_SKILL_HINT[$step]:-Complete this step manually}" >&2
   # Verifier-backed steps can be re-detected on the next run; --complete is the
   # manual escape. Steps without verifiers ONLY advance via --complete.
   if [ -n "${STEP_VERIFIER[$step]:-}" ]; then
