@@ -156,7 +156,7 @@ query_jira() {
   local OUTPUT
 
   for ATTEMPT in 1 2; do
-    if OUTPUT=$(acli jira workitem search "$@" --paginate --json </dev/null); then
+    if OUTPUT=$(timeout "${ACLI_TIMEOUT:-30}" acli jira workitem search "$@" --paginate --json </dev/null); then
       echo "$OUTPUT"
       return 0
     fi
@@ -184,7 +184,7 @@ view_jira() {
   local OUTPUT
 
   for ATTEMPT in 1 2; do
-    if OUTPUT=$(acli jira workitem view "$ISSUE_KEY" "$@" --json </dev/null); then
+    if OUTPUT=$(timeout "${ACLI_TIMEOUT:-30}" acli jira workitem view "$ISSUE_KEY" "$@" --json </dev/null); then
       echo "$OUTPUT"
       return 0
     fi

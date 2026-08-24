@@ -958,7 +958,11 @@ get_step() {
   _validate_version "$version" || return 0
 
   if [ -z "$parent_key" ]; then
-    parent_key=$(find_release_tracker "$version") || true
+    local find_rc=0
+    parent_key=$(find_release_tracker "$version") || find_rc=$?
+    if [ "$find_rc" -eq 2 ]; then
+      return 2
+    fi
     [ -z "$parent_key" ] && return 0
   fi
 
@@ -1311,7 +1315,7 @@ $step_json
 
   # Resolve all still-open subtasks (any not already Resolved)
   local subtasks
-  subtasks=$(query_jira --jql "parent = $parent_key AND status != Resolved" --fields "key,summary" 2>/dev/null) || true
+  subtasks=$(query_jira --jql "parent = $parent_key AND status != $JIRA_STATUS_RESOLVED" --fields "key,summary" 2>/dev/null) || true
 
   if [ -n "$subtasks" ]; then
     local keys

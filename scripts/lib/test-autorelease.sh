@@ -1097,6 +1097,43 @@ eval "$_orig_verify_upstream"
 eval "$_orig_update_step_h"
 unset _cond_rc _cond_err _update_calls_h
 
+# I: NOFETCH + step_statuses[$step]='complete' prevents false GATE stop on
+# Jira propagation delay. When try_auto_verify returns 0 (verified), the fix
+# sets step_statuses[$step]='complete' AND _AUTORELEASE_NOFETCH=1 before
+# continue. On the next iteration, find_next_step skips the Jira fetch (NOFETCH)
+# so the in-memory 'complete' entry survives, and the conductor does NOT stop
+# with a GATE message for that step.
+#
+# This test simulates: a z-stream run where upstreamRelease is the next gate
+# step, its verifier confirms it 'complete', and on re-walk the conductor must
+# advance past it (not re-issue a GATE stop) even though Jira fetch is skipped.
+_orig_verify_upstream_i=$(declare -f verify_upstreamRelease)
+_orig_update_step_i=$(declare -f update_step)
+update_step() { :; }
+verify_upstreamRelease() { echo '{"tag":"v0.99.1"}'; return 0; }
+
+declare -A step_statuses=([rpmLockfiles]=complete [versionLabels]=complete \
+  [tektonTasks]=complete [cveFixes]=complete [ecFixes]=complete)
+declare -A verified_steps=()
+AUTORELEASE_PUSH_LOG=$(mktemp)
+ran_pr_step=""; ran_release_yaml_step=""; ran_direct_push_step=""
+VERSION="0.99.1"; RELEASE_TYPE="z-stream"; TRACKER="FAKE-123"
+_AUTORELEASE_NOFETCH=1  # pre-freeze so re-walks stay in-memory
+
+_cond_i_err=$(run_conductor 2>&1) || true
+rm -f "$AUTORELEASE_PUSH_LOG"
+
+assert_eq "NOFETCH-complete: no false GATE stop for verified gate step" \
+  "$(printf '%s' "$_cond_i_err" | (grep -c "GATE" || true))" "0"
+assert_eq "NOFETCH-complete: no 'Cannot verify' for already-complete step" \
+  "$(printf '%s' "$_cond_i_err" | (grep -c "Cannot verify" || true))" "0"
+
+# Restore
+eval "$_orig_verify_upstream_i"
+eval "$_orig_update_step_i"
+_AUTORELEASE_NOFETCH=""
+unset _cond_i_err
+
 echo ""
 echo "=== find_next_step Fetch/Parse Tests (real Jira read path) ==="
 

@@ -345,14 +345,16 @@ main() {
     done
   fi
 
+  print_summary
+
+  # update_step is called AFTER print_summary so that a push-log write failure
+  # (inside print_summary) leaves the tracker at 'in_progress' rather than 'complete'.
   if [ -n "${TRACKER:-}" ] && [ "$COMPONENT_FILTER" = "all" ] && \
      [ "${#REPOS_FAILED[@]}" -eq 0 ] && [ "$problem_skips" -eq 0 ]; then
     local data
     data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" '{reposUpdated:($count|tonumber)}' | jq -c .) || data="{}"
     update_step "$VERSION" "rpmLockfiles" "complete" "$data" "$TRACKER"
   fi
-
-  print_summary
 }
 
 main "$@"

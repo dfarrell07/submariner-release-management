@@ -84,7 +84,6 @@ TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
 # shellcheck source=/dev/null
 [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
 TRACKER=$(find_release_tracker "$INPUT_VERSION" 2>/dev/null || true)
-[ -n "${TRACKER:-}" ] && update_step "$INPUT_VERSION" "configureDownstream" "in_progress" '{}' "$TRACKER"
 
 # Extract major.minor (0.23.1 → 0.23)
 MAJOR_MINOR=$(echo "$INPUT_VERSION" | grep -oE '^[0-9]+\.[0-9]+')
@@ -93,13 +92,15 @@ NEW_MINOR=$(echo "$MAJOR_MINOR" | cut -d. -f2)
 # Convert to hyphenated format (NEW version)
 NEW="0-${NEW_MINOR}"
 
-# Check if version already exists
+# Check if version already exists (before marking in_progress to avoid stuck tracker state)
 OVERLAY_DIR="$HOME/konflux/konflux-release-data/tenants-config/cluster/kflux-prd-rh02/tenants/submariner-tenant/overlay/application-submariner"
 if [ -d "${OVERLAY_DIR}/${NEW}-overlay" ]; then
   echo "❌ Error: Version ${MAJOR_MINOR} already configured"
   echo "   Overlay directory exists: ${NEW}-overlay"
   exit 1
 fi
+
+[ -n "${TRACKER:-}" ] && update_step "$INPUT_VERSION" "configureDownstream" "in_progress" '{}' "$TRACKER"
 
 # Find all existing overlays and extract minor versions
 EXISTING_VERSIONS=$(find "${OVERLAY_DIR}" -maxdepth 1 -name '[0-9]*-overlay' -printf '%f\n' 2>/dev/null | \

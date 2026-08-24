@@ -1234,6 +1234,8 @@ run_conductor() {
         # Capture exit code to distinguish: 0=verified, 1=not done, 2=precondition failure.
         _tav_rc=0; try_auto_verify "$NEXT_STEP" || _tav_rc=$?
         if [ "$_tav_rc" -eq 0 ]; then
+          step_statuses[$NEXT_STEP]='complete'
+          _AUTORELEASE_NOFETCH=1
           continue
         fi
         if [ "$_tav_rc" -eq 2 ]; then
