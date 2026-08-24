@@ -207,11 +207,14 @@ verify_release() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     local STAGE_DIR OCP_VERSION STAGE_YAML SNAPSHOT COUNT=0
+    local VERSION_DASH="${VERSION//./-}"
     for STAGE_DIR in "$GIT_ROOT"/releases/fbc/4-*/stage; do
       [ -d "$STAGE_DIR" ] || continue
       OCP_VERSION=$(basename "$(dirname "$STAGE_DIR")")  # 4-XX
-      # Latest stage YAML for this OCP version (mirrors the manual `cp ... tail -1`)
-      STAGE_YAML=$(find "$STAGE_DIR" -name "submariner-fbc-${OCP_VERSION}-stage-*.yaml" -type f | sort | tail -1)
+      # Latest stage YAML for this version and OCP version — filtering by VERSION_DASH
+      # prevents silently picking up a stage YAML from a prior Z-stream cycle when
+      # multiple releases have accumulated in the same per-OCP directory.
+      STAGE_YAML=$(find "$STAGE_DIR" -name "submariner-fbc-${OCP_VERSION}-${VERSION_DASH}-stage-*.yaml" -type f | sort | tail -1)
       [ -z "$STAGE_YAML" ] && continue
       # `|| true`: a corrupted/hand-edited stage YAML with no `snapshot:` line
       # makes grep exit non-zero, which (with pipefail) would abort under set -e
@@ -325,7 +328,7 @@ generate_yamls() {
     # set -e a bare `VAR=$(cmd)` on its own line aborts the script on cmd
     # failure before the `if` handler runs, swallowing the diagnostic below.
     local YAML_FILE GENERATE_EXIT=0
-    YAML_FILE=$("$SCRIPTS_DIR/generate-fbc-release.sh" "$OCP_VERSION" "$SNAPSHOT" "$RELEASE_TYPE" "$RELEASE_DATE") || GENERATE_EXIT=$?
+    YAML_FILE=$("$SCRIPTS_DIR/generate-fbc-release.sh" "$OCP_VERSION" "$VERSION" "$SNAPSHOT" "$RELEASE_TYPE" "$RELEASE_DATE") || GENERATE_EXIT=$?
 
     if [ "$GENERATE_EXIT" -ne 0 ]; then
       echo "❌ Failed to generate YAML for ${OCP_VERSION}"

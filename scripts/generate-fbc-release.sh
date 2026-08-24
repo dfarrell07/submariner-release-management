@@ -1,10 +1,11 @@
 #!/bin/bash
 # Generate single FBC Release YAML
 #
-# Usage: generate-fbc-release.sh <ocp-version> <snapshot-name> <release-type> <release-date>
+# Usage: generate-fbc-release.sh <ocp-version> <version> <snapshot-name> <release-type> <release-date>
 #
 # Arguments:
 #   ocp-version:    OCP version (e.g., 4-18)
+#   version:        Submariner version (e.g., 0.22.2)
 #   snapshot-name:  Snapshot name (e.g., submariner-fbc-4-18-abc123)
 #   release-type:   stage or prod
 #   release-date:   Release date in YYYYMMDD format
@@ -17,17 +18,19 @@
 set -euo pipefail
 
 # Validate arguments
-if [ $# -ne 4 ]; then
+if [ $# -ne 5 ]; then
   echo "❌ ERROR: Invalid number of arguments" >&2
-  echo "Usage: $0 <ocp-version> <snapshot-name> <release-type> <release-date>" >&2
-  echo "Example: $0 4-18 submariner-fbc-4-18-abc123 stage 20260303" >&2
+  echo "Usage: $0 <ocp-version> <version> <snapshot-name> <release-type> <release-date>" >&2
+  echo "Example: $0 4-18 0.22.2 submariner-fbc-4-18-abc123 stage 20260303" >&2
   exit 1
 fi
 
 OCP_VERSION="$1"
-SNAPSHOT="$2"
-RELEASE_TYPE="$3"
-RELEASE_DATE="$4"
+VERSION="$2"
+SNAPSHOT="$3"
+RELEASE_TYPE="$4"
+RELEASE_DATE="$5"
+VERSION_DASH="${VERSION//./-}"
 
 # Validate OCP version format. Regex is deliberately permissive (4-14 through
 # 4-29) so add-fbc-ocp-version can introduce new OCP versions without editing
@@ -75,12 +78,12 @@ mkdir -p "$OUTPUT_DIR" || {
 
 # Determine sequence number (check for existing files)
 SEQUENCE=1
-while [ -f "${OUTPUT_DIR}/submariner-fbc-${OCP_VERSION}-${RELEASE_TYPE}-${RELEASE_DATE}-$(printf '%02d' $SEQUENCE).yaml" ]; do
+while [ -f "${OUTPUT_DIR}/submariner-fbc-${OCP_VERSION}-${VERSION_DASH}-${RELEASE_TYPE}-${RELEASE_DATE}-$(printf '%02d' $SEQUENCE).yaml" ]; do
   ((SEQUENCE++))
 done
 
 # Generate filename
-FILENAME="submariner-fbc-${OCP_VERSION}-${RELEASE_TYPE}-${RELEASE_DATE}-$(printf '%02d' $SEQUENCE).yaml"
+FILENAME="submariner-fbc-${OCP_VERSION}-${VERSION_DASH}-${RELEASE_TYPE}-${RELEASE_DATE}-$(printf '%02d' $SEQUENCE).yaml"
 OUTPUT_FILE="${OUTPUT_DIR}/${FILENAME}"
 
 # Generate YAML content
@@ -89,7 +92,7 @@ cat > "$OUTPUT_FILE" <<EOF
 apiVersion: appstudio.redhat.com/v1alpha1
 kind: Release
 metadata:
-  name: submariner-fbc-${OCP_VERSION}-${RELEASE_TYPE}-${RELEASE_DATE}-$(printf '%02d' $SEQUENCE)
+  name: submariner-fbc-${OCP_VERSION}-${VERSION_DASH}-${RELEASE_TYPE}-${RELEASE_DATE}-$(printf '%02d' $SEQUENCE)
   namespace: submariner-tenant
   labels:
     release.appstudio.openshift.io/author: 'dfarrell07'

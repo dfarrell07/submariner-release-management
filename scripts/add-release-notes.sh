@@ -126,6 +126,9 @@ if [[ "$CVE_COUNT" -gt 0 ]]; then
     echo ""
     echo "⚠️  Some CVEs are NOT actually fixed - see verification output above"
     echo "Remove unfixed CVEs from commit: git commit --amend"
+    [ -n "${AUTORELEASE_PUSH_LOG:-}" ] && \
+      printf '  # WARNING: CVE verification failed — amend before pushing: git commit --amend\n' \
+        >> "$AUTORELEASE_PUSH_LOG"
   fi
   echo ""
 fi
