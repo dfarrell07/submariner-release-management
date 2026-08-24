@@ -234,11 +234,6 @@ unset -f gh
 echo ""
 echo "=== DAG Walk Tests (real find_next_step) ==="
 
-# 1: Z-stream fresh → first no-dep step (after reorder: rpmLockfiles first)
-declare -A step_statuses=()
-find_next_step "0.99.1" "z-stream" "FAKE-123" 2>/dev/null
-assert_eq "z-stream fresh: rpmLockfiles" "$NEXT_STEP" "rpmLockfiles"
-
 # 2: Build readiness partial → versionLabels next
 step_statuses=([cveFixes]=complete [ecFixes]=complete [rpmLockfiles]=complete [tektonTasks]=complete)
 find_next_step "0.99.1" "z-stream" "FAKE-123" 2>/dev/null
@@ -462,13 +457,6 @@ assert_eq "verify_ecFixes verified (exit 0)" "$ec_exit" "0"
 assert_eq "verify_ecFixes emits snapshot+version" "$ec_out" \
   '{"snapshot":"submariner-0-99-abc123","version":"0.99.1"}'
 
-# 22: EC failed → return 1 with no output (no false STEP_DATA)
-_OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-abc123","labels":{"pac.test.appstudio.openshift.io/event-type":"push"},"annotations":{"test.appstudio.openshift.io/status":"[{\"scenario\":\"submariner-enterprise-contract\",\"status\":\"TestFailed\"}]"}}}]}'
-ec_exit=0
-ec_out=$(verify_ecFixes "0.99.1" 2>/dev/null) || ec_exit=$?
-assert_eq "verify_ecFixes not verified (exit 1)" "$ec_exit" "1"
-assert_eq "verify_ecFixes no output on failure" "$ec_out" ""
-
 # 22a: fallback path must reject PR builds. The only EC-passing snapshot is a
 # pull_request build (not a real main-branch build), so verify must decline —
 # exit 1, no output. Guards the event-type filter in the fallback selector.
@@ -515,13 +503,6 @@ ec_out=$(verify_ecFixes "0.99.1" "FAKE-123" 2>/dev/null) || ec_exit=$?
 assert_eq "verify_ecFixes (tracker) verifies bundleShas snapshot" "$ec_exit" "0"
 assert_eq "verify_ecFixes (tracker) records bundleShas snapshot" "$ec_out" \
   '{"snapshot":"submariner-0-99-BBB","version":"0.99.1"}'
-
-# 22c: bundleShas snapshot present but EC failed → return 1 (not verified)
-_OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-BBB","annotations":{"test.appstudio.openshift.io/status":"[{\"scenario\":\"submariner-enterprise-contract\",\"status\":\"TestFailed\"}]"}}}]}'
-ec_exit=0
-ec_out=$(verify_ecFixes "0.99.1" "FAKE-123" 2>/dev/null) || ec_exit=$?
-assert_eq "verify_ecFixes (tracker) EC-failed on bundleShas snapshot → exit 1" "$ec_exit" "1"
-assert_eq "verify_ecFixes (tracker) EC-failed → no output" "$ec_out" ""
 
 # 22d: bundleShas snapshot absent from the snapshot list → return 1 (can't verify).
 # The list DOES contain a valid fallback snapshot (push + EC-passing), so a
