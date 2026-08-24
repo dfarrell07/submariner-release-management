@@ -1071,7 +1071,11 @@ check_freshness() {
       # Time-based staleness (e.g., 3d, 75d)
       local days="${rule%d}"
       local step_epoch now_epoch age_secs max_secs
-      step_epoch=$(date -d "$step_timestamp" +%s 2>/dev/null || echo 0)
+      if ! step_epoch=$(date -d "$step_timestamp" +%s 2>/dev/null); then
+        echo "Cannot parse step timestamp '$step_timestamp'; treating as fresh" >&2
+        echo "fresh"
+        return 0
+      fi
       now_epoch=$(date +%s 2>/dev/null || echo 0)
       age_secs=$((now_epoch - step_epoch))
       max_secs=$((days * 86400))

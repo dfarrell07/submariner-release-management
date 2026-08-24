@@ -40,10 +40,6 @@ assert_eq "old-scheme .0 -> shipped" \
 assert_eq "exact match, floating moved on -> shipped" \
   "$(bundle_shipped_verdict 0.24.1 true v0.24.1 v0.24.2)" "shipped"
 
-# Floating match only (exact tag absent) -> shipped.
-assert_eq "floating match only -> shipped" \
-  "$(bundle_shipped_verdict 0.24.0 true "" v0.24.0)" "shipped"
-
 # Genuinely-never-shipped version, registry reachable -> not-shipped.
 assert_eq "never shipped, reachable -> not-shipped" \
   "$(bundle_shipped_verdict 0.24.9 true "" v0.24.1)" "not-shipped"

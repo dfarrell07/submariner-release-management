@@ -601,19 +601,27 @@ verify_createBranches() {
 
 verify_upstreamRelease() {
   local version="$1"
-  local ls_out ls_rc=0
-  ls_out=$(_git_ls_remote --tags "https://github.com/submariner-io/submariner-operator" "refs/tags/v$version" 2>/dev/null) || ls_rc=$?
-  if [ "$ls_rc" -ne 0 ]; then
-    echo "  ls-remote failed (exit $ls_rc) — network, rate-limit, or timeout issue" >&2
-    return 2
-  fi
-  if ! echo "$ls_out" | grep -q "refs/tags/v$version"; then
-    echo "  v$version tag not found on submariner-io/submariner-operator" >&2
-    return 1
-  fi
-  local sha
-  sha=$(echo "$ls_out" | awk 'NR==1{print $1}')
-  jq -cn --arg tag "v$version" --arg sha "$sha" '{tag:$tag,operatorSha:$sha}'
+  # Check only the 5 repos that receive v$VERSION tags per cut-upstream-release.md:
+  # submariner-operator (checked separately in step 3 of the workflow), plus the 4
+  # repos verified in step 4 of the workflow.  Excludes admiral and cloud-prepare
+  # (library repos present in SUBMARINER_UPSTREAM_REPOS that do not produce
+  # deliverable images) and submariner-charts (an installer/charts repo).
+  local component_repos="submariner-operator submariner lighthouse shipyard subctl"
+  local operator_sha=""
+  for repo in $component_repos; do
+    local ls_out ls_rc=0
+    ls_out=$(_git_ls_remote --tags "https://github.com/submariner-io/$repo" "refs/tags/v$version" 2>/dev/null) || ls_rc=$?
+    if [ "$ls_rc" -ne 0 ]; then
+      echo "  ls-remote failed (exit $ls_rc) — network, rate-limit, or timeout issue for submariner-io/$repo" >&2
+      return 2
+    fi
+    if ! echo "$ls_out" | grep -q "refs/tags/v$version"; then
+      echo "  v$version tag not found on submariner-io/$repo" >&2
+      return 1
+    fi
+    [ "$repo" = "submariner-operator" ] && operator_sha=$(echo "$ls_out" | awk 'NR==1{print $1}')
+  done
+  jq -cn --arg tag "v$version" --arg sha "$operator_sha" '{tag:$tag,operatorSha:$sha}'
 }
 
 # Extract EC test status from a single snapshot object (stdin).
@@ -979,7 +987,7 @@ run_dry_run() {
           local _vdesc
           case "$NEXT_STEP" in
             createBranches)  _vdesc="release-${VERSION%.*} branches exist on all upstream repos" ;;
-            upstreamRelease) _vdesc="v$VERSION tag exists on submariner-operator" ;;
+            upstreamRelease) _vdesc="v$VERSION tag exists on all upstream component repos (submariner-operator, submariner, lighthouse, shipyard, subctl)" ;;
             ecFixes)         _vdesc="EC passes on Konflux snapshot" ;;
             *)               _vdesc="${STEP_VERIFIER[$NEXT_STEP]}" ;;
           esac

@@ -850,8 +850,6 @@ done
 assert_eq "dispatch: mixed run sets ran_pr_step" "$ran_pr_step" "1"
 assert_eq "dispatch: mixed run sets ran_release_yaml_step" "$ran_release_yaml_step" "1"
 assert_eq "dispatch: mixed run sets ran_direct_push_step" "$ran_direct_push_step" "1"
-assert_eq "dispatch: no-growth step is a safe no-op (guard held, no abort)" \
-  "$ran_pr_step$ran_release_yaml_step$ran_direct_push_step" "111"
 
 # print_pending_trailer: multiple block types can occur in one run, so multiple
 # lines may print. 4-arg form adds direct-push trailer.
@@ -1272,12 +1270,12 @@ assert_not_contains "dry-run fresh z: no conditional stop (no gate crossed)" "$d
 step_statuses=([rpmLockfiles]=complete [versionLabels]=complete [tektonTasks]=complete [cveFixes]=complete [ecFixes]=complete)
 midout=$(run_dry_run 2>&1)
 assert_contains "dry-run mid: upstreamRelease conditional gate" "$midout" \
-  "gate · auto-verifies: v0.99.1 tag exists on submariner-operator (verify_upstreamRelease;"
+  "gate · auto-verifies: v0.99.1 tag exists on all upstream component repos (submariner-operator, submariner, lighthouse, shipyard, subctl) (verify_upstreamRelease;"
 assert_contains "dry-run mid: chains to bundleShas"   "$midout" "run: scripts/bundle-image-update.sh 0.99.1"
 assert_not_contains "dry-run mid: stops at bundleShas, componentStage NOT reached" "$midout" \
   "run: scripts/create-component-release.sh 0.99.1 stage"
 assert_contains "dry-run mid: conditional stop line" "$midout" \
-  "Earliest possible stop: Cut upstream release (verifier: v0.99.1 tag exists on submariner-operator)"
+  "Earliest possible stop: Cut upstream release (verifier: v0.99.1 tag exists on all upstream component repos"
 assert_contains "dry-run mid: stops at bundleShas (review)" "$midout" \
   "Otherwise stops at: Update bundle SHAs — runs the script then pauses for review — re-run /autorelease 0.99.1 to execute"
 
@@ -1376,7 +1374,7 @@ result=$(
 )
 assert_eq "dry-run freeze: exactly one fetch (rest walk in memory)" "$(wc -l <"$_FETCH_SPY")" "1"
 assert_contains "dry-run freeze: fetched state drives the walk" "$result" \
-  "auto-verifies: v0.99.1 tag exists on submariner-operator"
+  "auto-verifies: v0.99.1 tag exists on all upstream component repos"
 rm -f "$_FETCH_SPY"
 
 # DR-8: a bad Jira read refuses the dry run too (find_next_step's own exit 1),
