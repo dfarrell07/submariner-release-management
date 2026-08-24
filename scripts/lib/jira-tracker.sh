@@ -831,11 +831,16 @@ _update_step_impl() {
 
   # Find tracker if not provided
   if [ -z "$parent_key" ]; then
-    parent_key=$(find_release_tracker "$version") || true
-    [ -z "$parent_key" ] && {
+    local _tracker_rc=0
+    parent_key=$(find_release_tracker "$version") || _tracker_rc=$?
+    if [ "$_tracker_rc" -eq 2 ]; then
+      echo "⚠️  update_step: Jira query failed (network/auth) for $version — step not recorded" >&2
+      return 0
+    fi
+    if [ -z "$parent_key" ]; then
       echo "⚠️  No tracker found for $version (run /create-release-tracker $version)" >&2
       return 0
-    }
+    fi
   fi
 
   local title="${STEP_TITLES[$step_key]:-$step_key}"
