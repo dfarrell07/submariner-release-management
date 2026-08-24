@@ -330,7 +330,7 @@ _find_subtask() {
   fi
 
   local result
-  result=$(query_jira --jql "parent = $parent_key AND summary ~ \"$title\"" --fields "key" 2>/dev/null) || return 1
+  result=$(query_jira --jql "parent = $parent_key AND summary = \"$title\"" --fields "key" 2>/dev/null) || return 1
 
   echo "$result" | jq -r '.[0].key // empty' 2>/dev/null
 }

@@ -648,8 +648,8 @@ print_summary() {
   echo "  3. Wait for bundle rebuild (~15-30 min)"
   echo "  4. Verify: oc get snapshots -n submariner-tenant | grep submariner-bundle-${VERSION_DASH}"
   echo ""
-  # Append to push summary if conductor is running
-  if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
+  # Append to push summary if conductor is running and a commit was actually created
+  if [ "$COMMIT_CREATED" = true ] && [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
     printf '\n  cd %s\n  git push origin %s\n' \
       "$OPERATOR_REPO" "$BRANCH" \
       >> "$AUTORELEASE_PUSH_LOG"
