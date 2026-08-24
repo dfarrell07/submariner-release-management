@@ -72,8 +72,8 @@ prod_bundle_shipped() {
   local exact_json floating_json exact_rc floating_rc reachable=false
   local exact_lbl="" floating_lbl=""
 
-  exact_json=$(skopeo inspect "docker://${PROD_BUNDLE_REGISTRY}:v${version}" 2>/dev/null) && exact_rc=0 || exact_rc=$?
-  floating_json=$(skopeo inspect "docker://${PROD_BUNDLE_REGISTRY}:v${mm}" 2>/dev/null) && floating_rc=0 || floating_rc=$?
+  exact_json=$(timeout 30 skopeo inspect "docker://${PROD_BUNDLE_REGISTRY}:v${version}" 2>/dev/null) && exact_rc=0 || exact_rc=$?
+  floating_json=$(timeout 30 skopeo inspect "docker://${PROD_BUNDLE_REGISTRY}:v${mm}" 2>/dev/null) && floating_rc=0 || floating_rc=$?
 
   if [ "$exact_rc" -eq 0 ]; then
     reachable=true
@@ -138,7 +138,7 @@ prod_index_has_bundle() {
   local image="${PROD_INDEX_REGISTRY}:v4.${ocp}"
   local dir verdict
   dir=$(mktemp -d) || { echo unreachable; return 0; }
-  if oc image extract "$image" --path "/configs/submariner/bundles/:$dir/" --confirm >/dev/null 2>&1; then
+  if timeout 120 oc image extract "$image" --path "/configs/submariner/bundles/:$dir/" --confirm >/dev/null 2>&1; then
     [ "$(index_lists_bundle "$dir" "$version")" = yes ] && verdict=present || verdict=absent
   else
     verdict=unreachable

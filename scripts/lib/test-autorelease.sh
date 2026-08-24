@@ -594,10 +594,12 @@ assert_contains "verify_ecFixes not logged in → stderr mentions login" "$ec_di
 [ -n "$_orig_oc" ] && eval "$_orig_oc" || unset -f oc
 
 # 23/24: verify_createBranches / verify_upstreamRelease emit git evidence
-_orig_git=$(declare -f git 2>/dev/null || echo "")
+# Mock _git_ls_remote (the thin wrapper in autorelease.sh) rather than git itself
+# so that the timeout 30 prefix in the real function does not bypass the mock.
+_orig_git_ls_remote=$(declare -f _git_ls_remote 2>/dev/null || echo "")
 _MOCK_LSREMOTE=''
 _MOCK_GIT_RC=0
-git() { if [ "$1" = "ls-remote" ]; then echo "$_MOCK_LSREMOTE"; return "$_MOCK_GIT_RC"; fi; command git "$@"; }
+_git_ls_remote() { echo "$_MOCK_LSREMOTE"; return "$_MOCK_GIT_RC"; }
 
 _MOCK_LSREMOTE=$'cafe123\trefs/heads/release-0.99'
 cb_exit=0
@@ -647,7 +649,7 @@ assert_eq "verify_upstreamRelease ls-remote fails → stdout empty" "$ur_out" ""
 assert_contains "verify_upstreamRelease ls-remote fails → stderr mentions exit code" "$ur_diag" "ls-remote failed"
 _MOCK_GIT_RC=0
 
-[ -n "$_orig_git" ] && eval "$_orig_git" || unset -f git
+[ -n "$_orig_git_ls_remote" ] && eval "$_orig_git_ls_remote" || unset -f _git_ls_remote
 
 # 25: verify_fbcProdUrls emits the resolved registry.redhat.io bundle image.
 # After the fix, the function uses ${FBC_REPO:-$FBC_REPO_DEFAULT}, so inject

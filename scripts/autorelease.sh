@@ -572,14 +572,19 @@ try_auto_verify() {
 
 readonly SUBMARINER_UPSTREAM_REPOS="submariner-operator submariner lighthouse shipyard subctl admiral cloud-prepare"
 
+# Thin wrapper around `git ls-remote` with a hard 30-second timeout to prevent
+# firewall-silent TCP drops from stalling the conductor indefinitely.  Tests
+# override this function to inject mock output without touching the PATH.
+_git_ls_remote() { timeout 30 git ls-remote "$@"; }
+
 verify_createBranches() {
   local major_minor="${1%.*}"
   local operator_sha=""
   for repo in $SUBMARINER_UPSTREAM_REPOS; do
     local ls_out ref ls_rc=0
-    ls_out=$(git ls-remote --heads "https://github.com/submariner-io/$repo" "refs/heads/release-$major_minor" 2>/dev/null) || ls_rc=$?
+    ls_out=$(_git_ls_remote --heads "https://github.com/submariner-io/$repo" "refs/heads/release-$major_minor" 2>/dev/null) || ls_rc=$?
     if [ "$ls_rc" -ne 0 ]; then
-      echo "  ls-remote failed (exit $ls_rc) — network or rate-limit issue for submariner-io/$repo" >&2
+      echo "  ls-remote failed (exit $ls_rc) — network, rate-limit, or timeout issue for submariner-io/$repo" >&2
       return 2
     fi
     ref=$(echo "$ls_out" | grep -o "refs/heads/release-$major_minor" || true)
@@ -597,9 +602,9 @@ verify_createBranches() {
 verify_upstreamRelease() {
   local version="$1"
   local ls_out ls_rc=0
-  ls_out=$(git ls-remote --tags "https://github.com/submariner-io/submariner-operator" "refs/tags/v$version" 2>/dev/null) || ls_rc=$?
+  ls_out=$(_git_ls_remote --tags "https://github.com/submariner-io/submariner-operator" "refs/tags/v$version" 2>/dev/null) || ls_rc=$?
   if [ "$ls_rc" -ne 0 ]; then
-    echo "  ls-remote failed (exit $ls_rc) — network or rate-limit issue" >&2
+    echo "  ls-remote failed (exit $ls_rc) — network, rate-limit, or timeout issue" >&2
     return 2
   fi
   if ! echo "$ls_out" | grep -q "refs/tags/v$version"; then
@@ -633,7 +638,7 @@ verify_ecFixes() {
     return 2
   fi
   local snaps snap_name oc_snaps_rc=0
-  snaps=$(oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp -o json 2>/dev/null) || oc_snaps_rc=$?
+  snaps=$(oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp -o json --request-timeout=60s 2>/dev/null) || oc_snaps_rc=$?
   if [ "$oc_snaps_rc" -ne 0 ]; then
     echo "  oc get snapshots failed (exit $oc_snaps_rc) — check context: $(oc config current-context 2>/dev/null || echo unknown)" >&2
     echo "  Expected namespace: submariner-tenant on kflux-prd-rh02" >&2
