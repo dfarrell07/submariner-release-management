@@ -180,6 +180,14 @@ parse_arguments() {
   echo "Repository root: $GIT_ROOT"
   echo ""
 
+  # Check we are on the main branch (FBC release YAMLs must land on main)
+  _current_branch=$(git rev-parse --abbrev-ref HEAD)
+  if [ "$_current_branch" != "main" ]; then
+    echo "❌ This repo is on branch '$_current_branch', not 'main'" >&2
+    echo "   Fix: git checkout main && git pull" >&2
+    exit 1
+  fi
+
   # Check git status (working tree should be clean)
   if git diff-index --quiet HEAD -- 2>/dev/null; then
     :  # Working tree is clean

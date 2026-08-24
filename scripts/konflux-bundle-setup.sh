@@ -61,10 +61,13 @@ die() {
   exit 1
 }
 
+COMMIT_CREATED=false
+
 commit_changes() {
   # $1 = commit message
   # $2 (optional) = success message (defaults to "Changes committed")
   git commit -s -m "$1" || die "Failed to commit changes"
+  COMMIT_CREATED=true
   echo "✅ ${2:-Changes committed}"
 }
 
@@ -745,8 +748,9 @@ main() {
   update_task_refs
   print_summary
 
-  # Push summary
-  if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
+  # Push summary — only emit when a commit was actually created (idempotent re-runs
+  # exit 0 without committing; emitting a phantom push entry would confuse the conductor)
+  if [ "$COMMIT_CREATED" = true ] && [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
     local current_branch
     current_branch=$(git rev-parse --abbrev-ref HEAD)
     printf '\n  cd %s\n  git push origin %s\n' "$OPERATOR_REPO" "$current_branch" >> "$AUTORELEASE_PUSH_LOG"

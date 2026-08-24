@@ -833,13 +833,12 @@ _update_step_impl() {
 
   # Build STEP_DATA JSON safely via jq
   local step_json
-  step_json=$(jq -n \
+  step_json=$(jq -cn \
     --arg step "$step_key" \
     --arg ts "$timestamp" \
     --arg status "$status" \
     --argjson data "$data" \
-    '{_t:"STEP_DATA",step:$step,timestamp:$ts,status:$status,data:$data}' \
-    | jq -c .)
+    '{_t:"STEP_DATA",step:$step,timestamp:$ts,status:$status,data:$data}')
 
   local comment_body
   comment_body="## $title — $status_label
@@ -1274,9 +1273,8 @@ _close_release_tracker_impl() {
   # a real DAG step, so find_next_step/get_release_summary (which key off
   # STEP_ORDER) ignore it.
   local step_json
-  step_json=$(jq -n --arg ts "$timestamp" --arg reason "$reason" \
-    '{_t:"STEP_DATA",step:"_close",timestamp:$ts,status:"resolved",data:{reason:$reason}}' \
-    | jq -c .)
+  step_json=$(jq -cn --arg ts "$timestamp" --arg reason "$reason" \
+    '{_t:"STEP_DATA",step:"_close",timestamp:$ts,status:"resolved",data:{reason:$reason}}')
 
   local comment
   comment="## Release Tracker Resolved

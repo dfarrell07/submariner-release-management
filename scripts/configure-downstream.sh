@@ -287,6 +287,14 @@ echo "   - Verified: intentions, component count (9), product version, tag forma
 echo "   - Committed: Add Submariner v${NEW//-/.} stage/prod RPAs"
 echo ""
 
+# Append to push summary if conductor is running (before marking complete so the
+# log entry is present if the step is recorded as done)
+if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
+  printf '\n  cd %s\n  git push origin %s\n' \
+    "$HOME/konflux/konflux-release-data" "$BRANCH" \
+    >> "$AUTORELEASE_PUSH_LOG"
+fi
+
 # Record completion in tracker
 if [ -n "${TRACKER:-}" ]; then
   _tracker_data=$(jq -n --arg branch "$BRANCH" '{branch:$branch}' | jq -c .) || _tracker_data="{}"
@@ -312,12 +320,6 @@ echo ""
 echo "🚀 Next steps:"
 echo "   1. Review the commits above"
 echo "   2. Push: git push origin $BRANCH"
-# Append to push summary if conductor is running
-if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-  printf '\n  cd %s\n  git push origin %s\n' \
-    "$HOME/konflux/konflux-release-data" "$BRANCH" \
-    >> "$AUTORELEASE_PUSH_LOG"
-fi
 echo "   3. Create MR in GitLab UI (auto-opens after push)"
 echo "   4. After merge, wait for ArgoCD deploy (~5-10 min)"
 echo "   5. Verify: oc get releaseplans -n submariner-tenant | grep -E \"stage-${NEW}|prod-${NEW}\""
