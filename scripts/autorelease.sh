@@ -148,7 +148,7 @@ _latest_downstream_version() {
 _latest_upstream_release() {
   local mm="$1"
   local version
-  version=$(gh api --paginate "repos/submariner-io/releases/releases" \
+  version=$(timeout 30 gh api --paginate "repos/submariner-io/releases/releases" \
     --jq ".[] | select(.prerelease == false and .draft == false) | .tag_name | select(startswith(\"v${mm}.\"))" \
     2>/dev/null | sed 's/^v//' | sort -V | tail -1) || return 0
   if echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
@@ -1353,6 +1353,9 @@ run_conductor() {
         # Quiet the next find_next_step: it re-fetches and would otherwise
         # reprint the whole completed-steps list on every chained iteration.
         _AUTORELEASE_QUIET=true
+        # Clear NOFETCH so find_next_step re-fetches fresh Jira state on the
+        # next iteration (NOFETCH may have been set by a prior gate-arm chain).
+        _AUTORELEASE_NOFETCH=
         # Continue loop — find_next_step will re-fetch comments
         ;;
 

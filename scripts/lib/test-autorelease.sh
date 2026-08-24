@@ -216,6 +216,11 @@ echo "=== _latest_upstream_release Tests (real function, mocked gh) ==="
 # `gh` (whose output stands in for the already --jq-filtered tag_names), then
 # remove the mock. A regression to lexical sort or a dropped regex guard would
 # silently resolve the conductor onto the wrong patch — these tests catch that.
+#
+# `_latest_upstream_release` calls `timeout 30 gh api ...`. `timeout` is an
+# external binary and cannot see shell function mocks for `gh`. Override it here
+# to strip the duration and pass through to the mocked `gh` shell function.
+timeout() { shift; "$@"; }
 
 # multiple patches → latest by version sort (0.24.10 > 0.24.2, not lexical)
 gh() { printf 'v0.24.0\nv0.24.10\nv0.24.2\n'; }
@@ -229,7 +234,7 @@ assert_eq "lur: non-X.Y.Z rejected → empty" "$(_latest_upstream_release 0.24)"
 gh() { return 1; }
 assert_eq "lur: gh failure → empty" "$(_latest_upstream_release 0.24)" ""
 
-unset -f gh
+unset -f gh timeout
 
 echo ""
 echo "=== DAG Walk Tests (real find_next_step) ==="
