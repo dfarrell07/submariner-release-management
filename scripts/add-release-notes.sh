@@ -66,6 +66,14 @@ TRACKER_LIB="${TRACKER_LIB:-$LIB_DIR/jira-tracker.sh}"
 TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
 [ -n "${TRACKER:-}" ] && update_step "$VERSION" "releaseNotes" "in_progress" '{}' "$TRACKER"
 
+# Check we are on the main branch (release notes must land on main)
+_current_branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$_current_branch" != "main" ]; then
+  echo "❌ This repo is on branch '$_current_branch', not 'main'" >&2
+  echo "   Fix: git checkout main && git pull" >&2
+  exit 1
+fi
+
 # ============================================================================
 # Main Workflow
 # ============================================================================

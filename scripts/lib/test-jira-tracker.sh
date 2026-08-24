@@ -278,6 +278,16 @@ get_step() {
 result=$(check_freshness "0.24.0" "ecFixes" "ACM-99" 2>/dev/null)
 assert_eq "step snapshot but no bundleShas snapshot: fresh" "$result" "fresh"
 
+# Snapshot: get_step(bundleShas) fails (rc!=0) → stale (fail-closed)
+get_step() {
+  case "$2" in
+    ecFixes)    printf '%s' '{"_t":"STEP_DATA","step":"ecFixes","timestamp":"2026-07-01T00:00:00Z","status":"complete","data":{"snapshot":"snap-abc"}}' ;;
+    bundleShas) return 2 ;;
+  esac
+}
+result=$(check_freshness "0.24.0" "ecFixes" "ACM-99" 2>/dev/null)
+assert_eq "bundleShas get_step failure → stale (fail-closed)" "$result" "stale"
+
 # Restore original get_step (saved before section 4 overrides)
 eval "$_SAVED_GET_STEP"
 

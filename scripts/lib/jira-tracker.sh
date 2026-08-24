@@ -1076,7 +1076,11 @@ check_freshness() {
         echo "fresh"
         return 0
       fi
-      now_epoch=$(date +%s 2>/dev/null || echo 0)
+      if ! now_epoch=$(date +%s 2>/dev/null); then
+          echo "Cannot determine current time; treating as fresh" >&2
+          echo "fresh"
+          return 0
+      fi
       age_secs=$((now_epoch - step_epoch))
       max_secs=$((days * 86400))
 
@@ -1099,8 +1103,13 @@ check_freshness() {
         return 0
       fi
 
-      local bundle_data latest_snapshot
-      bundle_data=$(get_step "$version" "bundleShas" "$parent_key") || true
+      local bundle_data latest_snapshot bundle_rc=0
+      bundle_data=$(get_step "$version" "bundleShas" "$parent_key") || bundle_rc=$?
+      if [ "$bundle_rc" -ne 0 ]; then
+        echo "⚠️  check_freshness: get_step(bundleShas) failed (rc=$bundle_rc); treating as stale (fail-closed)" >&2
+        echo "stale"
+        return 0
+      fi
       latest_snapshot=$(echo "$bundle_data" | jq -r '.data.snapshot // empty' 2>/dev/null) || true
 
       if [ -n "$latest_snapshot" ] && [ "$step_snapshot" != "$latest_snapshot" ]; then
@@ -1284,8 +1293,12 @@ _close_release_tracker_impl() {
 
   _validate_version "$version" || return 0
 
-  local parent_key
-  parent_key=$(find_release_tracker "$version") || true
+  local parent_key tracker_rc=0
+  parent_key=$(find_release_tracker "$version") || tracker_rc=$?
+  if [ "$tracker_rc" -eq 2 ]; then
+    echo "⚠️  close_release_tracker: Jira query failed (network/auth) for $version — skipping close" >&2
+    return 0
+  fi
   if [ -z "$parent_key" ]; then
     echo "⚠️  No tracker found for $version" >&2
     return 0
