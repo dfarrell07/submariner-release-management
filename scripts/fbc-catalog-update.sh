@@ -109,14 +109,15 @@ else
   git add catalog-template.yaml catalog-*/
   git commit -s -m "Update FBC catalog for Submariner $VERSION"
   echo "✓ Committed FBC catalog update" >&2
-fi
 
-# Push summary. The rebuild wait (~15-30 min) is surfaced here so it appears
-# in the conductor's Pending Actions trailer alongside the push command.
-if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-  _branch=$(git rev-parse --abbrev-ref HEAD)
-  printf '\n  cd %s\n  git push origin %s\n  # Wait ~15-30 min for FBC rebuild before re-running\n' \
-    "$FBC_REPO" "$_branch" >> "$AUTORELEASE_PUSH_LOG"
+  # Push summary. The rebuild wait (~15-30 min) is surfaced here so it appears
+  # in the conductor's Pending Actions trailer alongside the push command.
+  # Only emit when a commit was actually created (matches bundle-image-update.sh pattern).
+  if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
+    _branch=$(git rev-parse --abbrev-ref HEAD)
+    printf '\n  cd %s\n  git push origin %s\n  # Wait ~15-30 min for FBC rebuild before re-running\n' \
+      "$FBC_REPO" "$_branch" >> "$AUTORELEASE_PUSH_LOG"
+  fi
 fi
 
 # Record completion. Carry the bundleShas snapshot (via the shared, unit-tested
