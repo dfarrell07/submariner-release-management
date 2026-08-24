@@ -501,6 +501,28 @@ main() {
   STEP_KEY=$( [ "$RELEASE_TYPE" = "prod" ] && echo "fbcProdReleases" || echo "fbcStageReleases" )
   [ -n "${TRACKER:-}" ] && update_step "$VERSION" "$STEP_KEY" "in_progress" '{}' "$TRACKER"
 
+  # QE gate check for prod releases. get_step returns non-zero on a tracker
+  # READ failure and empty output when the step is genuinely absent, so keep
+  # the two apart — a Jira blip must not masquerade as "QE not signed off".
+  # Either way we only generate/commit the YAML (a human still applies it in
+  # Step 18), so this is an explicit advisory, not a hard stop.
+  if [ "$RELEASE_TYPE" = "prod" ] && [ -n "${TRACKER:-}" ]; then
+    local qe_data qe_rc=0
+    qe_data=$(get_step "$VERSION" "qeValidation" "$TRACKER") || qe_rc=$?
+    local qe_status=""
+    [ "$qe_rc" -eq 0 ] && qe_status=$(printf '%s' "$qe_data" | jq -r '.status // empty' 2>/dev/null || true)
+
+    if [ "$qe_rc" -ne 0 ]; then
+      echo "⚠️  Could not read QE validation status (tracker read failed)." >&2
+      echo "    Generating the prod release YAML anyway — confirm QE sign-off" >&2
+      echo "    before applying it in Step 18." >&2
+    elif [ "$qe_status" != "complete" ]; then
+      echo "⚠️  QE validation is not marked complete in the tracker." >&2
+      echo "    Generating the prod release YAML anyway — do NOT apply it (Step 18)" >&2
+      echo "    until QE signs off, or mark the qeValidation subtask complete." >&2
+    fi
+  fi
+
   verify_release
   generate_yamls
   validate_yamls
