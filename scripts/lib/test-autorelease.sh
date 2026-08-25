@@ -1319,18 +1319,17 @@ bs_line=$(printf '%s\n' "$midout" | grep 'bundle-image-update.sh')
 assert_eq "dry-run: no trailing space on args-less run line" "$bs_line" \
   "       run: scripts/bundle-image-update.sh 0.99.1"
 
-# DR-4: fbcProdUrls terminal (seed all complete except fbcProdUrls) → prints the
-# "all release steps shipped" block pointing at the prod-URL conversion with a
-# re-run-to-close nudge; NOT "all done", NOT the generic --complete hint nudge,
-# and NO optimism footnote (the terminal carries its own text).
+# DR-4: fbcProdUrls (seed all complete except fbcProdUrls) → now has a script, so it
+# shows as a "run" step (not a terminal gate|hint). The script calls make update-bundle
+# in the FBC repo to convert released bundles from quay.io to registry.redhat.io.
+# After the script runs, it leaves the step as in_progress (not complete) so the verifier
+# can check if the conversion actually succeeded once the FBC build finishes.
+# fbcProdUrls is marked as DIRECT_PUSH_STEPS (direct push to FBC repo main, no PR).
 step_statuses=([cveFixes]=complete [ecFixes]=complete [rpmLockfiles]=complete [tektonTasks]=complete [versionLabels]=complete [upstreamRelease]=complete [bundleShas]=complete [componentStage]=complete [releaseNotes]=complete [fbcCatalogUpdate]=complete [fbcStageReleases]=complete [qeValidation]=complete [componentProd]=complete [fbcProdReleases]=complete)
 term=$(run_dry_run 2>&1)
-assert_contains "dry-run terminal: all-shipped block" "$term" "All automated steps complete for 0.99.1"
-assert_contains "dry-run terminal: re-run-to-close nudge" "$term" "Re-run once done to close the release: /autorelease 0.99.1"
-assert_contains "dry-run terminal: dry-run conversion caveat" "$term" "cannot confirm whether the conversion has happened"
-assert_not_contains "dry-run terminal: not 'nothing left'" "$term" "Nothing left to run"
-assert_not_contains "dry-run terminal: no --complete nudge" "$term" "--complete fbcProdUrls"
-assert_not_contains "dry-run terminal: no optimism footnote" "$term" "this offline preview is optimistic"
+assert_contains "dry-run fbcProdUrls: script shown" "$term" "run: scripts/update-fbc-prod-urls.sh 0.99.1"
+assert_contains "dry-run fbcProdUrls: direct push (no PR)" "$term" "git push (direct push, no PR"
+assert_not_contains "dry-run fbcProdUrls: not terminal" "$term" "All automated steps complete for 0.99.1"
 
 # DR-5: genuinely all done (seed everything) → "Nothing left to run", no footnote.
 for step in "${STEP_ORDER[@]}"; do step_statuses[$step]=complete; done

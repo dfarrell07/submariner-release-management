@@ -202,6 +202,10 @@ AUTOMATION_LEVEL["fbcCatalogUpdate"]="review"
 STEP_SCRIPT["fbcCatalogUpdate"]="scripts/fbc-catalog-update.sh"
 DIRECT_PUSH_STEPS["fbcCatalogUpdate"]=1
 
+# ── fbcProdUrls ─────────────────────────────────────────────────────────────
+# NOTE: fbcProdUrls also uses DIRECT_PUSH_STEPS (no PR, direct main push to FBC repo)
+DIRECT_PUSH_STEPS["fbcProdUrls"]=1
+
 # ── fbcStageReleases ────────────────────────────────────────────────────────
 STEP_TITLES["fbcStageReleases"]="FBC stage releases"
 STEP_PHASE["fbcStageReleases"]="Stage Release"
@@ -249,7 +253,7 @@ STEP_DEPENDENCIES["fbcProdUrls"]="fbcProdReleases"
 # is a one-time permanent action. Once it marks the step complete, a time-based
 # rule would spuriously re-flag it as stale forever.
 AUTOMATION_LEVEL["fbcProdUrls"]="auto"
-STEP_SKILL_HINT["fbcProdUrls"]="See .agents/workflows/update-fbc-templates-prod.md"
+STEP_SCRIPT["fbcProdUrls"]="scripts/update-fbc-prod-urls.sh"
 
 # === Ordering and stream membership ===
 
