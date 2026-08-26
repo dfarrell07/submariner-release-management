@@ -292,10 +292,10 @@ print_summary() {
       echo "cd $SUBMARINER_BASE/$repo"
       echo "git show"
       echo "git push origin fix-version-labels-${major_minor}"
-      echo "gh pr create --base $branch --head fix-version-labels-${major_minor} --title \"Update version labels to v$VERSION\" --body \"Enables correct Konflux image tagging.\""
+      echo "gh pr create --base $branch --head fix-version-labels-${major_minor} --title \"Update version labels to v$VERSION\" --body \"Enables correct Konflux image tagging.\" --assignee @me --label ready-to-test"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s/%s\n  git push origin fix-version-labels-%s\n  gh pr create --base %s --head fix-version-labels-%s\n' \
+        printf '\n  cd %s/%s\n  git push origin fix-version-labels-%s\n  gh pr create --base %s --head fix-version-labels-%s --assignee @me --label ready-to-test\n' \
           "$SUBMARINER_BASE" "$repo" "$major_minor" "$branch" "$major_minor" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi

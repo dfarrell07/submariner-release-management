@@ -299,10 +299,10 @@ print_summary() {
       # our last fetch), and required if the branch was already pushed and the
       # conductor re-ran after a silent tracker write failure.
       echo "git push --force-with-lease origin update-rpm-lockfiles-${version}"
-      echo "gh pr create --base $branch --head update-rpm-lockfiles-${version}"
+      echo "gh pr create --base $branch --head update-rpm-lockfiles-${version} --assignee @me --label ready-to-test"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s/%s\n  git push --force-with-lease origin update-rpm-lockfiles-%s\n  gh pr create --base %s --head update-rpm-lockfiles-%s\n' \
+        printf '\n  cd %s/%s\n  git push --force-with-lease origin update-rpm-lockfiles-%s\n  gh pr create --base %s --head update-rpm-lockfiles-%s --assignee @me --label ready-to-test\n' \
           "$SUBMARINER_BASE" "$repo" "$version" "$branch" "$version" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi

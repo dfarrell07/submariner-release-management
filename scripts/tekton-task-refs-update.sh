@@ -343,10 +343,10 @@ print_summary() {
       echo "cd $path"
       echo "git show"
       echo "git push origin $fix_branch"
-      echo "gh pr create --base $base_branch --head $fix_branch --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\""
+      echo "gh pr create --base $base_branch --head $fix_branch --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\" --assignee @me --label ready-to-test"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push origin %s\n  gh pr create --base %s --head %s\n' \
+        printf '\n  cd %s\n  git push origin %s\n  gh pr create --base %s --head %s --assignee @me --label ready-to-test\n' \
           "$path" "$fix_branch" "$base_branch" "$fix_branch" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
