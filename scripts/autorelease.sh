@@ -349,62 +349,7 @@ handle_step_override() {
   update_step "$version" "$step_key" "$action" "$data" "$tracker"
   echo "Step '$step_key' marked as $action for $version (tracker: $tracker)" >&2
 
-  # Cascade: when --refresh resets a step, downstream steps that depended on it
-  # become stale. Reset them to not_started so the conductor doesn't skip them
-  # on the next run with stale "complete" status.
-  if [ "$action" = "in_progress" ]; then
-    _cascade_refresh "$version" "$step_key" "$tracker"
-  fi
-
   return 0
-}
-
-# Build reverse-dependency map and BFS from the refreshed step, resetting each
-# downstream step to not_started in Jira. Called only by handle_step_override
-# when action=in_progress (i.e., --refresh).
-_cascade_refresh() {
-  local version="$1"
-  local refresh_step="$2"
-  local tracker="$3"
-
-  # Build reverse deps: for each step, record which steps depend on it.
-  declare -A _reverse_deps=()
-  local step dep
-  for step in "${!STEP_DEPENDENCIES[@]}"; do
-    IFS=',' read -ra _deps <<< "${STEP_DEPENDENCIES[$step]}"
-    for dep in "${_deps[@]}"; do
-      dep="${dep// /}"  # strip spaces
-      [ -z "$dep" ] && continue
-      _reverse_deps[$dep]+=" $step"
-    done
-  done
-
-  # BFS from the refreshed step to collect all transitive dependents.
-  local queue=("$refresh_step")
-  local cascade=()
-  local visited=" $refresh_step "
-
-  while [ "${#queue[@]}" -gt 0 ]; do
-    local cur="${queue[0]}"
-    queue=("${queue[@]:1}")
-    for ds in ${_reverse_deps[$cur]:-}; do
-      if [[ "$visited" != *" $ds "* ]]; then
-        visited+="$ds "
-        cascade+=("$ds")
-        queue+=("$ds")
-      fi
-    done
-  done
-
-  if [ "${#cascade[@]}" -eq 0 ]; then
-    return 0
-  fi
-
-  echo "  Cascading --refresh to downstream steps: ${cascade[*]}" >&2
-  for ds in "${cascade[@]}"; do
-    update_step "$version" "$ds" "not_started" "{}" "$tracker"
-    echo "  Step '$ds' reset to not_started" >&2
-  done
 }
 
 # --- Mark a finished release's tracker done (resolve parent + subtasks) ---
