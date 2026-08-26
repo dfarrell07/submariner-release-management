@@ -911,13 +911,16 @@ verify_cveFixes() {
       jq -r '[.[] | select(.state=="OPEN")] | last | .url // empty' \
       2>/dev/null) || open_url=""
 
-    if [ -n "$merged_url" ]; then
-      any_found=true
-      merged_urls+=("$merged_url")
-    elif [ -n "$open_url" ]; then
+    # Check open before merged: a repo may have both (merged v1, open v2 re-run).
+    # Open takes priority — an open PR blocks completion regardless of prior merges.
+    if [ -n "$open_url" ]; then
       any_found=true any_open=true
       open_urls+=("$open_url")
+      [ -n "$merged_url" ] && merged_urls+=("$merged_url")
       echo "  CVE fix PR open, not yet merged: $open_url" >&2
+    elif [ -n "$merged_url" ]; then
+      any_found=true
+      merged_urls+=("$merged_url")
     fi
     # No PR found → repo was clean (no CVEs → no fix branch → no PR). Verified.
   done
