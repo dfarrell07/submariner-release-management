@@ -354,6 +354,7 @@ main() {
   if [ -n "${TRACKER:-}" ] && [ "$COMPONENT_FILTER" = "all" ] && \
      [ "${#REPOS_FAILED[@]}" -eq 0 ] && [ "$problem_skips" -eq 0 ]; then
     local data
+    # shellcheck disable=SC2034
     data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" '{reposUpdated:($count|tonumber)}' | jq -c .) || data="{}"
   fi
 }

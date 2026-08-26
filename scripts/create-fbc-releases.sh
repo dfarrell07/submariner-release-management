@@ -533,6 +533,7 @@ main() {
   if [ -n "${TRACKER:-}" ]; then
     local ocp_count="${#CREATED_FILES[@]}"
     local data
+    # shellcheck disable=SC2034
     data=$(jq -n --arg count "$ocp_count" '{ocpVersionCount:($count|tonumber)}' | jq -c .) || data="{}"
   fi
 }

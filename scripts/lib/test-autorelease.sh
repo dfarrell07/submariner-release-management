@@ -442,6 +442,7 @@ assert_eq "upstreamRelease has verifier" "${STEP_VERIFIER[upstreamRelease]}" "ve
 # 20: Steps with/without verifiers
 assert_eq "ecFixes has verifier" "${STEP_VERIFIER[ecFixes]}" "verify_ecFixes"
 assert_eq "fbcProdUrls has verifier" "${STEP_VERIFIER[fbcProdUrls]}" "verify_fbcProdUrls"
+assert_eq "cveFixes has verifier" "${STEP_VERIFIER[cveFixes]}" "verify_cveFixes"
 assert_eq "qeValidation has no verifier" "${STEP_VERIFIER[qeValidation]:-}" ""
 assert_eq "componentStage has no verifier" "${STEP_VERIFIER[componentStage]:-}" ""
 

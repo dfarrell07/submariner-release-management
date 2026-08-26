@@ -1784,6 +1784,68 @@ place CVE remediation is gated, so it must mean it. A future hardening, if
 warranted, is a grype/clair verifier that proves completion from scan state
 rather than exit code — deferred; the all-clean exit-0 gate is the cheap primary.
 
+**`verify_cveFixes` design (planned).** The script's non-idempotent re-run risk
+(see "Known bugs → cveFixes has no verifier") requires a verifier that can
+distinguish: (a) all PRs merged — complete; (b) PRs open — wait (rc=3);
+(c) no PRs found at all — run script (rc=1). CVE fix PRs are opened from a
+**fork** (the cve-fix skill uses `fork-remote` PR creation), so
+`gh pr list --repo org/repo --head <branch>` on the upstream org won't find
+them (head is on the fork, not origin).
+
+Approach: `gh pr list --repo org/repo --search "fix-VERSION-cves in:head
+is:pr"` queries by the branch name appearing in the PR head field regardless
+of fork ownership. This works because GitHub's `head` field includes the fork
+username and branch (`user:fix-0.24.1-cves-20250826`), and the `in:head`
+search searches that string. Filter by `is:open`/`is:merged` for state.
+
+The 7 repos to check: `submariner-io/submariner-operator submariner-io/submariner
+submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl
+submariner-io/admiral submariner-io/cloud-prepare` (matches `REPO_ORDER` in
+the script).
+
+Branch pattern: `fix-VERSION-cves-*` (date suffix varies; `-vN` suffix on
+same-day re-runs). Use `fix-$VERSION-cves` as the search term — it matches
+all date variants via substring.
+
+Exit code contract (same as other PR-merge verifiers):
+
+- rc=0: all repos have a merged CVE fix PR (or no PR needed — repos that
+  came back clean have no fix branch; treat "no PR found" as clean).
+  Emits Jira comment text on stdout.
+- rc=1: no CVE fix PRs found in any repo (script hasn't run yet).
+- rc=3: at least one repo has an open CVE fix PR. Emits open PR URLs on
+  stdout for the Jira dedup path.
+- rc=2: `gh` not installed or network failure.
+
+The "clean repo" case (no PR needed, no fix branch) requires knowing which
+repos produced fix branches. The script writes `'{}'` as tracker data today,
+not per-repo state. The verifier falls back to checking all 7 repos and
+treating "no PR found" as "repo was clean" (correct: a clean repo produces
+no fix branch and no PR).
+
+The verifier loops the 7 repos; for each:
+
+1. `gh pr list --repo "$repo" --search "fix-$VERSION-cves in:head" --state all
+   --json state,url,mergedAt`
+2. If merged PR found → repo verified.
+3. If open PR found → any_open=true.
+4. If no PR found → treat as clean (no CVEs in that repo), verified.
+
+Return 0 if all_repos verified (no open PRs), rc=3 if any open, rc=1 if
+gh query fails cleanly (network returns but 0 results for a version that
+hasn't been run yet — distinguish by checking if the tracker step is
+`not_started` vs `in_progress`).
+
+The version-prefix uniqueness risk: `fix-0.24-cves` matches both
+`fix-0.24.1-cves-*` and hypothetically `fix-0.24.0-cves-*`. Since only one
+Z-stream patch is active at a time, this collision is unlikely in practice.
+Use `fix-${VERSION}-cves` (full 3-segment version) to be precise.
+
+Register in `STEP_VERIFIER["cveFixes"]="verify_cveFixes"`. Because cveFixes
+has `STEP_SCRIPT` (dispatches as `run`, not `hint`/`gate`), the verifier is
+ONLY consulted via the pre-run `in_progress` guard in the `run` branch — it
+is never called from the `gate|hint` arm. This is correct behavior.
+
 ### tektonTasks — multi-repo pipeline-patcher (DONE)
 
 **Shipped** as `scripts/tekton-task-refs-update.sh`
@@ -2981,6 +3043,69 @@ restores best-effort behavior. At minimum, do not print
 `✓ script succeeded`/`✓ verified externally` when the tracker write did not succeed (for
 the run path, that means the re-read check above). Same hard prerequisite as the
 read-path fix for any cluster-writing step.
+
+**`cveFixes` has no verifier — non-idempotent script re-runs
+destructively.** `cveFixes` is `AUTOMATION_LEVEL=review` with
+`STEP_SCRIPT` but no `STEP_VERIFIER`. When the step is `in_progress`
+and `/autorelease` is re-run, the pre-run verifier check (the
+`in_progress + verifier` guard in the `run` branch) is skipped
+(no verifier registered), and `cve-fixes-update.sh` re-executes.
+The script is explicitly documented as NOT idempotent: a re-run with
+open CVE fix PRs creates `-v2`, `-v3` fix branches and strands the
+earlier ones. Unlike `tektonTasks`/`rpmLockfiles`/`versionLabels`
+(whose verifiers return rc=3 to stop the re-run), cveFixes has no
+guard. **Fix:** add `verify_cveFixes` — see "verify_cveFixes design"
+below. The CVE fix PRs are opened from a fork (the cve-fix skill
+uses `fork-remote`), so `gh pr list --head <branch>` on the upstream
+org won't find them; the verifier must use `--search` or read
+fork-aware metadata from the tracker. Highest-priority missing
+verifier because the destructive re-run can corrupt live fix branches.
+
+**`verified_steps` guard breaks rc=3 on same-step re-entry.** When
+the pre-run verifier check fires (step is `in_progress`, verifier
+exists) and returns rc=3 (PRs open), `verified_steps[$step]=1` is
+set. If the same conductor loop iteration somehow re-enters the step
+(e.g. via the same-step guard path), `try_auto_verify` returns 1
+immediately (guard hit, no verifier call), and the same-step guard
+falls through to the generic "ran but isn't complete" warning instead
+of the "⏳ PRs open" message. In practice the same-step guard and the
+pre-run check are on different code paths and the conductor `break`s
+on rc=3 before looping, so this is unlikely to surface in normal use —
+but the guard interacts with rc=3 in a surprising way. **Fix:**
+document the intent of `verified_steps` (anti-loop, not anti-message)
+and either clear it before the same-step guard's verifier call, or
+surface the cached rc via a parallel `verified_rcs[$step]` map.
+
+**`bundleShas` has no verifier — requires manual `--complete`.**
+`bundleShas` is `review`-level with `DIRECT_PUSH_STEPS` and no
+`STEP_VERIFIER`. The script marks the step `in_progress` then
+stays there; the only completion path is `/autorelease --complete
+bundleShas` after manually verifying the SHA-bump push and Konflux
+bundle rebuild. A verifier could auto-advance: after the bundle push,
+check `oc get snapshots` for a new push-event component snapshot whose
+`submariner-bundle` image digest differs from the pre-push recorded
+snapshot (the same digest-change proxy used by `assert_bundle_rebuilt`
+in `create-component-release.sh`). **Fix:** add `verify_bundleShas`
+that reads `step_snaps[bundleShas]` from the tracker (the snapshot
+recorded at script time) and queries the cluster for a newer snapshot
+with a changed bundle digest — if found, auto-completes the step.
+Requires `oc` login (returns rc=2 if absent). Medium priority —
+removes the only mandatory manual `--complete` before `componentStage`.
+
+**`ecFixes` blocks every re-run with rc=2 when `oc` not logged in.**
+`ecFixes` is `AUTOMATION_LEVEL=auto` (dispatches as `hint` via
+`STEP_SKILL_HINT`) with `verify_ecFixes`. During the Build Readiness
+window — after PRs are pushed but before Konflux rebuilds (~15-30 min)
+— EC can't possibly pass. If `oc` is not logged in, `verify_ecFixes`
+returns rc=2 ("precondition failure"), stopping the conductor with
+"Cannot verify — check preconditions above" on every re-run, even when
+the operator is just trying to advance past a different in_progress
+step. The right answer during this window is rc=1 ("not done yet, try
+later"), not rc=2 (which implies a config problem). **Fix:** in
+`verify_ecFixes`, return rc=1 (not rc=2) when `oc` is absent — the
+window always ends when EC passes; stopping with rc=2 vs rc=1 changes
+only the message. Alternatively, the hint could note "EC not yet
+checkable without oc login; re-run after logging in."
 
 **Dead `manual` dispatch branch.** `find_next_step` sets
 `NEXT_REASON=manual` only when a step has neither `gate` level, nor a

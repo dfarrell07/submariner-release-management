@@ -166,6 +166,7 @@ if [ -n "${TRACKER:-}" ]; then
   local_cve_count=$(jq -r '.cve_topics | length' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
   local_total=$(jq -r '(.statistics.cve_count + .statistics.non_cve_total)' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
   local_type=$( [ "$local_cve_count" -gt 0 ] && echo "RHSA" || echo "RHBA" )
+  # shellcheck disable=SC2034
   data=$(jq -n --arg type "$local_type" --arg total "$local_total" --arg cves "$local_cve_count" \
     '{advisoryType:$type,totalIssues:($total|tonumber),cveCount:($cves|tonumber)}' | jq -c .) || data="{}"
   # review level: script stays in_progress. User must review the release notes,

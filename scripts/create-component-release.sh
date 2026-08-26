@@ -567,6 +567,7 @@ main() {
     local release_name
     release_name=$(basename "${YAML_FILE:-.yaml}" .yaml)
     local data
+    # shellcheck disable=SC2034
     data=$(jq -n --arg name "$release_name" --arg snap "${SNAPSHOT_NAME:-}" --arg type "$RELEASE_TYPE" \
       '{releaseName:$name,snapshot:$snap,type:$type}' | jq -c .) || data="{}"
   fi

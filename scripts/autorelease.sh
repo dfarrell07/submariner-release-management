@@ -855,6 +855,98 @@ verify_versionLabels() {
   _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
 }
 
+# verify_cveFixes: detect CVE fix PR state across all 7 Go repos.
+#
+# CVE fix PRs are opened from a fork (the cve-fix skill uses fork-remote PR
+# creation), so `gh pr list --head <branch>` on the upstream org won't find
+# them — the head ref includes the fork username. Use `--search "fix-VERSION-cves
+# in:head"` instead, which matches the branch name substring regardless of fork
+# ownership, returning PRs from any fork targeting any base branch.
+#
+# "No PR found" for a repo means it was clean (no CVEs → no fix branch → no PR).
+# That is treated as verified for that repo.
+#
+# Exit codes (same contract as _verify_prs_merged):
+#   0  — all repos verified (all found PRs merged, or no PR needed)
+#   1  — no CVE PRs found in any repo (script hasn't run for this version yet)
+#   2  — gh not available or query failure
+#   3  — at least one repo has an open CVE fix PR (wait for merge)
+#
+# Stdout on rc=0: Jira comment text ("All CVE fix PRs merged for X...")
+# Stdout on rc=3: Jira comment text ("CVE fix PRs open for X...")
+# Stdout must be empty on rc=1 and rc=2 (verifier failure contract).
+verify_cveFixes() {
+  local version="$1"
+  local tracker="${2:-}"
+  local search_term="fix-${version}-cves"
+  # All 7 Go repos scanned by cve-fixes-update.sh (matches its REPO_ORDER)
+  local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl submariner-io/admiral submariner-io/cloud-prepare"
+
+  if ! command -v gh &>/dev/null; then
+    echo "  gh not installed" >&2; return 2
+  fi
+
+  local any_open=false any_found=false
+  local merged_urls=() open_urls=()
+
+  for repo in $repos; do
+    local pr_json pr_rc=0
+    # --search finds PRs from any fork whose head branch contains the search
+    # term, across all states. GitHub search in:head matches the "<user>:<branch>"
+    # head ref string, so "fix-0.24.1-cves" matches e.g. "dfarrell07:fix-0.24.1-cves-20250826".
+    pr_json=$(gh pr list --repo "$repo" \
+      --search "${search_term} in:head" \
+      --state all \
+      --json number,state,mergedAt,url --limit 5 2>/dev/null) || pr_rc=$?
+    if [ "$pr_rc" -ne 0 ]; then
+      echo "  gh pr list failed for $repo (exit $pr_rc) — network or auth issue" >&2
+      return 2
+    fi
+
+    local merged_url open_url
+    merged_url=$(printf '%s' "$pr_json" | \
+      jq -r '[.[] | select(.state=="MERGED")] | sort_by(.mergedAt) | last | .url // empty' \
+      2>/dev/null) || merged_url=""
+    open_url=$(printf '%s' "$pr_json" | \
+      jq -r '[.[] | select(.state=="OPEN")] | last | .url // empty' \
+      2>/dev/null) || open_url=""
+
+    if [ -n "$merged_url" ]; then
+      any_found=true
+      merged_urls+=("$merged_url")
+    elif [ -n "$open_url" ]; then
+      any_found=true any_open=true
+      open_urls+=("$open_url")
+      echo "  CVE fix PR open, not yet merged: $open_url" >&2
+    fi
+    # No PR found → repo was clean (no CVEs → no fix branch → no PR). Verified.
+  done
+
+  if ! $any_found; then
+    # No CVE fix PRs in any repo — script hasn't run for this version yet.
+    return 1
+  fi
+
+  if $any_open; then
+    local open_list merged_list=""
+    open_list=$(printf '%s\n' "${open_urls[@]}")
+    [ "${#merged_urls[@]}" -gt 0 ] && merged_list=$(printf '%s\n' "${merged_urls[@]}")
+    if [ -n "$merged_list" ]; then
+      printf 'CVE fix PRs open for %s (some still open):\nOpen:\n%s\nMerged:\n%s' \
+        "$version" "$open_list" "$merged_list"
+    else
+      printf 'CVE fix PRs open for %s:\n%s' "$version" "$open_list"
+    fi
+    return 3
+  fi
+
+  # All found PRs are merged; repos with no PR were clean.
+  local url_list
+  url_list=$(printf '%s\n' "${merged_urls[@]}")
+  printf 'All CVE fix PRs merged for %s:\n%s' "$version" "$url_list"
+  return 0
+}
+
 # Map step keys to verifier functions (only steps with external verifiers)
 declare -A STEP_VERIFIER=(
   ["createBranches"]="verify_createBranches"
@@ -864,6 +956,7 @@ declare -A STEP_VERIFIER=(
   ["tektonTasks"]="verify_tektonTasks"
   ["rpmLockfiles"]="verify_rpmLockfiles"
   ["versionLabels"]="verify_versionLabels"
+  ["cveFixes"]="verify_cveFixes"
 )
 
 # RELEASE_YAML_STEPS and DIRECT_PUSH_STEPS are defined in jira-tracker.sh

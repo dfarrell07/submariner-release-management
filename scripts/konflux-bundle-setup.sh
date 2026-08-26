@@ -760,6 +760,7 @@ main() {
   # and wait for Konflux to rebuild, then explicitly mark complete.
   if [ -n "${TRACKER:-}" ]; then
     local data
+    # shellcheck disable=SC2034
     data=$(jq -n --arg ver "$VERSION" '{version:$ver}' | jq -c .) || data="{}"
   fi
 }

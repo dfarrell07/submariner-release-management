@@ -690,6 +690,7 @@ main() {
   # to componentStage before the bundle rebuild has created a new snapshot.
   if [ -n "${TRACKER:-}" ]; then
     local data
+    # shellcheck disable=SC2034
     data=$(jq -n --arg snap "${SNAPSHOT:-}" --arg ver "$TARGET_VERSION" \
       '{snapshot:$snap,version:$ver}' | jq -c .) || data="{}"
   fi

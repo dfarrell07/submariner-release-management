@@ -275,6 +275,7 @@ main() {
   # Mark complete only when the full set ran with no failures.
   if [ -n "${TRACKER:-}" ] && [ -z "$COMPONENT_FILTER" ] && [ "${#COMPS_FAILED[@]}" -eq 0 ]; then
     local data
+    # shellcheck disable=SC2034
     data=$(jq -n \
       --arg count "${#COMPS_UPDATED[@]}" \
       --arg ver "$VERSION" \
