@@ -504,9 +504,18 @@ try_auto_verify() {
   if [ "$verify_rc" -eq 3 ]; then
     # Work in progress (PRs open). vdata contains the Jira comment text emitted
     # by the verifier on stdout (subshell, so _add_comment wasn't available there).
-    # Post it now from the parent shell where _add_comment is available.
+    # Only post if the open PR set has changed since the last run (dedup via
+    # local cache file — avoids an extra Jira write just to store the hash).
     if [ -n "$vdata" ] && [ -n "$TRACKER" ]; then
-      _add_comment "$TRACKER" "$vdata" || true
+      local new_hash
+      new_hash=$(printf '%s' "$vdata" | md5sum | cut -d' ' -f1)
+      local cache_file="${GIT_ROOT}/.git/autorelease-pr-hash-${step}"
+      local cached_hash=""
+      [ -f "$cache_file" ] && cached_hash=$(cat "$cache_file")
+      if [ "$new_hash" != "$cached_hash" ]; then
+        _add_comment "$TRACKER" "$vdata" || true
+        printf '%s' "$new_hash" > "$cache_file"
+      fi
     fi
     return 3
   fi
