@@ -791,9 +791,7 @@ verify_tektonTasks() {
   local major_minor="${version%.*}"
   local branch="fix-tekton-tasks-${major_minor}"
   # 5 component repos + FBC repo (stolostron org)
-  local repos="submariner-io/submariner-operator submariner-io/submariner \
-    submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl \
-    stolostron/submariner-operator-fbc"
+  local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl stolostron/submariner-operator-fbc"
   _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
 }
 
@@ -812,8 +810,7 @@ verify_versionLabels() {
   local major_minor="${version%.*}"
   local branch="fix-version-labels-${major_minor}"
   # Version labels apply to all 5 component repos
-  local repos="submariner-io/submariner-operator submariner-io/submariner \
-    submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl"
+  local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl"
   _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
 }
 
