@@ -502,10 +502,27 @@ try_auto_verify() {
     return 2
   fi
   if [ "$verify_rc" -eq 3 ]; then
+    # Work in progress (PRs open). vdata contains the Jira comment text emitted
+    # by the verifier on stdout (subshell, so _add_comment wasn't available there).
+    # Post it now from the parent shell where _add_comment is available.
+    if [ -n "$vdata" ] && [ -n "$TRACKER" ]; then
+      _add_comment "$TRACKER" "$vdata" || true
+    fi
     return 3
   fi
   if [ "$verify_rc" -eq 0 ]; then
     echo "  ✓ ${STEP_TITLES[$step]:-$step}: verified externally" >&2
+    # PR-merge verifiers emit Jira comment text on stdout (not JSON) so they can
+    # run in this subshell context. Post the comment now, then record "{}" as the
+    # tracker data (PR URLs already in the Jira comment; JSON tracker data is
+    # secondary). Other verifiers (createBranches, upstreamRelease, ecFixes,
+    # fbcProdUrls) emit JSON — detect by attempting jq parse.
+    if [ -n "$vdata" ] && [ -n "$TRACKER" ]; then
+      if ! printf '%s' "$vdata" | jq -e . >/dev/null 2>&1; then
+        _add_comment "$TRACKER" "$vdata" || true
+        vdata="{}"
+      fi
+    fi
     [ -n "$vdata" ] || vdata="{}"
     update_step "$VERSION" "$step" "complete" "$vdata" "$TRACKER"
     _AUTORELEASE_QUIET=true
@@ -773,30 +790,29 @@ _verify_prs_merged() {
   done
 
   if ! $all_merged; then
-    # Post open PR URLs to Jira so the work-in-progress is visible
-    if $any_open && [ -n "$tracker" ]; then
-      local open_list
+    if $any_open; then
+      # Emit open (and any already-merged) URLs on stdout so the caller can
+      # post them to Jira. _add_comment cannot be called here because this
+      # function runs inside a $() subshell in try_auto_verify, where shell
+      # functions from the parent are not available.
+      local open_list merged_list=""
       open_list=$(printf '%s\n' "${open_urls[@]}")
-      # Also include any already-merged ones for completeness
-      if [ "${#merged_urls[@]}" -gt 0 ]; then
-        local merged_list
-        merged_list=$(printf '%s\n' "${merged_urls[@]}")
-        _add_comment "$tracker" "$(printf 'PRs proposed for %s (some still open):\nOpen:\n%s\nMerged:\n%s' "$branch" "$open_list" "$merged_list")" || true
+      [ "${#merged_urls[@]}" -gt 0 ] && merged_list=$(printf '%s\n' "${merged_urls[@]}")
+      if [ -n "$merged_list" ]; then
+        printf 'PRs proposed for %s (some still open):\nOpen:\n%s\nMerged:\n%s' \
+          "$branch" "$open_list" "$merged_list"
       else
-        _add_comment "$tracker" "$(printf 'PRs proposed for %s:\n%s' "$branch" "$open_list")" || true
+        printf 'PRs proposed for %s:\n%s' "$branch" "$open_list"
       fi
+      return 3
     fi
-    # Distinguish: at least one PR exists (open) vs no PRs at all (script not run)
-    $any_open && return 3
     return 1
   fi
 
-  # All merged — post PR URLs to Jira as a comment
+  # All merged — emit URLs on stdout for the caller to post to Jira.
   local url_list
   url_list=$(printf '%s\n' "${merged_urls[@]}")
-  if [ -n "$tracker" ]; then
-    _add_comment "$tracker" "$(printf 'All PRs merged for %s:\n%s' "$branch" "$url_list")" || true
-  fi
+  printf 'All PRs merged for %s:\n%s' "$branch" "$url_list"
 
   jq -cn --arg branch "$branch" \
     --argjson prs "$(printf '%s\n' "${merged_urls[@]}" | jq -R . | jq -s .)" \
