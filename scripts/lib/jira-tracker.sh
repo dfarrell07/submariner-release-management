@@ -137,7 +137,7 @@ STEP_SCRIPT["rpmLockfiles"]="scripts/rpm-lockfile-update.sh"
 STEP_TITLES["tektonTasks"]="Tekton task updates"
 STEP_PHASE["tektonTasks"]="Build Readiness"
 STEP_DEPENDENCIES["tektonTasks"]=""
-AUTOMATION_LEVEL["tektonTasks"]="auto"
+AUTOMATION_LEVEL["tektonTasks"]="review"
 STEP_SCRIPT["tektonTasks"]="scripts/tekton-task-refs-update.sh"
 
 # ── versionLabels ───────────────────────────────────────────────────────────
