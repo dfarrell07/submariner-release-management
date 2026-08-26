@@ -279,7 +279,6 @@ main() {
       --arg count "${#COMPS_UPDATED[@]}" \
       --arg ver "$VERSION" \
       '{componentsUpdated:($count|tonumber),version:$ver}' | jq -c .) || data="{}"
-    update_step "$VERSION" "tektonComponents" "complete" "$data" "$TRACKER"
   fi
 
   print_summary

@@ -296,10 +296,10 @@ if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
     >> "$AUTORELEASE_PUSH_LOG"
 fi
 
-# Record completion in tracker
+# review level: script stays in_progress. User must push the config changes and
+# wait for ArgoCD to deploy ReleasePlans to cluster, then explicitly mark complete.
 if [ -n "${TRACKER:-}" ]; then
   _tracker_data=$(jq -n --arg branch "$BRANCH" '{branch:$branch}' | jq -c .) || _tracker_data="{}"
-  update_step "$INPUT_VERSION" "configureDownstream" "complete" "$_tracker_data" "$TRACKER"
 fi
 
 # ━━━ SUMMARY ━━━

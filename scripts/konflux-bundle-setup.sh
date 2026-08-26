@@ -756,11 +756,11 @@ main() {
     printf '\n  cd %s\n  git push origin %s\n' "$OPERATOR_REPO" "$current_branch" >> "$AUTORELEASE_PUSH_LOG"
   fi
 
-  # Record completion
+  # review level: script stays in_progress. User must push the Tekton config changes
+  # and wait for Konflux to rebuild, then explicitly mark complete.
   if [ -n "${TRACKER:-}" ]; then
     local data
     data=$(jq -n --arg ver "$VERSION" '{version:$ver}' | jq -c .) || data="{}"
-    update_step "$input_version" "tektonBundle" "complete" "$data" "$TRACKER"
   fi
 }
 

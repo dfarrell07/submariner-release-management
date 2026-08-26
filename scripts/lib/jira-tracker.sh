@@ -90,21 +90,21 @@ STEP_SKILL_HINT["createBranches"]="See .agents/workflows/create-release-branch.m
 STEP_TITLES["configureDownstream"]="Configure Konflux downstream"
 STEP_PHASE["configureDownstream"]="Branch Setup"
 STEP_DEPENDENCIES["configureDownstream"]="createBranches"
-AUTOMATION_LEVEL["configureDownstream"]="auto"
+AUTOMATION_LEVEL["configureDownstream"]="review"
 STEP_SCRIPT["configureDownstream"]="scripts/configure-downstream.sh"
 
 # ── tektonComponents ────────────────────────────────────────────────────────
 STEP_TITLES["tektonComponents"]="Tekton component setup"
 STEP_PHASE["tektonComponents"]="Branch Setup"
 STEP_DEPENDENCIES["tektonComponents"]="configureDownstream"
-AUTOMATION_LEVEL["tektonComponents"]="auto"
+AUTOMATION_LEVEL["tektonComponents"]="review"
 STEP_SCRIPT["tektonComponents"]="scripts/tekton-component-setup.sh"
 
 # ── tektonBundle ────────────────────────────────────────────────────────────
 STEP_TITLES["tektonBundle"]="Tekton bundle setup"
 STEP_PHASE["tektonBundle"]="Branch Setup"
 STEP_DEPENDENCIES["tektonBundle"]="configureDownstream"
-AUTOMATION_LEVEL["tektonBundle"]="auto"
+AUTOMATION_LEVEL["tektonBundle"]="review"
 STEP_SCRIPT["tektonBundle"]="scripts/konflux-bundle-setup.sh"
 
 # === Build Readiness steps ===
@@ -130,7 +130,7 @@ STEP_TITLES["rpmLockfiles"]="RPM lockfile updates"
 STEP_PHASE["rpmLockfiles"]="Build Readiness"
 STEP_DEPENDENCIES["rpmLockfiles"]=""
 STALENESS_RULES["rpmLockfiles"]="3d"
-AUTOMATION_LEVEL["rpmLockfiles"]="auto"
+AUTOMATION_LEVEL["rpmLockfiles"]="review"
 STEP_SCRIPT["rpmLockfiles"]="scripts/rpm-lockfile-update.sh"
 
 # ── tektonTasks ─────────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ STEP_SCRIPT["tektonTasks"]="scripts/tekton-task-refs-update.sh"
 STEP_TITLES["versionLabels"]="Version label updates"
 STEP_PHASE["versionLabels"]="Build Readiness"
 STEP_DEPENDENCIES["versionLabels"]=""
-AUTOMATION_LEVEL["versionLabels"]="auto"
+AUTOMATION_LEVEL["versionLabels"]="review"
 STEP_SCRIPT["versionLabels"]="scripts/update-version-labels.sh"
 
 # ── upstreamRelease ─────────────────────────────────────────────────────────

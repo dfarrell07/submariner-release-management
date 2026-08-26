@@ -333,11 +333,12 @@ main() {
   # mark the whole step complete.
   # update_step is called AFTER print_summary so that a push-log write failure
   # (inside print_summary) leaves the tracker at 'in_progress' rather than 'complete'.
+  # review level: script stays in_progress. User must push the label changes and
+  # wait for Konflux to rebuild, then explicitly mark complete.
   if [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && [ "${#REPOS_FAILED[@]}" -eq 0 ]; then
     local data
     data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" --arg ver "$VERSION" \
       '{reposUpdated:($count|tonumber),version:$ver}' | jq -c .) || data="{}"
-    update_step "$VERSION" "versionLabels" "complete" "$data" "$TRACKER"
   fi
 }
 
