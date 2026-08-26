@@ -1981,6 +1981,60 @@ stage-verified snapshot and skip re-verification (`create-fbc-releases.sh:234`,
 The `componentStage` gate was added proactively — the stale-bundle hazard it
 catches was documented and live (see "Chain hazards"), not a defect to wait on.
 
+### 2c. Parallel conductor (IDEA — not yet planned)
+
+**Problem:** The conductor is fully serial — it finds the first ready step, runs
+it, and stops. This forces sequential PR workflows even when steps are
+independent. For a Z-stream release, `rpmLockfiles`, `versionLabels`,
+`tektonTasks`, `cveFixes`, and `ecFixes` all have no dependencies
+(`STEP_DEPENDENCIES=""`) and could run concurrently. Currently, getting their
+PRs out requires five separate `/autorelease` invocations, and each waits for
+its predecessor's PRs to merge before the next step even starts.
+
+**Desired behavior:** When multiple steps are ready (all deps complete, not yet
+done), the conductor should run/start all of them, report all pending PR sets,
+and only gate when a step with real dependencies (`upstreamRelease`) requires
+its predecessors to be complete.
+
+**Three sub-problems:**
+
+1. **Parallel script execution.** Running multiple scripts concurrently (e.g.
+   `tektonTasks` + `rpmLockfiles` + `versionLabels` simultaneously) requires
+   background jobs or subshells with coordinated output and exit-code tracking.
+   The push log already supports multiple steps per run (the two-flag design was
+   kept for this reason), but the conductor loop is single-threaded.
+
+2. **Show all pending steps at once.** Simpler intermediate: keep serial
+   execution but when stopped, print ALL steps that are currently ready (not
+   just the first). This lets the operator know what else can be started
+   manually in parallel, without redesigning the conductor loop. ~10 lines in
+   `find_next_step` to collect all ready steps instead of returning on the first.
+
+3. **PR-level blocking.** Some steps need all their PRs merged before downstream
+   work can begin (the rebuild dependency). Others can have PRs proposed in
+   parallel. The dependency graph already encodes the blocking boundaries —
+   `upstreamRelease` can't start until all its deps are `complete`. The
+   conductor just needs to start all dep-less steps simultaneously and let the
+   verifiers advance each one independently.
+
+**Approach options (in increasing complexity):**
+
+- **Show-all (quick win):** When the conductor stops at a review/gate step,
+  scan and print all other currently-ready steps so the operator knows what else
+  to kick off. No execution change. ~10-20 lines.
+
+- **Run-all:** On each invocation, run all ready scripts in parallel (background
+  jobs), collect push-log entries from all, print a combined pending-actions
+  block. Moderate complexity — needs output serialization and exit-code
+  aggregation.
+
+- **Full DAG executor:** Stateful conductor that tracks in-flight steps across
+  invocations, auto-advances each step's verifier independently, and only
+  presents the combined gate at true dependency boundaries. High complexity.
+
+**Recommendation:** Start with show-all (quick win), then run-all if the manual
+parallel workflow is still too friction-heavy.
+
 ## Phase 3: Apply steps (SHELVED — retained as a record, not planned work)
 
 > **Shelved indefinitely (see Status).** The conductor will not write to the
