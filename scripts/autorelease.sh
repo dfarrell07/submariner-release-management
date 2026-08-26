@@ -515,6 +515,9 @@ try_auto_verify() {
       if [ "$new_hash" != "$cached_hash" ]; then
         _add_comment "$TRACKER" "$vdata" || true
         printf '%s' "$new_hash" > "$cache_file"
+        update_subtask_description "$VERSION" "$step" \
+          "$(printf '## PRs\n\n%s\n\n## Status\n\nPRs open — waiting for merge and Konflux rebuild.' "$vdata")" \
+          "$TRACKER" || true
       fi
     fi
     return 3
@@ -529,6 +532,9 @@ try_auto_verify() {
     if [ -n "$vdata" ] && [ -n "$TRACKER" ]; then
       if ! printf '%s' "$vdata" | jq -e . >/dev/null 2>&1; then
         _add_comment "$TRACKER" "$vdata" || true
+        update_subtask_description "$VERSION" "$step" \
+          "$(printf '## PRs\n\n%s\n\n## Status\n\nAll PRs merged ✓' "$vdata")" \
+          "$TRACKER" || true
         vdata="{}"
       fi
     fi
