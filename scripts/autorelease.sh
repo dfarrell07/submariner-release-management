@@ -1324,11 +1324,21 @@ run_conductor() {
 
       run)
         # Same-step guard: the script ran (exit 0) but the tracker still shows the
-        # step incomplete. For these commit-producing steps that almost always
-        # means the step's own output hasn't propagated yet, so lead with that
-        # rather than the opaque "didn't mark complete", then offer both re-run
-        # and the manual-escape (--complete) for work already done out-of-band.
+        # step incomplete. First try the verifier — for review-level steps this
+        # checks that PRs are merged and auto-advances if so. Only fall through
+        # to the warning if the verifier says not done yet.
         if [ "$NEXT_STEP" = "$prev_step" ]; then
+          _tav_rc=0; try_auto_verify "$NEXT_STEP" || _tav_rc=$?
+          if [ "$_tav_rc" -eq 0 ]; then
+            step_statuses[$NEXT_STEP]='complete'
+            _AUTORELEASE_NOFETCH=1
+            continue
+          fi
+          if [ "$_tav_rc" -eq 2 ]; then
+            echo "  ⚠ Cannot verify ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP} — check preconditions above" >&2
+            echo "  Re-run once done: /autorelease $VERSION" >&2
+            break
+          fi
           echo "" >&2
           echo "⚠️  ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}: ran, but isn't complete yet" >&2
           echo "  Its changes likely need to propagate first — push any commits," >&2
