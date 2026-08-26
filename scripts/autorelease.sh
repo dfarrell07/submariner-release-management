@@ -714,12 +714,118 @@ verify_fbcProdUrls() {
   jq -cn --arg img "$bundle_image" --arg ver "$version" '{bundleImage:$img,version:$ver}'
 }
 
+# --- PR-merge verifiers for review-level steps ---
+# Each checks that all expected PRs on a fix branch are merged, posts the PR
+# URLs to Jira as a comment, and returns JSON data for the tracker.
+# Exit codes: 0=verified, 1=not yet, 2=precondition failure.
+
+# _verify_prs_merged: shared helper used by tektonTasks/rpmLockfiles/versionLabels.
+# Args: $1=version $2=tracker $3=branch_name $4=space-separated "org/repo" list
+# Stdout: JSON {prs:[...]} on success. Stderr: human-readable status.
+_verify_prs_merged() {
+  local version="$1"
+  local tracker="$2"
+  local branch="$3"
+  local repos="$4"
+
+  if ! command -v gh &>/dev/null; then
+    echo "  gh not installed" >&2; return 2
+  fi
+
+  local all_merged=true
+  local pr_urls=()
+  local missing=()
+
+  for repo in $repos; do
+    local pr_json pr_rc=0
+    pr_json=$(gh pr list --repo "$repo" --head "$branch" --state all \
+      --json number,state,mergedAt,url --limit 5 2>/dev/null) || pr_rc=$?
+    if [ "$pr_rc" -ne 0 ]; then
+      echo "  gh pr list failed for $repo (exit $pr_rc) — network or auth issue" >&2
+      return 2
+    fi
+
+    local merged_url
+    merged_url=$(printf '%s' "$pr_json" | \
+      jq -r '[.[] | select(.state=="MERGED")] | sort_by(.mergedAt) | last | .url // empty' \
+      2>/dev/null) || merged_url=""
+
+    if [ -n "$merged_url" ]; then
+      pr_urls+=("$merged_url")
+    else
+      # Check if there's an open PR (not yet merged)
+      local open_url
+      open_url=$(printf '%s' "$pr_json" | \
+        jq -r '[.[] | select(.state=="OPEN")] | last | .url // empty' 2>/dev/null) || open_url=""
+      if [ -n "$open_url" ]; then
+        echo "  PR not yet merged: $open_url" >&2
+      else
+        echo "  No PR found on $repo (branch: $branch)" >&2
+        missing+=("$repo")
+      fi
+      all_merged=false
+    fi
+  done
+
+  if ! $all_merged; then
+    return 1
+  fi
+
+  # All merged — post PR URLs to Jira as a comment
+  local url_list
+  url_list=$(printf '%s\n' "${pr_urls[@]}")
+  local comment="Merged PRs for ${branch}:\n${url_list}"
+  if [ -n "$tracker" ]; then
+    _add_comment "$tracker" "$(printf '%b' "$comment")" || true
+  fi
+
+  jq -cn --arg branch "$branch" \
+    --argjson prs "$(printf '%s\n' "${pr_urls[@]}" | jq -R . | jq -s .)" \
+    '{branch:$branch,prs:$prs}'
+  return 0
+}
+
+verify_tektonTasks() {
+  local version="$1"
+  local tracker="${2:-}"
+  local major_minor="${version%.*}"
+  local branch="fix-tekton-tasks-${major_minor}"
+  # 5 component repos + FBC repo (stolostron org)
+  local repos="submariner-io/submariner-operator submariner-io/submariner \
+    submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl \
+    stolostron/submariner-operator-fbc"
+  _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
+}
+
+verify_rpmLockfiles() {
+  local version="$1"
+  local tracker="${2:-}"
+  local branch="update-rpm-lockfiles-${version}"
+  # RPM lockfiles only apply to submariner and shipyard
+  local repos="submariner-io/submariner submariner-io/shipyard"
+  _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
+}
+
+verify_versionLabels() {
+  local version="$1"
+  local tracker="${2:-}"
+  local major_minor="${version%.*}"
+  local branch="fix-version-labels-${major_minor}"
+  # Version labels apply to all 5 component repos
+  local repos="submariner-io/submariner-operator submariner-io/submariner \
+    submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl"
+  _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
+}
+
 # Map step keys to verifier functions (only steps with external verifiers)
 declare -A STEP_VERIFIER=(
   ["createBranches"]="verify_createBranches"
   ["upstreamRelease"]="verify_upstreamRelease"
   ["ecFixes"]="verify_ecFixes"
   ["fbcProdUrls"]="verify_fbcProdUrls"
+  ["tektonTasks"]="verify_tektonTasks"
+  ["rpmLockfiles"]="verify_rpmLockfiles"
+  ["versionLabels"]="verify_versionLabels"
 )
 
 # RELEASE_YAML_STEPS and DIRECT_PUSH_STEPS are defined in jira-tracker.sh
