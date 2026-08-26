@@ -3107,6 +3107,20 @@ window always ends when EC passes; stopping with rc=2 vs rc=1 changes
 only the message. Alternatively, the hint could note "EC not yet
 checkable without oc login; re-run after logging in."
 
+**Workflow insight: run `ecFixes` first to establish a green-EC baseline.**
+The current STEP_ORDER runs rpmLockfiles → versionLabels → tektonTasks →
+cveFixes → ecFixes in sequence. But `ecFixes` (`verify_ecFixes`) is the
+signal that tells you whether the combined set of merged PRs keeps EC
+green — if it fails, the preceding steps may need rework. Running ecFixes
+earlier (or in parallel with the others) means you learn about EC
+breakage before the operator spends time on CVE fixes and upstream
+release work that may need to be redone. **Consider reordering:**
+move `ecFixes` before `cveFixes` in `STEP_ORDER` for z-stream, or
+add an early manual check that verifies EC passes after `tektonTasks`
+merges. The window where this matters is the ~15-30 min between the
+`tektonTasks` PRs landing and Konflux rebuilding — polling `ecFixes`
+immediately after that rebuild confirms green before advancing further.
+
 **Dead `manual` dispatch branch.** `find_next_step` sets
 `NEXT_REASON=manual` only when a step has neither `gate` level, nor a
 `STEP_SCRIPT`, nor a `STEP_SKILL_HINT` (`find_next_step`). Every
