@@ -560,14 +560,15 @@ main() {
   validate_yaml
   commit_changes
 
-  # Record completion
+  # review level: script stays in_progress. User must apply the Release CR and wait
+  # for the build to complete, then explicitly mark complete. This prevents chaining
+  # to downstream steps before the release pipeline has produced a bundle/index.
   if [ -n "${TRACKER:-}" ]; then
     local release_name
     release_name=$(basename "${YAML_FILE:-.yaml}" .yaml)
     local data
     data=$(jq -n --arg name "$release_name" --arg snap "${SNAPSHOT_NAME:-}" --arg type "$RELEASE_TYPE" \
       '{releaseName:$name,snapshot:$snap,type:$type}' | jq -c .) || data="{}"
-    update_step "$VERSION" "$STEP_KEY" "complete" "$data" "$TRACKER"
   fi
 }
 

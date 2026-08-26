@@ -387,15 +387,14 @@ main() {
   print_summary
 
   # Record completion when the full repo set was processed with no failures.
-  # "All already current" (0 updated, 0 failed) is still success. A single-repo
-  # run (REPO_FILTER) covers only part of the step, so it must not complete it.
-  # update_step is called AFTER print_summary so that a push-log write failure
-  # (inside print_summary) leaves the tracker at 'in_progress' rather than 'complete'.
+  # review level: script stays in_progress. User must push/merge PRs, then
+  # explicitly mark complete: /autorelease --complete tektonTasks. This prevents
+  # auto-chaining to downstream steps before the Tekton changes are merged.
+  # (Historically scripts marked themselves complete, which broke the review stop.)
   if [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && [ "${#REPOS_FAILED[@]}" -eq 0 ]; then
     local data
     data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" --arg ver "$VERSION" \
       '{reposUpdated:($count|tonumber),version:$ver}' | jq -c .) || data="{}"
-    update_step "$VERSION" "tektonTasks" "complete" "$data" "$TRACKER"
   fi
 }
 

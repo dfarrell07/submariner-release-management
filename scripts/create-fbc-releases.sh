@@ -528,12 +528,12 @@ main() {
   validate_yamls
   commit_changes
 
-  # Record completion
+  # review level: script stays in_progress. User must apply the Release CRs and wait
+  # for the builds to complete, then explicitly mark complete.
   if [ -n "${TRACKER:-}" ]; then
     local ocp_count="${#CREATED_FILES[@]}"
     local data
     data=$(jq -n --arg count "$ocp_count" '{ocpVersionCount:($count|tonumber)}' | jq -c .) || data="{}"
-    update_step "$VERSION" "$STEP_KEY" "complete" "$data" "$TRACKER"
   fi
 }
 

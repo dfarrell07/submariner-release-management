@@ -120,13 +120,10 @@ else
   fi
 fi
 
-# Record completion. Carry the bundleShas snapshot (via the shared, unit-tested
-# snapshot_step_data helper) so fbcCatalogUpdate's snapshot-staleness rule (see
-# STALENESS_RULES / check_freshness) can flag the catalog as stale once a newer
-# component build lands in bundleShas.
+# review level: script stays in_progress. User must push the catalog update and
+# wait for the FBC rebuild (~15-30 min), then explicitly mark complete.
 if [ -n "${TRACKER:-}" ]; then
   _data=$(snapshot_step_data "$VERSION" "$TRACKER")
-  update_step "$VERSION" "fbcCatalogUpdate" "complete" "$_data" "$TRACKER"
 fi
 
 echo "" >&2

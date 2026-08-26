@@ -685,12 +685,13 @@ main() {
   commit_changes
   print_summary
 
-  # Record completion
+  # review level: script stays in_progress. User must push/merge the SHA-bump PR,
+  # wait for bundle rebuild, then explicitly mark complete. This prevents chaining
+  # to componentStage before the bundle rebuild has created a new snapshot.
   if [ -n "${TRACKER:-}" ]; then
     local data
     data=$(jq -n --arg snap "${SNAPSHOT:-}" --arg ver "$TARGET_VERSION" \
       '{snapshot:$snap,version:$ver}' | jq -c .) || data="{}"
-    update_step "$TARGET_VERSION" "bundleShas" "complete" "$data" "$TRACKER"
   fi
 }
 

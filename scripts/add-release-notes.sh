@@ -164,11 +164,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # Record completion
 if [ -n "${TRACKER:-}" ]; then
   local_cve_count=$(jq -r '.cve_topics | length' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
-  # Total issue count lives in topics.json statistics; data.json has no
-  # total_issues key, so the old read here always recorded 0.
   local_total=$(jq -r '(.statistics.cve_count + .statistics.non_cve_total)' "$RELEASE_NOTES_TOPICS" 2>/dev/null || echo "0")
   local_type=$( [ "$local_cve_count" -gt 0 ] && echo "RHSA" || echo "RHBA" )
   data=$(jq -n --arg type "$local_type" --arg total "$local_total" --arg cves "$local_cve_count" \
     '{advisoryType:$type,totalIssues:($total|tonumber),cveCount:($cves|tonumber)}' | jq -c .) || data="{}"
-  update_step "$VERSION" "releaseNotes" "complete" "$data" "$TRACKER"
+  # review level: script stays in_progress. User must review the release notes,
+  # then explicitly mark complete.
 fi
