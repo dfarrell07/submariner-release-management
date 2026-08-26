@@ -130,13 +130,16 @@ assert_not_contains "IT-1: no unknown-dispatch error" "$_it1_out" "Unknown dispa
 assert_eq "IT-1: conductor exits 0 at review stop" "$_it1_rc" "0"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# IT-2: same-step guard
-# Setup: all statuses empty (acli returns []); rpmLockfiles stub exits 0 without
-# marking itself complete in Jira. On the second find_next_step call the step is
-# still not_started → same-step guard fires.
+# IT-2: review stop on first ready step
+# Setup: all statuses empty (acli returns []); rpmLockfiles is the first z-stream
+# step and is review level → conductor runs its script, prints REVIEW, and breaks.
+# Note: the same-step guard can't fire for review steps — they always break
+# immediately after running rather than looping (so there's no second iteration
+# to compare NEXT_STEP against prev_step). The guard is exercised only for auto
+# steps that exit 0 without self-marking complete (not currently in the test suite).
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
-echo "IT-2: Same-step guard (rpmLockfiles exits 0 without completing)"
+echo "IT-2: Review stop on first ready step (rpmLockfiles)"
 
 _it2_rc=0
 _it2_out=$(
@@ -158,9 +161,9 @@ _it2_out=$(
   rm -f "$AUTORELEASE_PUSH_LOG"
 ) || _it2_rc=$?
 
-assert_contains "IT-2: same-step guard message" "$_it2_out" "ran, but isn't complete yet"
+assert_contains "IT-2: review stop message" "$_it2_out" "REVIEW"
 assert_contains "IT-2: suggests re-run" "$_it2_out" "/autorelease"
-assert_eq "IT-2: conductor exits 0 on same-step guard" "$_it2_rc" "0"
+assert_eq "IT-2: conductor exits 0 on review stop" "$_it2_rc" "0"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # IT-3: gate stop
@@ -200,16 +203,15 @@ assert_contains "IT-3: output names the gated step" "$_it3_out" "upstreamRelease
 assert_eq "IT-3: conductor exits 0 on gate" "$_it3_rc" "0"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# IT-4: auto-chain advances past multiple auto steps
-# Setup: cveFixes, tektonTasks, ecFixes already complete; rpmLockfiles and
-# versionLabels not_started (both auto steps with no deps).
-# Stubs: logging scripts that write their name to _IT_LOG; stateful acli that
-# reads _IT_LOG to report the accumulated completed steps.
-# Expect: both rpmLockfiles and versionLabels appear in _IT_LOG (both ran in
-# one conductor invocation before the upstreamRelease gate stops it).
+# IT-4: review step runs and breaks — subsequent steps not reached in same run
+# Setup: cveFixes, tektonTasks, ecFixes already complete; rpmLockfiles not_started.
+# rpmLockfiles is review level → conductor runs it, prints REVIEW, breaks.
+# versionLabels is NOT reached in the same conductor invocation.
+# Note: rpmLockfiles and versionLabels are both review steps (not auto), so
+# there is no multi-step auto-chain between them — each requires a fresh run.
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
-echo "IT-4: Auto-chain advances past multiple auto steps"
+echo "IT-4: Review step runs, subsequent review step not reached (rpmLockfiles)"
 
 _IT_LOG=$(mktemp); export _IT_LOG
 _make_logging_stub "scripts/rpm-lockfile-update.sh" "rpmLockfiles"
@@ -246,8 +248,8 @@ _it4_ran=$(cat "$_IT_LOG" 2>/dev/null || echo "")
 rm -f "$_IT_LOG"
 
 assert_contains "IT-4: rpmLockfiles ran" "$_it4_ran" "rpmLockfiles"
-assert_contains "IT-4: versionLabels ran" "$_it4_ran" "versionLabels"
-assert_eq "IT-4: conductor exits 0 after auto-chain" "$_it4_rc" "0"
+assert_not_contains "IT-4: versionLabels not reached (review break)" "$_it4_ran" "versionLabels"
+assert_eq "IT-4: conductor exits 0 after review stop" "$_it4_rc" "0"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # IT-5: gate step without verifier shows --complete instruction

@@ -390,44 +390,26 @@ assert_eq "cveFixes (time rule) --complete → {} (not snapshot-stamped)" "${_UP
 eval "$_orig_snapshot_step_data"
 
 # Fix 5: --refresh cascade tests
-# 18f: --refresh on a step cascades to all transitive downstream steps.
-# bundleShas → componentStage → releaseNotes, fbcCatalogUpdate → fbcStageReleases
-# → qeValidation → componentProd → fbcProdReleases → fbcProdUrls
+# 18f: --refresh on a step calls update_step exactly once (no cascade;
+# cascade was removed in 56351b6 to avoid Jira noise and dangerous resets).
 _UPDATE_STEP_CALLS=()
 handle_step_override "0.99.1" "bundleShas" "in_progress" "FAKE-123" 2>/dev/null
-# First call is the direct refresh; subsequent calls are cascade resets.
-assert_eq "cascade: bundleShas refresh is first call" \
+assert_eq "no-cascade: bundleShas refresh is exactly 1 call" \
+  "${#_UPDATE_STEP_CALLS[@]}" "1"
+assert_eq "no-cascade: bundleShas refresh records correct args" \
   "${_UPDATE_STEP_CALLS[0]}" "0.99.1|bundleShas|in_progress|{}|FAKE-123"
-# At least one downstream step (componentStage) must be reset.
-_cascade_calls_all="${_UPDATE_STEP_CALLS[*]}"
-assert_contains "cascade: componentStage reset to not_started" \
-  "$_cascade_calls_all" "0.99.1|componentStage|not_started|{}|FAKE-123"
-# The full cascade reaches fbcProdUrls (end of chain).
-assert_contains "cascade: fbcProdUrls also reset" \
-  "$_cascade_calls_all" "0.99.1|fbcProdUrls|not_started|{}|FAKE-123"
-# Total calls = 1 (direct) + N (cascade); at least 2.
-assert_eq "cascade: multiple update_step calls (direct + cascade)" \
-  "$([[ ${#_UPDATE_STEP_CALLS[@]} -gt 1 ]] && echo many || echo one)" "many"
 
-# 18g: --complete does NOT cascade (only --refresh triggers cascade).
+# 18g: --complete also calls update_step exactly once.
 _UPDATE_STEP_CALLS=()
 handle_step_override "0.99.1" "bundleShas" "complete" "FAKE-123" 2>/dev/null
-assert_eq "cascade: --complete does not cascade (exactly 1 call)" \
+assert_eq "no-cascade: --complete is exactly 1 call" \
   "${#_UPDATE_STEP_CALLS[@]}" "1"
 
-# 18h: --refresh on a leaf step (no dependents) produces no cascade calls.
+# 18h: --refresh on a leaf step also produces exactly 1 call.
 _UPDATE_STEP_CALLS=()
 handle_step_override "0.99.1" "fbcProdUrls" "in_progress" "FAKE-123" 2>/dev/null
-assert_eq "cascade: fbcProdUrls (leaf) produces exactly 1 call (no cascade)" \
+assert_eq "no-cascade: fbcProdUrls (leaf) is exactly 1 call" \
   "${#_UPDATE_STEP_CALLS[@]}" "1"
-
-# 18i: cascade message is emitted to stderr (not stdout) so machine consumers
-# can suppress it with 2>/dev/null.
-_UPDATE_STEP_CALLS=()
-cascade_err=$(handle_step_override "0.99.1" "bundleShas" "in_progress" "FAKE-123" 2>&1 >/dev/null)
-cascade_out=$(handle_step_override "0.99.1" "bundleShas" "in_progress" "FAKE-123" 2>/dev/null) || true
-assert_contains "cascade: cascade message goes to stderr" "$cascade_err" "Cascading --refresh"
-assert_eq "cascade: no cascade text on stdout" "$cascade_out" ""
 
 # Restore original update_step
 eval "$_orig_update_step"
@@ -1253,17 +1235,14 @@ assert_not_contains() {
 
 VERSION="0.99.1"; RELEASE_TYPE="z-stream"; TRACKER="FAKE-123"
 
-# DR-1: Fresh z-stream → runs the four script steps (rpmLockfiles →
-# versionLabels → tektonTasks → cveFixes), then stops AT cveFixes because it is a
-# `review` run step (runs its script, then the loop breaks). No verifier crossed →
-# plain "Stops at".
+# DR-1: Fresh z-stream → dry-run shows the first ready script step (rpmLockfiles)
+# and stops there because it is a `review` run step. The walk stops at the first
+# review step it encounters, not at the last one in the batch. No verifier crossed →
+# plain "Stops at" (no "Earliest possible stop").
 declare -A step_statuses=()
 dr=$(run_dry_run 2>&1)
 assert_contains "dry-run fresh z: runs rpmLockfiles"   "$dr" "run: scripts/rpm-lockfile-update.sh 0.99.1"
-assert_contains "dry-run fresh z: runs versionLabels"  "$dr" "run: scripts/update-version-labels.sh 0.99.1"
-assert_contains "dry-run fresh z: runs tektonTasks"    "$dr" "run: scripts/tekton-task-refs-update.sh 0.99.1"
-assert_contains "dry-run fresh z: runs cveFixes"       "$dr" "run: scripts/cve-fixes-update.sh 0.99.1"
-assert_contains "dry-run fresh z: stops at cveFixes (review)" "$dr" "Stops at: CVE fixes — runs the script then pauses for review — re-run /autorelease 0.99.1 to execute"
+assert_contains "dry-run fresh z: stops at rpmLockfiles (review)" "$dr" "Stops at: RPM lockfile updates — runs the script then pauses for review — re-run /autorelease 0.99.1 to execute"
 assert_not_contains "dry-run fresh z: no conditional stop (no gate crossed)" "$dr" "Earliest possible stop"
 
 # DR-2: Mid-chain resume (seed through ecFixes, the plan's 5-step seed) →
@@ -1341,9 +1320,7 @@ assert_not_contains "dry-run all-done: not terminal block" "$alldone" "All autom
 assert_not_contains "dry-run all-done: no optimism footnote" "$alldone" "this offline preview is optimistic"
 
 # DR-6: fresh y-stream → createBranches (hint+verifier) chains with a PLAIN label
-# (no "gate ·"), then the auto chain (configureDownstream, tektonComponents,
-# tektonBundle, rpmLockfiles, versionLabels, tektonTasks) runs until cveFixes
-# (first review stop). ecFixes (auto, reached as hint+verifier) also gets a plain label.
+# (no "gate ·"), then stops at configureDownstream (the first review step in y-stream).
 VERSION="0.99.0"; RELEASE_TYPE="y-stream"; TRACKER="FAKE-9"
 declare -A step_statuses=()
 yout=$(run_dry_run 2>&1)
@@ -1353,8 +1330,8 @@ assert_not_contains "dry-run y: createBranches has no gate · prefix" "$yout" \
   "gate · auto-verifies: release-0.99 branches exist"
 assert_contains "dry-run y: conditional stop names createBranches verifier" "$yout" \
   "Earliest possible stop: Create upstream release branches (verifier: release-0.99 branches exist on all upstream repos)"
-assert_contains "dry-run y: tektonComponents listed as run step" "$yout" "Tekton component setup"
-assert_contains "dry-run y: stops at cveFixes (first review)" "$yout" "Otherwise stops at: CVE fixes"
+assert_contains "dry-run y: configureDownstream listed as run step" "$yout" "run: scripts/configure-downstream.sh 0.99.0"
+assert_contains "dry-run y: stops at configureDownstream (first review)" "$yout" "Otherwise stops at: Configure Konflux downstream"
 
 # DR-6b: ecFixes reaches the verifier arm as hint (auto level) → plain label.
 VERSION="0.99.1"; RELEASE_TYPE="z-stream"; TRACKER="FAKE-123"
