@@ -492,14 +492,17 @@ try_auto_verify() {
   #
   # Exit-code contract:
   #   0  — step verified complete; caller should `continue` the walk
-  #   1  — step not yet complete; caller stops or handles terminals
+  #   1  — step not yet complete (no evidence of work); caller runs script or stops
   #   2  — precondition failure (no oc, no network, missing repo); cannot tell
   #          whether step is done — caller should surface a diagnostic and stop
+  #   3  — work in progress (PRs open, not merged); caller should wait, not re-run
   local vdata="" verify_rc=0
   vdata=$("$verifier" "$VERSION" "$TRACKER") || verify_rc=$?
   if [ "$verify_rc" -eq 2 ]; then
-    # Precondition failure — cannot determine step status; propagate to caller.
     return 2
+  fi
+  if [ "$verify_rc" -eq 3 ]; then
+    return 3
   fi
   if [ "$verify_rc" -eq 0 ]; then
     echo "  ✓ ${STEP_TITLES[$step]:-$step}: verified externally" >&2
@@ -717,7 +720,8 @@ verify_fbcProdUrls() {
 # --- PR-merge verifiers for review-level steps ---
 # Each checks that all expected PRs on a fix branch are merged, posts the PR
 # URLs to Jira as a comment, and returns JSON data for the tracker.
-# Exit codes: 0=verified, 1=not yet, 2=precondition failure.
+# Exit codes: 0=verified complete, 1=no PRs found (script hasn't run yet),
+#             2=precondition failure, 3=PRs open but not merged yet (wait).
 
 # _verify_prs_merged: shared helper used by tektonTasks/rpmLockfiles/versionLabels.
 # Args: $1=version $2=tracker $3=branch_name $4=space-separated "org/repo" list
@@ -733,8 +737,8 @@ _verify_prs_merged() {
   fi
 
   local all_merged=true
+  local any_open=false
   local pr_urls=()
-  local missing=()
 
   for repo in $repos; do
     local pr_json pr_rc=0
@@ -753,21 +757,22 @@ _verify_prs_merged() {
     if [ -n "$merged_url" ]; then
       pr_urls+=("$merged_url")
     else
-      # Check if there's an open PR (not yet merged)
       local open_url
       open_url=$(printf '%s' "$pr_json" | \
         jq -r '[.[] | select(.state=="OPEN")] | last | .url // empty' 2>/dev/null) || open_url=""
       if [ -n "$open_url" ]; then
-        echo "  PR not yet merged: $open_url" >&2
+        echo "  PR open, not yet merged: $open_url" >&2
+        any_open=true
       else
         echo "  No PR found on $repo (branch: $branch)" >&2
-        missing+=("$repo")
       fi
       all_merged=false
     fi
   done
 
   if ! $all_merged; then
+    # Distinguish: at least one PR exists (open) vs no PRs at all (script not run)
+    $any_open && return 3
     return 1
   fi
 
@@ -1287,7 +1292,7 @@ run_conductor() {
 
       gate|hint)
         # Chain past the step if an external verifier confirms it already happened.
-        # Capture exit code to distinguish: 0=verified, 1=not done, 2=precondition failure.
+        # Exit codes: 0=verified, 1=not done, 2=precondition failure, 3=work in progress.
         _tav_rc=0; try_auto_verify "$NEXT_STEP" || _tav_rc=$?
         if [ "$_tav_rc" -eq 0 ]; then
           step_statuses[$NEXT_STEP]='complete'
@@ -1336,6 +1341,12 @@ run_conductor() {
             echo "  Re-run once done: /autorelease $VERSION" >&2
             break
           fi
+          if [ "$_tav_rc" -eq 3 ]; then
+            echo "" >&2
+            echo "⏳ ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}: PRs open, waiting for merge" >&2
+            echo "  Re-run after PRs merge: /autorelease $VERSION" >&2
+            break
+          fi
           echo "" >&2
           echo "⚠️  ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}: ran, but isn't complete yet" >&2
           echo "  Its changes likely need to propagate first — push any commits," >&2
@@ -1365,9 +1376,13 @@ run_conductor() {
             echo "  Re-run once done: /autorelease $VERSION" >&2
             break
           fi
-          # Verifier returned 1: not done yet — fall through to run the script
-          # (handles the case where the script hasn't run at all yet and the step
-          # was manually set to in_progress, or needs to be re-run).
+          if [ "$_tav_rc" -eq 3 ]; then
+            echo "" >&2
+            echo "⏳ ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}: PRs open, waiting for merge" >&2
+            echo "  Re-run after PRs merge: /autorelease $VERSION" >&2
+            break
+          fi
+          # Verifier returned 1: no PRs found yet — fall through to run the script.
         fi
 
         local_script="${STEP_SCRIPT[$NEXT_STEP]:-}"
