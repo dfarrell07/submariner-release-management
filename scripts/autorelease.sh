@@ -1346,6 +1346,30 @@ run_conductor() {
         fi
         prev_step="$NEXT_STEP"
 
+        # For in_progress steps with a verifier, check if the work is already
+        # done (e.g. PRs merged) before re-running the script. This handles the
+        # case where the conductor is re-invoked after a review-level step ran
+        # on a prior run — prev_step starts empty each fresh invocation, so the
+        # same-step guard above never fires, but we still must not re-run the
+        # script if the external state shows the step is complete.
+        local_status="${step_statuses[$NEXT_STEP]:-}"
+        if [ "$local_status" = "in_progress" ] && [ -n "${STEP_VERIFIER[$NEXT_STEP]:-}" ]; then
+          _tav_rc=0; try_auto_verify "$NEXT_STEP" || _tav_rc=$?
+          if [ "$_tav_rc" -eq 0 ]; then
+            step_statuses[$NEXT_STEP]='complete'
+            _AUTORELEASE_NOFETCH=1
+            continue
+          fi
+          if [ "$_tav_rc" -eq 2 ]; then
+            echo "  ⚠ Cannot verify ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP} — check preconditions above" >&2
+            echo "  Re-run once done: /autorelease $VERSION" >&2
+            break
+          fi
+          # Verifier returned 1: not done yet — fall through to run the script
+          # (handles the case where the script hasn't run at all yet and the step
+          # was manually set to in_progress, or needs to be re-run).
+        fi
+
         local_script="${STEP_SCRIPT[$NEXT_STEP]:-}"
         local_args="${STEP_EXTRA_ARGS[$NEXT_STEP]:-}"
         local_title="${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}"
