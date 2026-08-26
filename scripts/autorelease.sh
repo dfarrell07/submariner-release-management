@@ -738,7 +738,8 @@ _verify_prs_merged() {
 
   local all_merged=true
   local any_open=false
-  local pr_urls=()
+  local merged_urls=()
+  local open_urls=()
 
   for repo in $repos; do
     local pr_json pr_rc=0
@@ -755,13 +756,14 @@ _verify_prs_merged() {
       2>/dev/null) || merged_url=""
 
     if [ -n "$merged_url" ]; then
-      pr_urls+=("$merged_url")
+      merged_urls+=("$merged_url")
     else
       local open_url
       open_url=$(printf '%s' "$pr_json" | \
         jq -r '[.[] | select(.state=="OPEN")] | last | .url // empty' 2>/dev/null) || open_url=""
       if [ -n "$open_url" ]; then
         echo "  PR open, not yet merged: $open_url" >&2
+        open_urls+=("$open_url")
         any_open=true
       else
         echo "  No PR found on $repo (branch: $branch)" >&2
@@ -771,6 +773,19 @@ _verify_prs_merged() {
   done
 
   if ! $all_merged; then
+    # Post open PR URLs to Jira so the work-in-progress is visible
+    if $any_open && [ -n "$tracker" ]; then
+      local open_list
+      open_list=$(printf '%s\n' "${open_urls[@]}")
+      # Also include any already-merged ones for completeness
+      if [ "${#merged_urls[@]}" -gt 0 ]; then
+        local merged_list
+        merged_list=$(printf '%s\n' "${merged_urls[@]}")
+        _add_comment "$tracker" "$(printf 'PRs proposed for %s (some still open):\nOpen:\n%s\nMerged:\n%s' "$branch" "$open_list" "$merged_list")" || true
+      else
+        _add_comment "$tracker" "$(printf 'PRs proposed for %s:\n%s' "$branch" "$open_list")" || true
+      fi
+    fi
     # Distinguish: at least one PR exists (open) vs no PRs at all (script not run)
     $any_open && return 3
     return 1
@@ -778,14 +793,13 @@ _verify_prs_merged() {
 
   # All merged — post PR URLs to Jira as a comment
   local url_list
-  url_list=$(printf '%s\n' "${pr_urls[@]}")
-  local comment="Merged PRs for ${branch}:\n${url_list}"
+  url_list=$(printf '%s\n' "${merged_urls[@]}")
   if [ -n "$tracker" ]; then
-    _add_comment "$tracker" "$(printf '%b' "$comment")" || true
+    _add_comment "$tracker" "$(printf 'All PRs merged for %s:\n%s' "$branch" "$url_list")" || true
   fi
 
   jq -cn --arg branch "$branch" \
-    --argjson prs "$(printf '%s\n' "${pr_urls[@]}" | jq -R . | jq -s .)" \
+    --argjson prs "$(printf '%s\n' "${merged_urls[@]}" | jq -R . | jq -s .)" \
     '{branch:$branch,prs:$prs}'
   return 0
 }
