@@ -809,14 +809,11 @@ _verify_prs_merged() {
     return 1
   fi
 
-  # All merged — emit URLs on stdout for the caller to post to Jira.
+  # All merged — emit comment text on stdout for try_auto_verify to post to Jira.
+  # Tracker data recorded as '{}'; PR URLs are captured in the Jira comment.
   local url_list
   url_list=$(printf '%s\n' "${merged_urls[@]}")
   printf 'All PRs merged for %s:\n%s' "$branch" "$url_list"
-
-  jq -cn --arg branch "$branch" \
-    --argjson prs "$(printf '%s\n' "${merged_urls[@]}" | jq -R . | jq -s .)" \
-    '{branch:$branch,prs:$prs}'
   return 0
 }
 
