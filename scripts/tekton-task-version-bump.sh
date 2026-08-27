@@ -90,11 +90,25 @@ repo_base_branch() {
 }
 
 # Query Quay v2 API for the latest X.Y version tag of a task.
-# Returns empty string on network/API failure (caller skips the task).
+# The API caps at 100 tags per page; paginate with ?last=<tag> until we get
+# fewer than 100 tags (no more pages). Returns empty string on failure.
 latest_task_version() {
   local task="$1"
-  curl -s "${QUAY_BASE}/task-${task}/tags/list" 2>/dev/null \
-    | jq -r '.tags[] // empty' 2>/dev/null \
+  local url="${QUAY_BASE}/task-${task}/tags/list"
+  local last="" all_versions="" resp count
+  while true; do
+    resp=$(curl -s "${url}${last:+?last=$last}" 2>/dev/null) || break
+    count=$(printf '%s' "$resp" | jq '.tags | length' 2>/dev/null || echo 0)
+    local page_versions
+    page_versions=$(printf '%s' "$resp" \
+      | jq -r '.tags[] // empty' 2>/dev/null \
+      | grep -E "^[0-9]+\.[0-9]+$" || true)
+    [ -n "$page_versions" ] && all_versions="${all_versions}"$'\n'"${page_versions}"
+    [ "$count" -lt 100 ] && break
+    last=$(printf '%s' "$resp" | jq -r '.tags[-1]' 2>/dev/null) || break
+    [ -z "$last" ] || [ "$last" = "null" ] && break
+  done
+  printf '%s\n' "$all_versions" \
     | grep -E "^[0-9]+\.[0-9]+$" \
     | sort -Vu \
     | tail -1 \
@@ -265,14 +279,13 @@ update_repo() {
     echo "  ↑ $task: $current_ver → $latest_ver"
     # sed -i.bak for BSD/GNU portability
     for yaml_file in .tekton/*.yaml; do
-        [ -f "$yaml_file" ] || continue
-        if grep -q "task-${task}:${current_ver}" "$yaml_file" 2>/dev/null; then
-          sed -i.bak "s|task-${task}:${current_ver}|task-${task}:${latest_ver}|g" "$yaml_file"
-          rm -f "${yaml_file}.bak"
-        fi
-      done
-      version_bumped=$((version_bumped + 1))
-    fi
+      [ -f "$yaml_file" ] || continue
+      if grep -q "task-${task}:${current_ver}" "$yaml_file" 2>/dev/null; then
+        sed -i.bak "s|task-${task}:${current_ver}|task-${task}:${latest_ver}|g" "$yaml_file"
+        rm -f "${yaml_file}.bak"
+      fi
+    done
+    version_bumped=$((version_bumped + 1))
   done
 
   # ── Step 2: SHA bump via pipeline-patcher ──────────────────────────────────
