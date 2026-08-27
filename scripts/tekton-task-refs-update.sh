@@ -343,12 +343,16 @@ print_summary() {
       echo "cd $path"
       echo "git show"
       echo "git push origin $fix_branch"
-      echo "gh pr create --base $base_branch --head $fix_branch --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\" --assignee @me --label ready-to-test"
+      # FBC repo (stolostron/submariner-operator-fbc) has no ready-to-test label
+      local label_flag="--label ready-to-test"
+      [ "$repo" = "fbc" ] && label_flag=""
+      # shellcheck disable=SC2086
+      echo "gh pr create --base $base_branch --head $fix_branch --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\" --assignee @me $label_flag"
       echo "gh pr merge --auto --rebase $fix_branch"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push origin %s\n  gh pr create --base %s --head %s --assignee @me --label ready-to-test\n  gh pr merge --auto --rebase %s\n' \
-          "$path" "$fix_branch" "$base_branch" "$fix_branch" "$fix_branch" \
+        printf '\n  cd %s\n  git push origin %s\n  gh pr create --base %s --head %s --assignee @me %s\n  gh pr merge --auto --rebase %s\n' \
+          "$path" "$fix_branch" "$base_branch" "$fix_branch" "$label_flag" "$fix_branch" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
     done
