@@ -382,10 +382,13 @@ main() {
   # shellcheck source=/dev/null
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
   TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
+  # AUTORELEASE_TRACKER_STEP lets the conductor call this script for ecFixes
+  # (same operation — bump task refs — just tracked under a different step key).
+  local TRACKER_STEP="${AUTORELEASE_TRACKER_STEP:-tektonTasks}"
   # Only move tracker state on a full run. A filtered (single-repo) run is a manual
   # partial retry: guarding in_progress the same way as completion (below) keeps it
   # from flipping an already-complete step back to in_progress and never restoring it.
-  [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && update_step "$VERSION" "tektonTasks" "in_progress" '{}' "$TRACKER"
+  [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && update_step "$VERSION" "$TRACKER_STEP" "in_progress" '{}' "$TRACKER"
 
   update_all
 
@@ -393,7 +396,7 @@ main() {
 
   # Record completion when the full repo set was processed with no failures.
   # review level: script stays in_progress. User must push/merge PRs, then
-  # explicitly mark complete: /autorelease --complete tektonTasks. This prevents
+  # explicitly mark complete: /autorelease --complete tektonTasks (or ecFixes). This prevents
   # auto-chaining to downstream steps before the Tekton changes are merged.
   # (Historically scripts marked themselves complete, which broke the review stop.)
   if [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && [ "${#REPOS_FAILED[@]}" -eq 0 ]; then

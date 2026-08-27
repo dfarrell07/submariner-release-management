@@ -296,8 +296,8 @@ assert_eq "first step reason is run (has script)" "$NEXT_REASON" "run"
 # Mark script-backed steps complete to reach the first hint step
 step_statuses=([rpmLockfiles]=complete [versionLabels]=complete [tektonTasks]=complete [cveFixes]=complete)
 find_next_step "0.99.1" "z-stream" "FAKE-123" 2>/dev/null
-assert_eq "first hint: ecFixes" "$NEXT_STEP" "ecFixes"
-assert_eq "hint reason (ecFixes has hint, no script)" "$NEXT_REASON" "hint"
+assert_eq "first run after cveFixes: ecFixes" "$NEXT_STEP" "ecFixes"
+assert_eq "run reason (ecFixes now has script)" "$NEXT_REASON" "run"
 
 # 11: NEXT_REASON="run" for steps with scripts
 step_statuses=([cveFixes]=complete [ecFixes]=complete [rpmLockfiles]=complete [tektonTasks]=complete)
@@ -1333,12 +1333,12 @@ assert_contains "dry-run y: conditional stop names createBranches verifier" "$yo
 assert_contains "dry-run y: configureDownstream listed as run step" "$yout" "run: scripts/configure-downstream.sh 0.99.0"
 assert_contains "dry-run y: stops at configureDownstream (first review)" "$yout" "Otherwise stops at: Configure Konflux downstream"
 
-# DR-6b: ecFixes reaches the verifier arm as hint (auto level) → plain label.
+# DR-6b: ecFixes is now a review-level run step (has script + verifier).
 VERSION="0.99.1"; RELEASE_TYPE="z-stream"; TRACKER="FAKE-123"
 step_statuses=([rpmLockfiles]=complete [versionLabels]=complete [tektonTasks]=complete [cveFixes]=complete)
 ecout=$(run_dry_run 2>&1)
-assert_contains "dry-run: ecFixes plain verifier label" "$ecout" \
-  "auto-verifies: EC passes on Konflux snapshot (verify_ecFixes;"
+assert_contains "dry-run: ecFixes listed as run step" "$ecout" \
+  "run: scripts/tekton-task-refs-update.sh 0.99.1"
 assert_not_contains "dry-run: ecFixes has no gate · prefix" "$ecout" \
   "gate · auto-verifies: EC passes on Konflux snapshot"
 

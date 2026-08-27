@@ -122,8 +122,8 @@ STEP_TITLES["ecFixes"]="EC compliance fixes"
 STEP_PHASE["ecFixes"]="Build Readiness"
 STEP_DEPENDENCIES["ecFixes"]=""
 STALENESS_RULES["ecFixes"]="snapshot"
-AUTOMATION_LEVEL["ecFixes"]="auto"
-STEP_SKILL_HINT["ecFixes"]="/konflux-ci-fix (EC passes only after Build Readiness PRs merge and Konflux rebuilds — snapshots from in-flight builds will not pass)"
+AUTOMATION_LEVEL["ecFixes"]="review"
+STEP_SCRIPT["ecFixes"]="scripts/tekton-task-refs-update.sh"
 
 # ── rpmLockfiles ────────────────────────────────────────────────────────────
 STEP_TITLES["rpmLockfiles"]="RPM lockfile updates"

@@ -1538,10 +1538,10 @@ run_conductor() {
         local_exit=0
         if [ -n "$GIT_ROOT" ]; then
           # shellcheck disable=SC2086  # Intentional word splitting on local_args
-          (cd "$GIT_ROOT" && "$GIT_ROOT/$local_script" "$VERSION" $local_args) >&2 || local_exit=$?
+          (cd "$GIT_ROOT" && AUTORELEASE_TRACKER_STEP="$NEXT_STEP" "$GIT_ROOT/$local_script" "$VERSION" $local_args) >&2 || local_exit=$?
         else
           # shellcheck disable=SC2086
-          "$local_script" "$VERSION" $local_args >&2 || local_exit=$?
+          AUTORELEASE_TRACKER_STEP="$NEXT_STEP" "$local_script" "$VERSION" $local_args >&2 || local_exit=$?
         fi
 
         # Classify any push-log growth this step produced. Both kinds can occur
