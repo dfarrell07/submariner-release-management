@@ -690,7 +690,11 @@ verify_ecFixes() {
     fi
     ec_status_t=$(printf '%s' "$snap_json" | _ec_status_from_snap)
     if [ "$ec_status_t" != "TestPassed" ]; then
+      local ui_url="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${target_snap}"
       echo "ecFixes: bundleShas snapshot: $target_snap (ec: $ec_status_t)" >&2
+      echo "  View EC failure details: $ui_url" >&2
+      echo "  If Tekton task refs are already current, EC is failing for a different reason." >&2
+      echo "  Investigate the EC log, fix the root cause, then re-run: /autorelease $version" >&2
       return 1
     fi
     snap_name="$target_snap"
@@ -715,7 +719,11 @@ verify_ecFixes() {
       '[.items[] | select(.metadata.name == $n)] | last' 2>/dev/null) || snap_obj_f="null"
     ec_status_f=$(printf '%s' "$snap_obj_f" | _ec_status_from_snap)
     if [ "$ec_status_f" != "TestPassed" ]; then
+      local ui_url_f="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${latest_candidate}"
       echo "ecFixes: Latest snapshot: $latest_candidate (ec: $ec_status_f)" >&2
+      echo "  View EC failure details: $ui_url_f" >&2
+      echo "  If Tekton task refs are already current, EC is failing for a different reason." >&2
+      echo "  Investigate the EC log, fix the root cause, then re-run: /autorelease $version" >&2
       return 1
     fi
     snap_name="$latest_candidate"
