@@ -104,6 +104,11 @@ make build-catalogs
 
 echo "" >&2
 
+# Resolve fork remote once for both push-log and next-steps output
+_gh_user=$(get_gh_user)
+_fork=$(fork_remote "$FBC_REPO" "$_gh_user")
+_cur_branch=$(git rev-parse --abbrev-ref HEAD)
+
 # Commit if there are changes
 if git diff --quiet && git diff --cached --quiet; then
   echo "ℹ️  No changes (catalog already up to date)" >&2
@@ -116,11 +121,8 @@ else
   # in the conductor's Pending Actions trailer alongside the push command.
   # Only emit when a commit was actually created (matches bundle-image-update.sh pattern).
   if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-    _branch=$(git rev-parse --abbrev-ref HEAD)
-    _gh_user=$(get_gh_user)
-    _fork=$(fork_remote "$FBC_REPO" "$_gh_user")
     printf '\n  cd %s\n  git push %s %s\n  # Wait ~15-30 min for FBC rebuild before re-running\n' \
-      "$FBC_REPO" "$_fork" "$_branch" >> "$AUTORELEASE_PUSH_LOG"
+      "$FBC_REPO" "$_fork" "$_cur_branch" >> "$AUTORELEASE_PUSH_LOG"
   fi
 fi
 
@@ -129,10 +131,6 @@ fi
 if [ -n "${TRACKER:-}" ]; then
   _data=$(snapshot_step_data "$VERSION" "$TRACKER")
 fi
-
-_cur_branch=$(git rev-parse --abbrev-ref HEAD)
-_gh_user=$(get_gh_user)
-_fork=$(fork_remote "$FBC_REPO" "$_gh_user")
 echo "" >&2
 echo "Next steps:" >&2
 echo "  1. Review: git show" >&2

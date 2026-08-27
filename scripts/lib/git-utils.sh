@@ -18,11 +18,8 @@ fork_remote() {
 }
 
 # Get the authenticated GitHub username via gh CLI.
-# Caches result in GH_USER_CACHED to avoid repeated API calls.
 # Returns empty string if gh is unavailable or not authenticated.
+# Callers should capture once: gh_user=$(get_gh_user)
 get_gh_user() {
-  if [ -z "${GH_USER_CACHED+_}" ]; then
-    GH_USER_CACHED=$(gh api user --jq '.login' 2>/dev/null) || GH_USER_CACHED=""
-  fi
-  echo "$GH_USER_CACHED"
+  gh api user --jq '.login' 2>/dev/null || true
 }
