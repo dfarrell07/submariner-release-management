@@ -884,7 +884,10 @@ verify_versionLabels() {
 verify_cveFixes() {
   local version="$1"
   local tracker="${2:-}"
-  local search_term="fix-${version}-cves"
+  # The cve-fix skill names branches fix-<major.minor>-cves-<date> (not full X.Y.Z).
+  # Use major.minor so the search matches e.g. "dfarrell07:fix-0.24-cves-20260825-v4".
+  local major_minor="${version%.*}"
+  local search_term="fix-${major_minor}-cves"
   # All 7 Go repos scanned by cve-fixes-update.sh (matches its REPO_ORDER)
   local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl submariner-io/admiral submariner-io/cloud-prepare"
 
@@ -899,7 +902,7 @@ verify_cveFixes() {
     local pr_json pr_rc=0
     # --search finds PRs from any fork whose head branch contains the search
     # term, across all states. GitHub search in:head matches the "<user>:<branch>"
-    # head ref string, so "fix-0.24.1-cves" matches e.g. "dfarrell07:fix-0.24.1-cves-20250826".
+    # head ref string, so "fix-0.24-cves" matches e.g. "dfarrell07:fix-0.24-cves-20260825-v4".
     pr_json=$(gh pr list --repo "$repo" \
       --search "${search_term} in:head" \
       --state all \
