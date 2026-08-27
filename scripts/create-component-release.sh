@@ -482,18 +482,20 @@ Release notes: Copied from stage (QE-verified)"
   echo "   git show"
   echo ""
   echo "2. Push commit:"
-  echo "   git push origin \$(git rev-parse --abbrev-ref HEAD)"
+  local _gh_user _fork _branch _rel_name
+  _gh_user=$(get_gh_user)
+  _fork=$(fork_remote "$GIT_ROOT" "$_gh_user")
+  _branch=$(git rev-parse --abbrev-ref HEAD)
+  echo "   git push $_fork $_branch"
   # Append to push summary if conductor is running. This is a release-YAML step,
   # so the load-bearing next actions are apply/watch (not just git push) — emit
   # the full trailer the operator must run after this script.
   if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-    local _branch _rel_name
-    _branch=$(git rev-parse --abbrev-ref HEAD)
     _rel_name=$(basename "$YAML_FILE" .yaml)
     # make apply already runs make test-remote as a prerequisite, so listing
     # it separately here would run it twice. Show only apply/watch.
-    printf '\n  cd %s\n  git push origin %s\n  make apply FILE=%s\n  make watch NAME=%s\n' \
-      "$GIT_ROOT" "$_branch" "$YAML_FILE" "$_rel_name" \
+    printf '\n  cd %s\n  git push %s %s\n  make apply FILE=%s\n  make watch NAME=%s\n' \
+      "$GIT_ROOT" "$_fork" "$_branch" "$YAML_FILE" "$_rel_name" \
       >> "$AUTORELEASE_PUSH_LOG"
   fi
   echo ""
@@ -528,6 +530,8 @@ main() {
   TRACKER_LIB="${TRACKER_LIB:-$SCRIPTS_DIR/lib/jira-tracker.sh}"
   # shellcheck source=lib/jira-tracker.sh
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
+  # shellcheck source=lib/git-utils.sh
+  [ -f "$SCRIPTS_DIR/lib/git-utils.sh" ] && source "$SCRIPTS_DIR/lib/git-utils.sh" 2>/dev/null || true
   TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
   STEP_KEY=$( [ "$RELEASE_TYPE" = "prod" ] && echo "componentProd" || echo "componentStage" )
   [ -n "${TRACKER:-}" ] && update_step "$VERSION" "$STEP_KEY" "in_progress" '{}' "$TRACKER"
