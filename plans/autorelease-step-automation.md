@@ -3166,6 +3166,30 @@ dispatch loop into a testable function (or add an integration harness that
 drives the real main block with a stubbed `acli`/`oc`), so the new routing has
 coverage before it gains the power to `oc apply`.
 
+**FBC repo blocks topic-branch pushes — `required_linear_history` on `~ALL`.**
+`stolostron/submariner-operator-fbc`'s "Standard" GitHub ruleset applies
+`required_linear_history` to every branch (`~ALL`), not just `main`. Because `main`
+itself contains old merge commits (pre-dating the rule), any branch cut from `main`
+inherits them and is rejected: "this branch must not contain merge commits / Found 1
+violation: `cd213e02`". Other `submariner-io/*` repos don't have this problem.
+
+Workarounds tried and failed: (1) `git rebase origin/main` — no-op, already up to
+date. (2) cherry-pick onto fresh branch from `origin/main` tip — GitHub still rejects
+because the merge commits are reachable from `main` tip itself.
+
+**Root cause:** GitHub's `required_linear_history` check on topic branches traverses the
+full reachable history, not just the delta above `main`. Any branch derived from `main`
+carries the old merge commits.
+
+**Real fix:** Scope the "Standard" ruleset to `refs/heads/main` only (not `~ALL`),
+so the rule blocks non-linear merges *into* `main` but not topic branch pushes.
+File a request with `stolostron/submariner-operator-fbc` maintainers or the org admin.
+
+**Interim workaround:** Push directly to `main` as admin. The `verify_tektonTasks`
+verifier finds no PR for the FBC repo (no branch = no PR) and returns rc=1, so the
+conductor may re-run the script. After the direct push, use
+`/autorelease VERSION --complete tektonTasks` once EC passes.
+
 ### Multi-repo environment
 
 The conductor assumes 7 repos are pre-cloned at conventional paths.
