@@ -123,7 +123,7 @@ STEP_PHASE["ecFixes"]="Build Readiness"
 STEP_DEPENDENCIES["ecFixes"]=""
 STALENESS_RULES["ecFixes"]="snapshot"
 AUTOMATION_LEVEL["ecFixes"]="review"
-STEP_SCRIPT["ecFixes"]="scripts/tekton-task-refs-update.sh"
+STEP_SCRIPT["ecFixes"]="scripts/tekton-task-version-bump.sh"
 
 # ── rpmLockfiles ────────────────────────────────────────────────────────────
 STEP_TITLES["rpmLockfiles"]="RPM lockfile updates"

@@ -1584,6 +1584,19 @@ run_conductor() {
         [ -n "$_growth_flag" ] && printf -v "$_growth_flag" '%s' 1
 
         echo "" >&2
+        if [ "$local_exit" -eq 2 ]; then
+          # rc=2 means the script ran successfully but has nothing to commit:
+          # task versions and SHAs are already current, but EC is still failing.
+          # The script has already emitted a Konflux UI URL + EC log guidance.
+          # Stop the conductor here so we don't re-dispatch endlessly.
+          echo "⏸ ${local_title}: NOTHING TO UPDATE" >&2
+          echo "  Task versions and SHAs are already current." >&2
+          echo "  EC is failing for a reason other than stale task refs." >&2
+          echo "  See the Konflux UI URL above to download the EC log." >&2
+          echo "  After downloading the log, re-run: /autorelease $VERSION" >&2
+          break
+        fi
+
         if [ "$local_exit" -ne 0 ]; then
           echo "❌ ${local_title} failed (exit $local_exit)" >&2
           echo "  Fix the issue, then re-run: /autorelease $VERSION" >&2

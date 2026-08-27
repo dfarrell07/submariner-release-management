@@ -1338,7 +1338,7 @@ VERSION="0.99.1"; RELEASE_TYPE="z-stream"; TRACKER="FAKE-123"
 step_statuses=([rpmLockfiles]=complete [versionLabels]=complete [tektonTasks]=complete [cveFixes]=complete)
 ecout=$(run_dry_run 2>&1)
 assert_contains "dry-run: ecFixes listed as run step" "$ecout" \
-  "run: scripts/tekton-task-refs-update.sh 0.99.1"
+  "run: scripts/tekton-task-version-bump.sh 0.99.1"
 assert_not_contains "dry-run: ecFixes has no gate · prefix" "$ecout" \
   "gate · auto-verifies: EC passes on Konflux snapshot"
 
