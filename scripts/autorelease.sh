@@ -624,11 +624,15 @@ verify_ecFixes() {
   # (same branch + repos as verify_tektonTasks) but only act on the "open"
   # signal; if it returns 0 (all merged) or 1 (no PRs), fall through to EC check.
   if command -v gh &>/dev/null; then
-    local _pr_rc=0
-    _verify_prs_merged "$version" "" "fix-tekton-tasks-${version%.*}" \
+    local _pr_rc=0 _pr_out=""
+    # Capture stdout: _verify_prs_merged emits PR URLs on stdout which would
+    # corrupt verify_ecFixes's own stdout (JSON returned to try_auto_verify).
+    # Re-emit only on rc=3 so try_auto_verify can post the open URLs to Jira.
+    _pr_out=$(_verify_prs_merged "$version" "" "fix-tekton-tasks-${version%.*}" \
       "submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl stolostron/submariner-operator-fbc" \
-      2>/dev/null || _pr_rc=$?
+      2>/dev/null) || _pr_rc=$?
     if [ "$_pr_rc" -eq 3 ]; then
+      printf '%s' "$_pr_out"
       return 3
     fi
   fi
