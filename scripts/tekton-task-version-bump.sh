@@ -250,10 +250,21 @@ update_repo() {
       continue
     fi
 
-    if [ "$current_ver" != "$latest_ver" ]; then
-      echo "  ↑ $task: $current_ver → $latest_ver"
-      # sed -i.bak for BSD/GNU portability
-      for yaml_file in .tekton/*.yaml; do
+    # Only upgrade — never downgrade. Skip if Quay's latest is not strictly
+    # higher than what's already in the repo. Use sort -Vu to compare: if the
+    # highest version when both are sorted together is NOT latest_ver, then
+    # current_ver is already higher (or equal) and we leave it alone.
+    local highest
+    highest=$(printf '%s\n%s\n' "$current_ver" "$latest_ver" | sort -Vu | tail -1)
+    if [ "$current_ver" = "$latest_ver" ] || [ "$highest" != "$latest_ver" ]; then
+      [ "$current_ver" != "$latest_ver" ] && \
+        echo "  = $task: $current_ver (Quay: $latest_ver — already at or above latest, skipping)" >&2
+      continue
+    fi
+
+    echo "  ↑ $task: $current_ver → $latest_ver"
+    # sed -i.bak for BSD/GNU portability
+    for yaml_file in .tekton/*.yaml; do
         [ -f "$yaml_file" ] || continue
         if grep -q "task-${task}:${current_ver}" "$yaml_file" 2>/dev/null; then
           sed -i.bak "s|task-${task}:${current_ver}|task-${task}:${latest_ver}|g" "$yaml_file"
