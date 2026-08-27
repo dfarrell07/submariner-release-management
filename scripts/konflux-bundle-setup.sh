@@ -35,6 +35,8 @@ if [ ! -f "$PATCHER_LIB" ]; then
 fi
 # shellcheck source=lib/pipeline-patcher.sh
 source "$PATCHER_LIB"
+# shellcheck source=lib/git-utils.sh
+source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
 
 # ━━━ CONSTANTS ━━━
 
@@ -712,7 +714,10 @@ print_summary() {
   echo "Next steps:"
   echo "   1. Review commits: git log -p origin/${CURRENT_BRANCH}..HEAD"
   echo "   2. Verify changes: git diff origin/${CURRENT_BRANCH}..HEAD"
-  echo "   3. Push to update bot PR: git push origin $CURRENT_BRANCH"
+  local _gh_user _fork
+  _gh_user=$(get_gh_user)
+  _fork=$(fork_remote "$OPERATOR_REPO" "$_gh_user")
+  echo "   3. Push to update bot PR: git push $_fork $CURRENT_BRANCH"
   echo "   4. Wait for Konflux build (~15-30 min)"
   echo "   5. Verify bundle EC tests pass"
   echo ""
@@ -751,9 +756,11 @@ main() {
   # Push summary — only emit when a commit was actually created (idempotent re-runs
   # exit 0 without committing; emitting a phantom push entry would confuse the conductor)
   if [ "$COMMIT_CREATED" = true ] && [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-    local current_branch
+    local current_branch _gh_user _fork
     current_branch=$(git rev-parse --abbrev-ref HEAD)
-    printf '\n  cd %s\n  git push origin %s\n' "$OPERATOR_REPO" "$current_branch" >> "$AUTORELEASE_PUSH_LOG"
+    _gh_user=$(get_gh_user)
+    _fork=$(fork_remote "$OPERATOR_REPO" "$_gh_user")
+    printf '\n  cd %s\n  git push %s %s\n' "$OPERATOR_REPO" "$_fork" "$current_branch" >> "$AUTORELEASE_PUSH_LOG"
   fi
 
   # review level: script stays in_progress. User must push the Tekton config changes

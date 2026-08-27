@@ -17,6 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
 # shellcheck source=lib/jira-tracker.sh
 [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
+# shellcheck source=lib/git-utils.sh
+source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
 
 usage() { echo "Usage: $0 <version> [--snapshot <name>] [--replace <old-version>]" >&2; }
 
@@ -115,8 +117,10 @@ else
   # Only emit when a commit was actually created (matches bundle-image-update.sh pattern).
   if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
     _branch=$(git rev-parse --abbrev-ref HEAD)
-    printf '\n  cd %s\n  git push origin %s\n  # Wait ~15-30 min for FBC rebuild before re-running\n' \
-      "$FBC_REPO" "$_branch" >> "$AUTORELEASE_PUSH_LOG"
+    _gh_user=$(get_gh_user)
+    _fork=$(fork_remote "$FBC_REPO" "$_gh_user")
+    printf '\n  cd %s\n  git push %s %s\n  # Wait ~15-30 min for FBC rebuild before re-running\n' \
+      "$FBC_REPO" "$_fork" "$_branch" >> "$AUTORELEASE_PUSH_LOG"
   fi
 fi
 
@@ -126,8 +130,11 @@ if [ -n "${TRACKER:-}" ]; then
   _data=$(snapshot_step_data "$VERSION" "$TRACKER")
 fi
 
+_cur_branch=$(git rev-parse --abbrev-ref HEAD)
+_gh_user=$(get_gh_user)
+_fork=$(fork_remote "$FBC_REPO" "$_gh_user")
 echo "" >&2
 echo "Next steps:" >&2
 echo "  1. Review: git show" >&2
-echo "  2. Push: git push origin $(git rev-parse --abbrev-ref HEAD)" >&2
+echo "  2. Push: git push $_fork $_cur_branch" >&2
 echo "  3. Wait for FBC rebuild (~15-30 min)" >&2

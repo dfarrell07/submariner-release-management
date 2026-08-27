@@ -33,6 +33,8 @@ _LIB_DIR="$SCRIPT_DIR/lib"
 # source inside main() a no-op.
 # shellcheck source=lib/jira-tracker.sh
 source "$_LIB_DIR/jira-tracker.sh" 2>/dev/null || true
+# shellcheck source=lib/git-utils.sh
+source "$_LIB_DIR/git-utils.sh" 2>/dev/null || true
 
 # ━━━ CONSTANTS ━━━
 
@@ -73,19 +75,6 @@ repo_path() {
   esac
 }
 
-# Detect the fork remote name for a repo: find the remote whose URL contains
-# "github.com/<gh-user>/". Returns the remote name (e.g. "dfarrell_op").
-# Falls back to "origin" if gh is unavailable or no fork remote found.
-fork_remote() {
-  local repo_path="$1" gh_user="$2"
-  if [ -n "$gh_user" ]; then
-    local remote
-    remote=$(git -C "$repo_path" remote -v 2>/dev/null | \
-      grep -i "github\.com[/:]${gh_user}/" | head -1 | awk '{print $1}') || remote=""
-    [ -n "$remote" ] && echo "$remote" && return
-  fi
-  echo "origin"
-}
 
 # Branch a repo's fix branch is cut from and its PR targets.
 repo_base_branch() {
@@ -346,8 +335,8 @@ print_summary() {
     echo ""
     echo "Next Steps"
     # Get GitHub username once for fork remote detection across all repos.
-    local gh_user=""
-    gh_user=$(gh api user --jq '.login' 2>/dev/null) || gh_user=""
+    local gh_user
+    gh_user=$(get_gh_user)
     for entry in "${REPOS_UPDATED[@]}"; do
       local repo="${entry%%#*}"
       local rest="${entry#*#}"

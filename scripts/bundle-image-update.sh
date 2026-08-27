@@ -27,6 +27,9 @@ set -euo pipefail
 # Resolve script location before any cd so lib paths work from any clone location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck source=lib/git-utils.sh
+source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
+
 # ━━━ CONSTANTS ━━━
 
 readonly OPERATOR_REPO="$HOME/go/src/submariner-io/submariner-operator"
@@ -644,14 +647,17 @@ print_summary() {
   echo ""
   echo "Next steps:"
   echo "  1. Review changes: git show"
-  echo "  2. Push: git push origin $BRANCH"
+  local gh_user fork
+  gh_user=$(get_gh_user)
+  fork=$(fork_remote "$OPERATOR_REPO" "$gh_user")
+  echo "  2. Push: git push $fork $BRANCH"
   echo "  3. Wait for bundle rebuild (~15-30 min)"
   echo "  4. Verify: oc get snapshots -n submariner-tenant | grep submariner-bundle-${VERSION_DASH}"
   echo ""
   # Append to push summary if conductor is running and a commit was actually created
   if [ "$COMMIT_CREATED" = true ] && [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-    printf '\n  cd %s\n  git push origin %s\n' \
-      "$OPERATOR_REPO" "$BRANCH" \
+    printf '\n  cd %s\n  git push %s %s\n' \
+      "$OPERATOR_REPO" "$fork" "$BRANCH" \
       >> "$AUTORELEASE_PUSH_LOG"
   fi
 }

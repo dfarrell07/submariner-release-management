@@ -35,6 +35,8 @@ if [ ! -f "$PATCHER_LIB" ]; then
 fi
 # shellcheck source=lib/pipeline-patcher.sh
 source "$PATCHER_LIB"
+# shellcheck source=lib/git-utils.sh
+source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
 
 # ━━━ CONSTANTS ━━━
 
@@ -1127,7 +1129,10 @@ print_summary() {
   echo "   yq eval '.' .tekton/*.yaml > /dev/null && echo '✅ Valid'"
   echo ""
   echo "3. Push to remote:"
-  echo "   git push origin $CURRENT_BRANCH --force-with-lease"
+  local _gh_user _fork
+  _gh_user=$(get_gh_user)
+  _fork=$(fork_remote "$(pwd)" "$_gh_user")
+  echo "   git push $_fork $CURRENT_BRANCH --force-with-lease"
   echo ""
   echo "4. Wait for build (~15-30 min) and verify:"
   echo "   oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp | grep ${COMPONENT}"
