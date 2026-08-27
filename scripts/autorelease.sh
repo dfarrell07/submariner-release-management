@@ -617,6 +617,22 @@ verify_ecFixes() {
   local tracker="${2:-}"
   local dash_mm="${version%.*}"
   dash_mm="${dash_mm//./-}"
+
+  # If fix-tekton-tasks-<mm> PRs are open in any repo, the Konflux rebuild
+  # hasn't happened yet — return rc=3 (PRs open) so the conductor waits
+  # instead of re-running the script unnecessarily.  We reuse _verify_prs_merged
+  # (same branch + repos as verify_tektonTasks) but only act on the "open"
+  # signal; if it returns 0 (all merged) or 1 (no PRs), fall through to EC check.
+  if command -v gh &>/dev/null; then
+    local _pr_rc=0
+    _verify_prs_merged "$version" "" "fix-tekton-tasks-${version%.*}" \
+      "submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl stolostron/submariner-operator-fbc" \
+      2>/dev/null || _pr_rc=$?
+    if [ "$_pr_rc" -eq 3 ]; then
+      return 3
+    fi
+  fi
+
   if ! command -v oc &>/dev/null; then
     echo "  oc not installed — install OpenShift CLI first" >&2
     return 2
