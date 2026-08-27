@@ -122,9 +122,12 @@ find_available_branch() {
 }
 
 # Restore repo to original ref; optionally delete a branch.
+# Uses -f to discard any uncommitted changes left by a partial patcher run;
+# without -f, git checkout refuses when .tekton/ is dirty and the || true
+# swallows the error, leaving the repo stranded on the fix branch.
 _restore_repo() {
   local original_ref="$1" del_branch="${2:-}"
-  git checkout "$original_ref" >/dev/null 2>&1 || true
+  git checkout -f "$original_ref" >/dev/null 2>&1 || true
   [ -n "$del_branch" ] && git branch -D "$del_branch" >/dev/null 2>&1 || true
 }
 
@@ -206,12 +209,6 @@ update_repo() {
     fi
   fi
 
-  if [ ! -d .tekton ]; then
-    echo "  ✗ No .tekton/ directory on $BASE_BRANCH" >&2
-    REPOS_FAILED+=("$REPO:no-tekton")
-    echo ""; return
-  fi
-
   # Find a free branch name (-vN if base already exists)
   local FIX_BRANCH
   FIX_BRANCH=$(find_available_branch "$FIX_BRANCH_BASE" "$REPO_PATH")
@@ -219,6 +216,16 @@ update_repo() {
   if ! git checkout -b "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1; then
     echo "  ✗ Failed to create branch $FIX_BRANCH" >&2
     REPOS_FAILED+=("$REPO:branch-create-failed")
+    echo ""; return
+  fi
+
+  # Check .tekton/ AFTER switching to the fix branch (which is cut from
+  # $BRANCH_REF), so we test the state of the actual target branch, not whatever
+  # branch the repo happened to be on when the script started.
+  if [ ! -d .tekton ]; then
+    echo "  ✗ No .tekton/ directory on $BASE_BRANCH" >&2
+    REPOS_FAILED+=("$REPO:no-tekton")
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
     echo ""; return
   fi
 
