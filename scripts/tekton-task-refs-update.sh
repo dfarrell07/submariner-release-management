@@ -73,6 +73,20 @@ repo_path() {
   esac
 }
 
+# Detect the fork remote name for a repo: find the remote whose URL contains
+# "github.com/<gh-user>/". Returns the remote name (e.g. "dfarrell_op").
+# Falls back to "origin" if gh is unavailable or no fork remote found.
+fork_remote() {
+  local repo_path="$1" gh_user="$2"
+  if [ -n "$gh_user" ]; then
+    local remote
+    remote=$(git -C "$repo_path" remote -v 2>/dev/null | \
+      grep -i "github\.com[/:]${gh_user}/" | head -1 | awk '{print $1}') || remote=""
+    [ -n "$remote" ] && echo "$remote" && return
+  fi
+  echo "origin"
+}
+
 # Branch a repo's fix branch is cut from and its PR targets.
 repo_base_branch() {
   case "$1" in
@@ -331,28 +345,36 @@ print_summary() {
   if [ "$UPDATED_COUNT" -gt 0 ]; then
     echo ""
     echo "Next Steps"
+    # Get GitHub username once for fork remote detection across all repos.
+    local gh_user=""
+    gh_user=$(gh api user --jq '.login' 2>/dev/null) || gh_user=""
     for entry in "${REPOS_UPDATED[@]}"; do
       local repo="${entry%%#*}"
       local rest="${entry#*#}"
       local fix_branch="${rest%%#*}"
       local base_branch="${rest#*#}"
-      local path
+      local path fork
       path="$(repo_path "$repo")"
+      fork="$(fork_remote "$path" "$gh_user")"
       echo ""
       echo "# $repo"
       echo "cd $path"
       echo "git show"
-      echo "git push origin $fix_branch"
+      echo "git push $fork $fix_branch"
       # FBC repo (stolostron/submariner-operator-fbc) has no ready-to-test label
       local label_flag="--label ready-to-test"
       [ "$repo" = "fbc" ] && label_flag=""
+      # --head <user>:<branch> opens a cross-repo (fork) PR; gh_user is the
+      # fork owner. Falls back to branch-only if gh_user is unavailable.
+      local head_ref="$fix_branch"
+      [ -n "$gh_user" ] && head_ref="${gh_user}:${fix_branch}"
       # shellcheck disable=SC2086
-      echo "gh pr create --base $base_branch --head $fix_branch --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\" --assignee @me $label_flag"
+      echo "gh pr create --base $base_branch --head $head_ref --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\" --assignee @me $label_flag"
       echo "gh pr merge --auto --rebase $fix_branch"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push origin %s\n  gh pr create --base %s --head %s --assignee @me %s\n  gh pr merge --auto --rebase %s\n' \
-          "$path" "$fix_branch" "$base_branch" "$fix_branch" "$label_flag" "$fix_branch" \
+        printf '\n  cd %s\n  git push %s %s\n  gh pr create --base %s --head %s --assignee @me %s\n  gh pr merge --auto --rebase %s\n' \
+          "$path" "$fork" "$fix_branch" "$base_branch" "$head_ref" "$label_flag" "$fix_branch" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
     done
