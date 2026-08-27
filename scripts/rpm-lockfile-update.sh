@@ -284,6 +284,8 @@ print_summary() {
   if [ "$UPDATED_COUNT" -gt 0 ]; then
     echo ""
     echo "Next Steps"
+    local gh_user
+    gh_user=$(get_gh_user)
     for entry in "${REPOS_UPDATED[@]}"; do
       local display="${entry%%#*}"
       local rest="${entry#*#}"
@@ -291,6 +293,11 @@ print_summary() {
       rest="${rest#*#}"
       local version="${rest%%#*}"
       local branch="${rest#*#}"
+      local fix_branch="update-rpm-lockfiles-${version}"
+      local fork head_ref
+      fork=$(fork_remote "$SUBMARINER_BASE/$repo" "$gh_user")
+      head_ref="$fix_branch"
+      [ -n "$gh_user" ] && head_ref="${gh_user}:${fix_branch}"
       echo ""
       echo "# $display"
       echo "cd $SUBMARINER_BASE/$repo"
@@ -298,13 +305,13 @@ print_summary() {
       # --force-with-lease is safe for a re-run (idempotent if the remote matches
       # our last fetch), and required if the branch was already pushed and the
       # conductor re-ran after a silent tracker write failure.
-      echo "git push --force-with-lease origin update-rpm-lockfiles-${version}"
-      echo "gh pr create --base $branch --head update-rpm-lockfiles-${version} --assignee @me --label ready-to-test"
-      echo "gh pr merge --auto --rebase update-rpm-lockfiles-${version}"
+      echo "git push --force-with-lease $fork $fix_branch"
+      echo "gh pr create --base $branch --head $head_ref --title \"Update RPM lockfiles for v${version}\" --body \"Update RPM lockfiles to resolve package CVEs.\" --assignee @me --label ready-to-test"
+      echo "gh pr merge --auto --rebase $fix_branch"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s/%s\n  git push --force-with-lease origin update-rpm-lockfiles-%s\n  gh pr create --base %s --head update-rpm-lockfiles-%s --assignee @me --label ready-to-test\n  gh pr merge --auto --rebase update-rpm-lockfiles-%s\n' \
-          "$SUBMARINER_BASE" "$repo" "$version" "$branch" "$version" "$version" \
+        printf '\n  cd %s/%s\n  git push --force-with-lease %s %s\n  gh pr create --base %s --head %s --title "Update RPM lockfiles for v%s" --body "Update RPM lockfiles to resolve package CVEs." --assignee @me --label ready-to-test\n  gh pr merge --auto --rebase %s\n' \
+          "$SUBMARINER_BASE" "$repo" "$fork" "$fix_branch" "$branch" "$head_ref" "$version" "$fix_branch" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
     done
@@ -322,6 +329,8 @@ main() {
   TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
   # shellcheck source=/dev/null
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
+  # shellcheck source=lib/git-utils.sh
+  [ -f "$SCRIPT_DIR/lib/git-utils.sh" ] && source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
   TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
   # Only move tracker state on a full run. A filtered (single-component) run is a manual
   # partial retry: guarding in_progress the same way as completion (below) keeps it

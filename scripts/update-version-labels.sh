@@ -307,8 +307,8 @@ print_summary() {
       echo "gh pr merge --auto --rebase $fix_branch"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push %s %s\n  gh pr create --base %s --head %s --assignee @me --label ready-to-test\n  gh pr merge --auto --rebase %s\n' \
-          "$path" "$fork" "$fix_branch" "$branch" "$head_ref" "$fix_branch" \
+        printf '\n  cd %s\n  git push %s %s\n  gh pr create --base %s --head %s --title "Update version labels to v%s" --body "Enables correct Konflux image tagging." --assignee @me --label ready-to-test\n  gh pr merge --auto --rebase %s\n' \
+          "$path" "$fork" "$fix_branch" "$branch" "$head_ref" "$VERSION" "$fix_branch" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
     done

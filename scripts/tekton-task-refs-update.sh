@@ -362,7 +362,7 @@ print_summary() {
       echo "gh pr merge --auto --rebase $fix_branch"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push %s %s\n  gh pr create --base %s --head %s --assignee @me %s\n  gh pr merge --auto --rebase %s\n' \
+        printf '\n  cd %s\n  git push %s %s\n  gh pr create --base %s --head %s --title "Update Tekton task references" --body "Refresh .tekton task refs for Enterprise Contract." --assignee @me %s\n  gh pr merge --auto --rebase %s\n' \
           "$path" "$fork" "$fix_branch" "$base_branch" "$head_ref" "$label_flag" "$fix_branch" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
