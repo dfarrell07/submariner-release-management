@@ -108,8 +108,6 @@ spec:
             source: issues.redhat.com
           - id: ACM-34578
             source: issues.redhat.com
-          - id: ACM-35360
-            source: issues.redhat.com
           - id: ACM-43037
             source: issues.redhat.com
       cves:
