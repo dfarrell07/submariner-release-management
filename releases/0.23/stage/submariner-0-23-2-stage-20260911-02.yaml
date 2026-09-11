@@ -106,8 +106,6 @@ spec:
           # Non-CVE Issues (5):
           - id: ACM-28591
             source: issues.redhat.com
-          - id: ACM-32615
-            source: issues.redhat.com
           - id: ACM-34578
             source: issues.redhat.com
           - id: ACM-35360
