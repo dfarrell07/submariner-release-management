@@ -680,19 +680,24 @@ print_summary() {
   echo ""
   echo "Next steps:"
   echo "  1. Review changes: git show"
-  local gh_user fork
+  local gh_user fork head_ref
   gh_user=$(get_gh_user)
   fork=$(fork_remote "$OPERATOR_REPO" "$gh_user")
+  head_ref="$PR_BRANCH"
+  [ -n "$gh_user" ] && head_ref="${gh_user}:${PR_BRANCH}"
   echo "  2. Push PR branch: git push $fork $PR_BRANCH"
-  echo "  3. Open PR: gh pr create --base release-$VERSION_DOT --head $gh_user:$PR_BRANCH \\"
-  echo "       --title 'Update bundle SHAs for $TARGET_VERSION' --body 'Snapshot: $SNAPSHOT'"
-  echo "  4. After PR merges, wait for bundle rebuild (~15-30 min)"
-  echo "  5. Verify: oc get snapshots -n submariner-tenant | grep submariner-bundle-${VERSION_DASH}"
+  echo "  3. Open PR: PR_URL=\$(gh pr create --base release-$VERSION_DOT --head $head_ref \\"
+  echo "       --title 'Update bundle SHAs for $TARGET_VERSION' --body 'Snapshot: $SNAPSHOT' \\"
+  echo "       --assignee @me --label ready-to-test)"
+  echo "  4. gh pr merge --auto --merge \"\${PR_URL##*/}\""
+  echo "  5. After PR merges, wait for bundle rebuild (~15-30 min)"
+  echo "  6. Verify: oc get snapshots -n submariner-tenant | grep submariner-bundle-${VERSION_DASH}"
   echo ""
   # Append to push summary if conductor is running and a commit was actually created
   if [ "$COMMIT_CREATED" = true ] && [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-    printf '\n  cd %s\n  git push %s %s\n' \
+    printf '\n  cd %s\n  git push %s %s\n  PR_URL=$(gh pr create --base release-%s --head %s --title "Update bundle SHAs for %s" --body "Snapshot: %s" --assignee @me --label ready-to-test)\n  gh pr merge --auto --merge "${PR_URL##*/}"\n' \
       "$OPERATOR_REPO" "$fork" "$PR_BRANCH" \
+      "$VERSION_DOT" "$head_ref" "$TARGET_VERSION" "$SNAPSHOT" \
       >> "$AUTORELEASE_PUSH_LOG"
   fi
 }
