@@ -610,8 +610,9 @@ commit_changes() {
   # identifiable, allows a proper PR review, and avoids the cross-step
   # contamination risk of landing changes directly on the shared release branch.
   if git rev-parse --verify "$PR_BRANCH" >/dev/null 2>&1; then
-    # Branch already exists (retry run) — just check it out
-    git checkout "$PR_BRANCH"
+    # Branch already exists (retry run) — reset it to current release branch HEAD,
+    # carrying any working tree changes (generated bundle files) with us.
+    git checkout -B "$PR_BRANCH"
     echo "Re-using existing branch: $PR_BRANCH"
   else
     git checkout -b "$PR_BRANCH"
