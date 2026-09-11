@@ -56,6 +56,7 @@ UPDATE_TYPE=""
 SNAPSHOT_ARG=""
 SNAPSHOT=""
 BRANCH=""
+PR_BRANCH=""  # named branch for the SHA-bump PR (set in parse_arguments)
 
 # SHA variables (set during extract_shas)
 declare -A COMPONENT_SHAS
@@ -109,6 +110,13 @@ check_prerequisites() {
     cd "$OPERATOR_REPO"
     echo "Changed to: $(pwd)"
   fi
+
+  # Fetch remote state so version detection and stale guards use current data.
+  # Best-effort: skip on error (airgapped, yubikey-locked) so the script stays
+  # usable offline. Use --quiet to avoid noisy "From github.com/..." output.
+  echo "Fetching remote state..."
+  git fetch origin --quiet 2>/dev/null && echo "Remote fetched" || \
+    echo "WARNING: git fetch failed (continuing with local state)"
 
   BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
@@ -190,17 +198,20 @@ parse_arguments() {
 
   VERSION_DASH="${VERSION_DOT//./-}"  # 0.21 -> 0-21
 
-  # Refuse to commit onto a stray branch. bundle-image-update commits to whatever
-  # branch is checked out, so a repo left on a fix branch by a prior release step
-  # would misroute the SHA bump. Only the intended release / bundle-bot branch for
-  # this version is allowed. (Auto-detected branches always pass — they can only be
-  # release-*/bundle-*; every other branch already died above with "Cannot
-  # auto-detect version". The check still earns its keep on the explicit path.)
+  # If the repo is on a stray branch (left there by a prior release step, e.g.
+  # fix-version-labels-0.23), auto-checkout the release branch rather than failing.
+  # This is the documented cross-step branch hazard: a prior step leaves the repo
+  # parked on its own fix branch and bundleShas would misroute its commit.
   if ! assert_expected_branch "$BRANCH" "$VERSION_DOT" "$VERSION_DASH"; then
-    die "submariner-operator is on branch '$BRANCH', not release-$VERSION_DOT" \
-      "A prior release step may have left the repo on a fix branch, which would
-misroute the bundle-SHA commit. Check out the release branch and re-run:
-  cd $OPERATOR_REPO && git checkout release-$VERSION_DOT"
+    echo "INFO: submariner-operator is on branch '$BRANCH', not release-$VERSION_DOT"
+    echo "      Auto-checking out release-$VERSION_DOT (left by a prior release step)"
+    if ! git checkout "release-$VERSION_DOT" 2>/dev/null; then
+      die "Failed to checkout release-$VERSION_DOT" \
+        "Branch may not exist locally. Try:
+  cd $OPERATOR_REPO && git fetch origin && git checkout release-$VERSION_DOT"
+    fi
+    BRANCH="release-$VERSION_DOT"
+    echo "      Checked out release-$VERSION_DOT"
   fi
 
   # Read current bundle version
@@ -223,10 +234,18 @@ misroute the bundle-SHA commit. Check out the release branch and re-run:
     UPDATE_TYPE="version-bump"
   fi
 
+  # Named PR branch — unique per version so concurrent or retry runs don't collide
+  # and reviewers can identify the branch purpose at a glance (vs committing
+  # directly to release-0.X which is the prior-step cross-contamination hazard).
+  local DATE_SUFFIX
+  DATE_SUFFIX=$(date +%Y%m%d)
+  PR_BRANCH="update-bundle-shas-${TARGET_VERSION}-${DATE_SUFFIX}"
+
   echo "Version: $VERSION_DOT"
   echo "Current bundle version: $CURRENT_VERSION"
   echo "Target bundle version: $TARGET_VERSION"
   echo "Update type: $UPDATE_TYPE"
+  echo "PR branch: $PR_BRANCH"
   echo ""
 }
 
@@ -584,7 +603,20 @@ verify_shas() {
 
 commit_changes() {
   echo ""
-  echo "Creating commit..."
+  echo "Creating commit on PR branch: $PR_BRANCH..."
+
+  # Create the PR branch from the current release branch HEAD. Using a named
+  # branch (not committing directly to release-0.X) makes the SHA-bump
+  # identifiable, allows a proper PR review, and avoids the cross-step
+  # contamination risk of landing changes directly on the shared release branch.
+  if git rev-parse --verify "$PR_BRANCH" >/dev/null 2>&1; then
+    # Branch already exists (retry run) — just check it out
+    git checkout "$PR_BRANCH"
+    echo "Re-using existing branch: $PR_BRANCH"
+  else
+    git checkout -b "$PR_BRANCH"
+    echo "Created branch: $PR_BRANCH"
+  fi
 
   # Stage all bundle-related changes
   git add config/manager/patches/related-images.deployment.config.yaml \
@@ -616,7 +648,7 @@ Snapshot: $SNAPSHOT"
   git diff --quiet --cached && { echo "Nothing staged — bundle already up to date"; return 0; }
   git commit -s -m "$COMMIT_MSG"
   COMMIT_CREATED=true
-  echo "Commit created"
+  echo "Commit created on $PR_BRANCH"
 }
 
 COMMIT_CREATED=false
@@ -633,7 +665,8 @@ print_summary() {
   echo "  Update type: $UPDATE_TYPE"
   echo "  Version: $CURRENT_VERSION -> $TARGET_VERSION"
   echo "  Snapshot: $SNAPSHOT"
-  echo "  Branch: $BRANCH"
+  echo "  Base branch: $BRANCH"
+  echo "  PR branch: $PR_BRANCH"
   echo ""
   if [ "$COMMIT_CREATED" = true ]; then
     echo "Commit created:"
@@ -650,14 +683,16 @@ print_summary() {
   local gh_user fork
   gh_user=$(get_gh_user)
   fork=$(fork_remote "$OPERATOR_REPO" "$gh_user")
-  echo "  2. Push: git push $fork $BRANCH"
-  echo "  3. Wait for bundle rebuild (~15-30 min)"
-  echo "  4. Verify: oc get snapshots -n submariner-tenant | grep submariner-bundle-${VERSION_DASH}"
+  echo "  2. Push PR branch: git push $fork $PR_BRANCH"
+  echo "  3. Open PR: gh pr create --base release-$VERSION_DOT --head $gh_user:$PR_BRANCH \\"
+  echo "       --title 'Update bundle SHAs for $TARGET_VERSION' --body 'Snapshot: $SNAPSHOT'"
+  echo "  4. After PR merges, wait for bundle rebuild (~15-30 min)"
+  echo "  5. Verify: oc get snapshots -n submariner-tenant | grep submariner-bundle-${VERSION_DASH}"
   echo ""
   # Append to push summary if conductor is running and a commit was actually created
   if [ "$COMMIT_CREATED" = true ] && [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
     printf '\n  cd %s\n  git push %s %s\n' \
-      "$OPERATOR_REPO" "$fork" "$BRANCH" \
+      "$OPERATOR_REPO" "$fork" "$PR_BRANCH" \
       >> "$AUTORELEASE_PUSH_LOG"
   fi
 }
