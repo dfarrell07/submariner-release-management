@@ -1823,6 +1823,18 @@ if [ "${_AUTORELEASE_TESTING:-}" != "true" ]; then
   # of as a cryptic mid-run failure or a silently non-chaining verifier gate.
   run_preflight
 
+  # Warn when not on main — release steps commit YAMLs to main; running from a
+  # feature branch means those commits land on the wrong branch or the scripts
+  # fail with a "not on main" guard. This is advisory only: --dry-run, --complete,
+  # --refresh, and --close are fine from any branch.
+  _cur_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -n "$_cur_branch" ] && [ "$_cur_branch" != "main" ] && [ -z "${DRY_RUN:-}" ]; then
+    echo "  ⚠ You are on branch '$_cur_branch', not 'main'." >&2
+    echo "    Release step scripts commit YAMLs to main — switch first:" >&2
+    echo "      git checkout main && git pull" >&2
+    echo "" >&2
+  fi
+
   # --- Push summary: temp file for scripts to append push/PR commands ---
   AUTORELEASE_PUSH_LOG=$(mktemp "${TMPDIR:-/tmp}/autorelease-pushes-XXXXXX")
   export AUTORELEASE_PUSH_LOG
