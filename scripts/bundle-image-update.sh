@@ -419,6 +419,33 @@ extract_shas() {
   echo "Extracted 7 component SHAs from snapshot"
 }
 
+# ━━━ STEP 1b: IDEMPOTENCY CHECK ━━━
+
+# Returns 0 (true) if origin/release-X.Y already has all target SHAs in its
+# bundle CSV — meaning the SHA-bump PR was already merged. Skips the full
+# generate/commit cycle to avoid timestamp-only noise commits on re-runs.
+check_origin_already_updated() {
+  local ORIGIN_BRANCH="origin/release-${VERSION_DOT}"
+
+  # If fetch failed earlier, origin may be stale — skip check to be safe
+  if ! git rev-parse --verify "$ORIGIN_BRANCH" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local ORIGIN_CSV
+  ORIGIN_CSV=$(git show "${ORIGIN_BRANCH}:bundle/manifests/submariner.clusterserviceversion.yaml" 2>/dev/null) || return 1
+
+  # Check the operator SHA as the representative component — if it matches,
+  # all components from the same snapshot build also match.
+  local OP_SHA="${COMPONENT_SHAS[submariner-operator]}"
+  if echo "$ORIGIN_CSV" | grep -qF "$OP_SHA"; then
+    echo "✓ origin/release-${VERSION_DOT} already has snapshot SHAs — PR already merged and rebuilt"
+    COMMIT_CREATED=false
+    return 0
+  fi
+  return 1
+}
+
 # ━━━ STEP 2: UPDATE RELATED IMAGES CONFIG ━━━
 
 update_config() {
@@ -725,6 +752,21 @@ main() {
 
   find_snapshot
   extract_shas
+
+  # Idempotency: if origin/release-X.Y already has our target SHAs, the SHA-bump
+  # PR is already merged and rebuilt. Mark step complete so the conductor advances
+  # to componentStage on the next re-run instead of looping here indefinitely.
+  if check_origin_already_updated; then
+    if [ -n "${TRACKER:-}" ]; then
+      local idem_data
+      idem_data=$(jq -n --arg snap "${SNAPSHOT:-}" --arg ver "$TARGET_VERSION" \
+        '{snapshot:$snap,version:$ver}' | jq -c .) || idem_data="{}"
+      update_step "$TARGET_VERSION" "bundleShas" "complete" "$idem_data" "$TRACKER" || true
+    fi
+    print_summary
+    return 0
+  fi
+
   update_config
   generate_bundle
   update_dockerfile_labels
