@@ -51,58 +51,127 @@ if [ ! -r "$LOG_FILE" ]; then
 fi
 
 # ── Extract the EC report section ─────────────────────────────────────────────
-# The ec-cli task emits a block starting with "Success: " or "Failure: " that
-# contains the structured violation/warning counts. Extract lines between the
-# first occurrence of that marker and the debug output footer.
+# Two log formats are handled:
+#
+# 1. Tekton step log format (produced by the Konflux UI "Download" button):
+#    Lines begin with "STEP-<NAME>" as section headers, e.g.:
+#      STEP-REPORT-JSON   — JSON violations array (primary data source)
+#      STEP-DETAILED-REPORT — human-readable violations
+#      STEP-SUMMARY       — {"failures":N,"warnings":N,...}
+#
+# 2. Legacy format (ec-cli direct output):
+#    Sections are bounded by "Success: " or "Failure: " markers and end with
+#    "----- DEBUG OUTPUT -----".
+#
 # Use `|| true` to suppress SIGPIPE exit (141) when head -c closes early on large logs.
-# set -euo pipefail treats the sed SIGPIPE as a fatal error without the guard.
-EC_REPORT=$(sed -n '/^[[:space:]]*\(Success\|Failure\): /,/^----- DEBUG OUTPUT -----/p' "$LOG_FILE" 2>/dev/null | head -c 200000 || true)
 
-if [ -z "$EC_REPORT" ]; then
-  # Try the simpler marker used in some log variants
-  EC_REPORT=$(sed -n '/^[[:space:]]*\(Passed\|Failed\)$/,/^$/p' "$LOG_FILE" 2>/dev/null | head -c 200000 || true)
+# Try Tekton step log format first: extract STEP-REPORT-JSON section (JSON).
+# When present this is the authoritative path — use jq to query only the
+# "violations" array so we never surface passing-rule codes as failures.
+IS_TEKTON_JSON=false
+EC_JSON=$(sed -n '/^STEP-REPORT-JSON$/,/^STEP-[A-Z]/p' "$LOG_FILE" 2>/dev/null \
+  | grep -v "^STEP-" || true)
+if [ -n "$EC_JSON" ] && printf '%s' "$EC_JSON" | jq -e '.components' >/dev/null 2>&1; then
+  IS_TEKTON_JSON=true
 fi
 
-if [ -z "$EC_REPORT" ]; then
+# Legacy text format (ec-cli direct output / STEP-DETAILED-REPORT).
+# Skip entirely when Tekton JSON already parsed successfully — it's authoritative,
+# and running these greps anyway risks picking up unrelated "Name:"/"Success:"/
+# "Failed"-shaped text elsewhere in the log (e.g. component names in a large
+# multi-product report) and merging it into ALL_RULES as false positives.
+EC_REPORT_TEXT=""
+if [ "$IS_TEKTON_JSON" = "false" ]; then
+  EC_REPORT_TEXT=$(sed -n '/^STEP-DETAILED-REPORT$/,/^STEP-[A-Z]/p' "$LOG_FILE" 2>/dev/null \
+    | grep -v "^STEP-" | head -c 500000 || true)
+  if [ -z "$EC_REPORT_TEXT" ]; then
+    EC_REPORT_TEXT=$(sed -n '/^[[:space:]]*\(Success\|Failure\): /,/^----- DEBUG OUTPUT -----/p' "$LOG_FILE" 2>/dev/null | head -c 200000 || true)
+  fi
+  if [ -z "$EC_REPORT_TEXT" ]; then
+    EC_REPORT_TEXT=$(sed -n '/^[[:space:]]*\(Passed\|Failed\)$/,/^$/p' "$LOG_FILE" 2>/dev/null | head -c 200000 || true)
+  fi
+fi
+
+if [ "$IS_TEKTON_JSON" = "false" ] && [ -z "$EC_REPORT_TEXT" ]; then
   echo "Error: no EC report section found in $(basename "$LOG_FILE")" >&2
-  echo "  Expected markers: 'Success:' or 'Failure:' followed by '----- DEBUG OUTPUT -----'" >&2
+  echo "  Expected: Tekton step log (STEP-REPORT-JSON) or legacy EC format" >&2
   echo "  This may not be an EC log, or the log is from a passing run with no violations." >&2
   exit 2
 fi
 
 # ── Extract failing rule names ─────────────────────────────────────────────────
-# Rule names appear in three formats depending on which EC log section is present:
-#   1. JSON:   "msg":"rule.name" or msg="rule.name"
-#   2. Text:   "Name: rule.name"
-#   3. Text:   "✕ [Violation] rule.name"  (the primary format in STEP-VALIDATE output)
-#   4. JSON:   "code":"rule.name"
-# msg= fields contain human-readable text; filter to dotted rule-name tokens only
-RULES_FROM_MSG=$(printf '%s' "$EC_REPORT" | grep -oP '(?<="msg"|msg=")[^"]+' 2>/dev/null \
+# For Tekton JSON (STEP-REPORT-JSON): query only the violations[] array via jq.
+# For legacy text: grep for rule-name patterns in the text section.
+
+ALL_RULES=""
+AFFECTED_TASKS=""
+
+if [ "$IS_TEKTON_JSON" = "true" ]; then
+  # Authoritative: jq extracts codes and terms only from violations arrays.
+  ALL_RULES=$(printf '%s' "$EC_JSON" \
+    | jq -r '[.components[].violations[]?.metadata | .code // empty] | sort | unique[]' \
+    2>/dev/null | grep -v "^$" || true)
+  AFFECTED_TASKS=$(printf '%s' "$EC_JSON" \
+    | jq -r '[.components[].violations[]?.metadata | .term // empty] | sort | unique[]' \
+    2>/dev/null \
+    | grep -E '^[a-z][a-z0-9-]+$' \
+    | grep -v "^CVE-\|^sha256:" | sort -u || true)
+  # Raw violation count, independent of whether each entry's metadata.code/.term
+  # parsed cleanly — used below to avoid misreporting a log as "confirmed clean"
+  # when violations exist but are malformed/unparseable.
+  RAW_VIOLATION_COUNT=$(printf '%s' "$EC_JSON" \
+    | jq '[.components[].violations[]?] | length' 2>/dev/null || echo 0)
+
+  # Per-rule violation counts, e.g. "tasks.unsupported (12)" — distinguishes a
+  # rule failing on one component from one failing across the whole fanout.
+  RULE_COUNTS=$(printf '%s' "$EC_JSON" \
+    | jq -r '[.components[].violations[]?.metadata.code // empty] | group_by(.) | .[] | "\(.[0]) (\(length))"' \
+    2>/dev/null || true)
+
+  # Rule message/solution text, deduped per rule code — so NON_TASK_RULES tells
+  # you what to actually do, not just the code you already saw in FAILING_RULES.
+  RULE_MESSAGES=$(printf '%s' "$EC_JSON" \
+    | jq -r '[.components[].violations[]?] | group_by(.metadata.code) |
+        .[] | "\(.[0].metadata.code): \(.[0].msg)"' \
+    2>/dev/null || true)
+
+  # Base component names (no arch/sha suffix) with success=false, paired with
+  # their short git revision — surfaces which components are actually failing
+  # and lets a stale/mid-merge snapshot (mismatched revisions across sibling
+  # components) be spotted at a glance instead of requiring manual jq digging.
+  FAILING_COMPONENTS=$(printf '%s' "$EC_JSON" \
+    | jq -r '.components[] | select(.name | test("-sha256:")|not) | select(.success == false) |
+        "\(.name) (rev \(.source.git.revision // "unknown" | .[0:8]))"' \
+    2>/dev/null || true)
+fi
+
+# Also extract from legacy text section (may add context if JSON was absent/truncated)
+RULES_FROM_MSG=$(printf '%s' "$EC_REPORT_TEXT" | grep -oP '(?<=msg=")[^"]+' 2>/dev/null \
   | grep -oE '^[a-z_]+\.[a-z_]+(\.[a-z_]+)*$' | sort -u || true)
-# Filter Name: matches to exclude component names (sha256 digests, image refs) but keep rule names
-RULES_FROM_NAME=$(printf '%s' "$EC_REPORT" | grep -oP '(?<=^|\s)Name:\s+\K\S+' 2>/dev/null \
-  | grep -v '@sha256\|sha256:\|quay\.io\|registry\.' | sort -u || true)
-# Primary format: "✕ [Violation] rule.name" lines in STEP-VALIDATE text output
-RULES_FROM_VIOLATION=$(printf '%s' "$EC_REPORT" | grep -oP '(?<=✕ \[Violation\] )\S+' 2>/dev/null | sort -u || true)
-# Also catch "code:" style rule identifiers (e.g. required_tasks.missing_required_task)
-RULES_FROM_CODE=$(printf '%s' "$EC_REPORT" | grep -oP '(?<="code"|code=")[^"]+' 2>/dev/null \
+# Real EC rule codes are always dotted lowercase identifiers (e.g. "tasks.unsupported").
+# "Name:" and "[Violation]" lines can also carry component/task names with no dot
+# (e.g. "Name: submariner-fbc-4-19") — require the dotted shape so those aren't
+# misclassified as rule codes.
+RULES_FROM_NAME=$(printf '%s' "$EC_REPORT_TEXT" | grep -oP '(?<=^|\s)Name:\s+\K\S+' 2>/dev/null \
+  | grep -oE '^[a-z_]+\.[a-z_]+(\.[a-z_]+)*$' | sort -u || true)
+RULES_FROM_VIOLATION=$(printf '%s' "$EC_REPORT_TEXT" | grep -oP '(?<=✕ \[Violation\] )\S+' 2>/dev/null \
+  | grep -oE '^[a-z_]+\.[a-z_]+(\.[a-z_]+)*$' | sort -u || true)
+RULES_FROM_CODE=$(printf '%s' "$EC_REPORT_TEXT" \
+  | grep -oP '(?<="code": ")[^"]+|(?<="code":")[^"]+|(?<=code=")[^"]+' 2>/dev/null \
   | grep '\.' | grep -v '@sha256\|sha256:' | sort -u || true)
 
-ALL_RULES=$(printf '%s\n%s\n%s\n%s\n' "$RULES_FROM_MSG" "$RULES_FROM_NAME" "$RULES_FROM_VIOLATION" "$RULES_FROM_CODE" \
-  | grep -v "^$" | sort -u || true)
+ALL_RULES=$(printf '%s\n%s\n%s\n%s\n%s\n' "$ALL_RULES" "$RULES_FROM_MSG" "$RULES_FROM_NAME" \
+  "$RULES_FROM_VIOLATION" "$RULES_FROM_CODE" | grep -v "^$" | sort -u || true)
 
 # ── Extract affected task names ────────────────────────────────────────────────
-# EC reports task names after "Term:" — these are tasks that are missing or at
-# the wrong version. Scope to Term: lines following Violation markers only, not
-# Warning blocks (which also have Term: lines for outdated-but-not-blocking tasks).
-AFFECTED_TASKS=$(printf '%s' "$EC_REPORT" \
+AFFECTED_TASKS_TEXT=$(printf '%s' "$EC_REPORT_TEXT" \
   | awk '/✕ \[Violation\]/{in_v=1} in_v && /^[[:space:]]*Term:/{print $2} /^[[:space:]]*$/{in_v=0}' \
   | sort -u | grep -v "^$" || true)
-# Fall back to all Term: lines if the violation-scoped extraction produced nothing
-# (handles log variants that don't use the ✕ marker)
-if [ -z "$AFFECTED_TASKS" ]; then
-  AFFECTED_TASKS=$(printf '%s' "$EC_REPORT" | grep "Term:" | awk '{print $2}' | sort -u | grep -v "^$" || true)
+if [ -z "$AFFECTED_TASKS_TEXT" ]; then
+  AFFECTED_TASKS_TEXT=$(printf '%s' "$EC_REPORT_TEXT" | grep "Term:" | awk '{print $2}' | sort -u | grep -v "^$" || true)
 fi
+AFFECTED_TASKS=$(printf '%s\n%s\n' "$AFFECTED_TASKS" "$AFFECTED_TASKS_TEXT" \
+  | grep -v "^$" | sort -u || true)
 
 # ── Determine fixability ───────────────────────────────────────────────────────
 # "Fixable by version bump" means the failing rules are about task versions or
@@ -126,7 +195,16 @@ NON_TASK_RULES=$(printf '%s' "$NON_TASK_RULES" | grep -v "^$" || true)
 # A passing log can have Term: lines in Warning blocks — AFFECTED_TASKS alone without
 # any failing rules should not cause a "yes" classification.
 if [ -z "$ALL_RULES" ] && [ -z "$AFFECTED_TASKS" ]; then
-  FIXABLE="unknown"
+  if [ "$IS_TEKTON_JSON" = "true" ] && [ "${RAW_VIOLATION_COUNT:-0}" = "0" ]; then
+    # violations[] is actually empty (not just unparseable) — confirmed clean/passing
+    # log, not an indeterminate parse failure.
+    FIXABLE="n/a (no violations found)"
+  else
+    # Either legacy text format, or Tekton JSON with violations present that we
+    # failed to extract rule codes/terms from — genuinely indeterminate, do not
+    # claim clean.
+    FIXABLE="unknown"
+  fi
 elif [ -n "$TASK_RELATED_RULES" ] || { [ -n "$AFFECTED_TASKS" ] && [ -n "$ALL_RULES" ]; }; then
   if [ -z "$NON_TASK_RULES" ]; then
     FIXABLE="yes"
@@ -141,7 +219,12 @@ fi
 
 # ── Emit structured output ────────────────────────────────────────────────────
 echo "FAILING_RULES:"
-if [ -n "$ALL_RULES" ]; then
+if [ -n "${RULE_COUNTS:-}" ]; then
+  # Tekton JSON path: annotate each rule with its violation count so a rule
+  # failing on one component reads differently from one failing across the
+  # whole fanout.
+  printf '%s\n' "$RULE_COUNTS" | sed 's/^/  /'
+elif [ -n "$ALL_RULES" ]; then
   printf '%s\n' "$ALL_RULES" | sed 's/^/  /'
 else
   echo "  (none detected)"
@@ -155,6 +238,25 @@ else
   echo "  (none detected)"
 fi
 
+if [ -n "${FAILING_COMPONENTS:-}" ]; then
+  echo ""
+  echo "FAILING_COMPONENTS:"
+  printf '%s\n' "$FAILING_COMPONENTS" | sed 's/^/  /'
+
+  # Flag mismatched revisions across failing components — the signature of a
+  # snapshot caught mid-merge, where some components already have a fix and
+  # others don't. Not proof by itself, but worth calling out since diagnosing
+  # this by hand (matching revisions against merged PRs) is slow.
+  REV_COUNT=$(printf '%s' "$FAILING_COMPONENTS" | { grep -oP '(?<=\(rev )[a-z0-9]+(?=\))' || true; } | sort -u | wc -l)
+  if [ "$REV_COUNT" -gt 1 ]; then
+    echo ""
+    echo "  ⚠ Failing components are at $REV_COUNT different git revisions."
+    echo "    This can mean the snapshot was assembled mid-merge (some components"
+    echo "    already have a fix, others don't) rather than a uniform failure."
+    echo "    Check whether the older revision(s) predate a recent fix PR merge."
+  fi
+fi
+
 echo ""
 echo "FIXABLE_BY_VERSION_BUMP: $FIXABLE"
 
@@ -163,6 +265,11 @@ if [ "$FIXABLE" = "partial" ] || [ "$FIXABLE" = "no" ]; then
   echo "NON_TASK_RULES (require manual fix):"
   if [ -n "$NON_TASK_RULES" ]; then
     printf '%s\n' "$NON_TASK_RULES" | sed 's/^/  /'
+    if [ -n "${RULE_MESSAGES:-}" ]; then
+      echo ""
+      echo "  Details:"
+      printf '%s' "$RULE_MESSAGES" | grep -F -f <(printf '%s\n' "$NON_TASK_RULES") | sed 's/^/    /'
+    fi
   else
     echo "  (none identified — check FAILING_RULES above)"
   fi

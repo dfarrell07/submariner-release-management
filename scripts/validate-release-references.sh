@@ -50,7 +50,9 @@ validate_file() {
   # Check snapshot test status
   test_status=$(oc get snapshot "$snapshot" -n "$namespace" -o jsonpath='{.metadata.annotations.test\.appstudio\.openshift\.io/status}' 2>/dev/null || echo "")
   if [[ -n "$test_status" ]]; then
-    failed_count=$(echo "$test_status" | jq '[.[] | select(.status != "TestPassed")] | length' 2>/dev/null || echo "0")
+    # BuildPLRInProgress is a normal transient Konflux status (pipeline run
+    # record lags the annotation), not a failure — treat it as passing.
+    failed_count=$(echo "$test_status" | jq '[.[] | select(.status != "TestPassed" and .status != "BuildPLRInProgress")] | length' 2>/dev/null || echo "0")
     if [[ "$failed_count" -gt 0 ]]; then
       echo "  ⚠ Snapshot has $failed_count failed test(s)"
     else

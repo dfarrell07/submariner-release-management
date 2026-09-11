@@ -23,9 +23,6 @@ set -euo pipefail
 
 # Resolve script location before any cd so lib paths work from any clone location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Capture the lib dir before sourcing: jira-tracker.sh (line 22) unconditionally
-# resets SCRIPT_DIR to its own directory (scripts/lib/). Using _LIB_DIR for all
-# subsequent lib sources prevents that contamination from corrupting our paths.
 _LIB_DIR="$SCRIPT_DIR/lib"
 
 # Source jira-tracker.sh early to provide FBC_REPO_DEFAULT before we assign
@@ -358,12 +355,12 @@ print_summary() {
       local head_ref="$fix_branch"
       [ -n "$gh_user" ] && head_ref="${gh_user}:${fix_branch}"
       # shellcheck disable=SC2086
-      echo "gh pr create --base $base_branch --head $head_ref --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\" --assignee @me $label_flag"
-      echo "gh pr merge --auto --rebase $fix_branch"
+      echo "PR_URL=\$(gh pr create --base $base_branch --head $head_ref --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\" --assignee @me $label_flag)"
+      echo "gh pr merge --auto --rebase \"\${PR_URL##*/}\""
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push %s %s\n  gh pr create --base %s --head %s --title "Update Tekton task references" --body "Refresh .tekton task refs for Enterprise Contract." --assignee @me %s\n  gh pr merge --auto --rebase %s\n' \
-          "$path" "$fork" "$fix_branch" "$base_branch" "$head_ref" "$label_flag" "$fix_branch" \
+        printf '\n  cd %s\n  git push %s %s\n  PR_URL=$(gh pr create --base %s --head %s --title "Update Tekton task references" --body "Refresh .tekton task refs for Enterprise Contract." --assignee @me %s)\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
+          "$path" "$fork" "$fix_branch" "$base_branch" "$head_ref" "$label_flag" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
     done

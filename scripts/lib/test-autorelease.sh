@@ -556,6 +556,25 @@ assert_eq "22i: no snapshot stdout empty" "$ec_out" ""
 assert_eq "22i: no snapshot exit 1" "$ec_exit" "1"
 assert_contains "22i: no snapshot stderr mentions prefix" "$ec_diag" "submariner-0-99-"
 
+# 22k: BuildPLRInProgress is a normal Konflux status (the pipeline run record
+# lags the annotation) and must be treated as passing, not a failure. Fallback
+# path: latest push snapshot with EC=BuildPLRInProgress → exit 0, records it.
+_OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-inprog","labels":{"pac.test.appstudio.openshift.io/event-type":"push"},"annotations":{"test.appstudio.openshift.io/status":"[{\"scenario\":\"submariner-enterprise-contract\",\"status\":\"BuildPLRInProgress\"}]"}}}]}'
+ec_exit=0
+ec_out=$(verify_ecFixes "0.99.1" 2>/dev/null) || ec_exit=$?
+assert_eq "22k: fallback BuildPLRInProgress treated as pass (exit 0)" "$ec_exit" "0"
+assert_eq "22k: fallback BuildPLRInProgress records snapshot" "$ec_out" \
+  '{"snapshot":"submariner-0-99-inprog","version":"0.99.1","prs":null}'
+
+# 22l: same rule on the tracker/bundleShas path → BuildPLRInProgress passes.
+get_step() { echo '{"status":"complete","data":{"snapshot":"submariner-0-99-BBB"}}'; }
+_OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-BBB","annotations":{"test.appstudio.openshift.io/status":"[{\"scenario\":\"submariner-enterprise-contract\",\"status\":\"BuildPLRInProgress\"}]"}}}]}'
+ec_exit=0
+ec_out=$(verify_ecFixes "0.99.1" "FAKE-123" 2>/dev/null) || ec_exit=$?
+assert_eq "22l: tracker BuildPLRInProgress treated as pass (exit 0)" "$ec_exit" "0"
+assert_eq "22l: tracker BuildPLRInProgress records bundleShas snapshot" "$ec_out" \
+  '{"snapshot":"submariner-0-99-BBB","version":"0.99.1","prs":null}'
+
 eval "$_orig_get_step_ec"
 
 # Fix 2b: verify_ecFixes precondition cases → exit 2 (not exit 1)
@@ -927,6 +946,10 @@ assert_eq "_ec_status_from_snap: TestPassed" \
 assert_eq "_ec_status_from_snap: TestFailed" \
   "$(printf '%s' "$(_mock_snap_json TestFailed)" | _ec_status_from_snap)" \
   "TestFailed"
+
+assert_eq "_ec_status_from_snap: BuildPLRInProgress passes through raw" \
+  "$(printf '%s' "$(_mock_snap_json BuildPLRInProgress)" | _ec_status_from_snap)" \
+  "BuildPLRInProgress"
 
 assert_eq "_ec_status_from_snap: missing annotation → no-ec-result" \
   "$(printf '%s' '{"metadata":{"annotations":{}}}' | _ec_status_from_snap)" \

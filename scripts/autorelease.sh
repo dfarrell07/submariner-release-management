@@ -12,8 +12,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIT_ROOT="$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel 2>/dev/null || echo "")"
-# Capture the lib dir before sourcing: each lib resets SCRIPT_DIR to its OWN
-# location, so reusing SCRIPT_DIR for later source lines would resolve to lib/lib.
 _LIB_DIR="$SCRIPT_DIR/lib"
 # shellcheck source=lib/jira-tracker.sh
 source "$_LIB_DIR/jira-tracker.sh"
@@ -617,7 +615,18 @@ verify_upstreamRelease() {
 }
 
 # Extract EC test status from a single snapshot object (stdin).
-# Returns "TestPassed", "TestFailed", "no-ec-result", or "parse-error".
+# Returns the raw Konflux status ("TestPassed", "TestFailed",
+# "BuildPLRInProgress", ...), or "no-ec-result" / "parse-error". Callers treat
+# both "TestPassed" and "BuildPLRInProgress" as passing — the latter is a normal
+# transient status where the pipeline run record lags the annotation (e.g. the
+# EC pipelinerun was garbage-collected ~24h after a passing run), so the verdict
+# is effectively final.
+#
+# Deliberately NOT treated as passing: "TestInProgress", "Pending",
+# "SnapshotCreationInProgress" and similar. These mean the EC verdict genuinely
+# is not in yet, so a verifier returns rc=1 ("not done") and the conductor waits
+# / re-runs — the correct behaviour. Do not add them to the pass allowlist; that
+# would let ecFixes auto-advance before EC has actually finished.
 _ec_status_from_snap() {
   jq -r '.metadata.annotations["test.appstudio.openshift.io/status"] // "[]" | fromjson |
     [.[] | select(.scenario | contains("enterprise-contract"))][0] | .status // "no-ec-result"' \
@@ -706,7 +715,11 @@ verify_ecFixes() {
       return 1
     fi
     ec_status_t=$(printf '%s' "$snap_json" | _ec_status_from_snap)
-    if [ "$ec_status_t" != "TestPassed" ]; then
+    # BuildPLRInProgress is a normal Konflux status: the pipeline run record is
+    # being (re)created and the annotation lags behind. It is not a failure and
+    # is treated as passing here, matching verify-component-release.sh,
+    # verify-fbc-release.sh, and release-status.sh.
+    if [ "$ec_status_t" != "TestPassed" ] && [ "$ec_status_t" != "BuildPLRInProgress" ]; then
       local ui_url="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${target_snap}"
       echo "ecFixes: bundleShas snapshot: $target_snap (ec: $ec_status_t)" >&2
       echo "  View EC failure details: $ui_url" >&2
@@ -735,7 +748,9 @@ verify_ecFixes() {
     snap_obj_f=$(echo "$snaps" | jq --arg n "$latest_candidate" \
       '[.items[] | select(.metadata.name == $n)] | last' 2>/dev/null) || snap_obj_f="null"
     ec_status_f=$(printf '%s' "$snap_obj_f" | _ec_status_from_snap)
-    if [ "$ec_status_f" != "TestPassed" ]; then
+    # BuildPLRInProgress is a normal Konflux status (see the note on the
+    # bundleShas branch above): treat it as passing rather than a failure.
+    if [ "$ec_status_f" != "TestPassed" ] && [ "$ec_status_f" != "BuildPLRInProgress" ]; then
       local ui_url_f="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${latest_candidate}"
       echo "ecFixes: Latest snapshot: $latest_candidate (ec: $ec_status_f)" >&2
       echo "  View EC failure details: $ui_url_f" >&2
@@ -1628,17 +1643,8 @@ run_conductor() {
         if [ "$local_level" = "review" ]; then
           echo "⏸ ${local_title}: REVIEW" >&2
           print_review_stop "$AUTORELEASE_PUSH_LOG" "$VERSION" >&2
-          # Verify the script self-marked the step complete. A silent Jira write
-          # failure leaves it at in_progress, causing the next run to re-dispatch
-          # instead of advancing. Only warn — don't block — since the script exit
-          # 0 is the authoritative signal.
-          _rstep_status=""
-          _rstep_status=$(get_step "$VERSION" "$NEXT_STEP" "$TRACKER" 2>/dev/null \
-            | jq -r '.status // empty' 2>/dev/null) || _rstep_status=""
-          if [ "${_rstep_status:-}" = "in_progress" ]; then
-            echo "  ⚠ Tracker still shows 'in_progress' — the write may have failed." >&2
-            echo "    If work is already done: /autorelease $VERSION --complete $NEXT_STEP" >&2
-          fi
+          # Review-level steps intentionally stay in_progress until the verifier
+          # confirms external state (PRs merged, etc.) — no write-failure check needed.
           break
         fi
 

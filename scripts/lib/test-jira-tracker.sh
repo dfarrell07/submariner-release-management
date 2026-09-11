@@ -381,6 +381,21 @@ echo ""
 echo "=== 6. Contract Tests ==="
 # ============================================================================
 
+# _find_subtask: regression guard for an acli quirk where `--fields key`
+# makes acli return a bare `null` per result (colliding the requested field
+# name with the top-level `key` attribute) instead of the issue object. Must
+# request a different field (currently "summary") and read the always-present
+# top-level .key.
+_FIND_SUBTASK_ARGS=""
+query_jira() { _FIND_SUBTASK_ARGS="$*"; echo '[{"key":"ACM-44528","fields":{"summary":"RPM lockfile updates"}}]'; }
+found=$(_find_subtask "ACM-44527" "rpmLockfiles")
+assert_eq "_find_subtask: returns key from realistic acli response" "$found" "ACM-44528"
+case "$_FIND_SUBTASK_ARGS" in
+  *'--fields key'*|*'--fields "key"'*)
+    echo "  ✗ _find_subtask must not request --fields key (acli returns null for it)"; FAIL=$((FAIL + 1)) ;;
+  *) echo "  ✓ _find_subtask does not request the broken --fields key"; PASS=$((PASS + 1)) ;;
+esac
+
 # Stub internals for update_step tests
 query_jira() { echo '[{"key":"ACM-99"}]'; }
 _find_subtask() { printf '%s' "ACM-98"; }

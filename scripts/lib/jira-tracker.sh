@@ -21,11 +21,11 @@ fi
 _JIRA_TRACKER_SOURCED=true
 
 # Source shared Jira helpers (query_jira, view_jira, calculate_acm_version)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_JIRA_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=release-notes-common.sh
-source "$SCRIPT_DIR/release-notes-common.sh" 2>/dev/null || true
+source "$_JIRA_LIB_DIR/release-notes-common.sh" 2>/dev/null || true
 # shellcheck source=fbc-scope.sh
-source "$SCRIPT_DIR/fbc-scope.sh"
+source "$_JIRA_LIB_DIR/fbc-scope.sh"
 
 # ============================================================================
 # Constants
@@ -349,8 +349,12 @@ _find_subtask() {
     return 1
   fi
 
+  # Note: `--fields "key"` makes acli return bare `null` per result (a known
+  # acli quirk colliding the requested field name with the top-level `key`
+  # attribute) — request "summary" instead and read the always-present
+  # top-level .key.
   local result
-  result=$(query_jira --jql "parent = $parent_key AND summary ~ \"$title\"" --fields "key" 2>/dev/null) || return 1
+  result=$(query_jira --jql "parent = $parent_key AND summary ~ \"$title\"" --fields "summary" 2>/dev/null) || return 1
 
   echo "$result" | jq -r '.[0].key // empty' 2>/dev/null
 }
@@ -719,14 +723,12 @@ create_release_tracker() {
 
   jq -n \
     --arg summary "Release Submariner $version" \
-    --arg assignee "@me" \
     --argjson labels '["release-tracking","submariner","'"$version_label"'"]' \
     --argjson paragraphs "$adf_paragraphs" \
     '{
       projectKey: "ACM",
       type: "Task",
       summary: $summary,
-      assignee: $assignee,
       labels: $labels,
       description: {type:"doc",version:1,content:$paragraphs},
       additionalAttributes: {
@@ -741,6 +743,7 @@ create_release_tracker() {
   else
     parent_output=$(_acli jira workitem create \
       --from-json "$create_json_file" \
+      --assignee "@me" \
       --json </dev/null) || {
       echo "❌ ERROR: Failed to create parent task" >&2
       rm -f "$create_json_file"

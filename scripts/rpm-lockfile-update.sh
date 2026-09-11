@@ -209,19 +209,26 @@ update_lockfiles() {
     fi
 
     set +e  # Disable errexit to capture exit code and cleanup
-    local LOCKFILE_PATTERN
+    local LOCKFILE_PATTERN _lockfile_log
+    _lockfile_log=$(mktemp)
     if [[ "$COMPONENT_FILTER" =~ $COMPONENT_PATTERN ]]; then
       LOCKFILE_PATTERN=".rpm-lockfiles/$COMPONENT_FILTER/rpms.lock.yaml"
       echo "Running: .rpm-lockfiles/update-lockfile.sh $FIX_BRANCH $COMPONENT_FILTER"
       echo ""
-      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" "$COMPONENT_FILTER"
+      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" "$COMPONENT_FILTER" > "$_lockfile_log" 2>&1
     else
       LOCKFILE_PATTERN=".rpm-lockfiles/*/rpms.lock.yaml"
       echo "Running: .rpm-lockfiles/update-lockfile.sh $FIX_BRANCH"
       echo ""
-      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH"
+      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" > "$_lockfile_log" 2>&1
     fi
     local LOCKFILE_EXIT=$?
+    # Show status lines and "No sources" warnings; suppress dnf/pip/skopeo setup noise
+    # and update-lockfile.sh's own manual-use "To commit/To push" instructions.
+    grep -E '^(--- |WARNING:rpm_lockfile: No sources)' "$_lockfile_log" || true
+    # On failure, dump the full log so the problem is diagnosable.
+    [ "$LOCKFILE_EXIT" -ne 0 ] && cat "$_lockfile_log" >&2
+    rm -f "$_lockfile_log"
     set -e
     rm -f .rpm-lockfiles/update-lockfile.sh
 
@@ -306,12 +313,13 @@ print_summary() {
       # our last fetch), and required if the branch was already pushed and the
       # conductor re-ran after a silent tracker write failure.
       echo "git push --force-with-lease $fork $fix_branch"
-      echo "gh pr create --base $branch --head $head_ref --title \"Update RPM lockfiles for v${version}\" --body \"Update RPM lockfiles to resolve package CVEs.\" --assignee @me --label ready-to-test"
-      echo "gh pr merge --auto --rebase $fix_branch"
+      # gh pr merge needs the PR number (branch name fails for fork PRs); capture from gh pr create output.
+      echo "PR_URL=\$(gh pr create --base $branch --head $head_ref --title \"Update RPM lockfiles for v${version}\" --body \"Update RPM lockfiles to resolve package CVEs.\" --assignee @me --label ready-to-test)"
+      echo "gh pr merge --auto --rebase \"\${PR_URL##*/}\""
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s/%s\n  git push --force-with-lease %s %s\n  gh pr create --base %s --head %s --title "Update RPM lockfiles for v%s" --body "Update RPM lockfiles to resolve package CVEs." --assignee @me --label ready-to-test\n  gh pr merge --auto --rebase %s\n' \
-          "$SUBMARINER_BASE" "$repo" "$fork" "$fix_branch" "$branch" "$head_ref" "$version" "$fix_branch" \
+        printf '\n  cd %s/%s\n  git push --force-with-lease %s %s\n  PR_URL=$(gh pr create --base %s --head %s --title "Update RPM lockfiles for v%s" --body "Update RPM lockfiles to resolve package CVEs." --assignee @me --label ready-to-test)\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
+          "$SUBMARINER_BASE" "$repo" "$fork" "$fix_branch" "$branch" "$head_ref" "$version" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
     done
@@ -357,16 +365,8 @@ main() {
 
   print_summary
 
-  # update_step is called AFTER print_summary so that a push-log write failure
-  # (inside print_summary) leaves the tracker at 'in_progress' rather than 'complete'.
   # review level: script stays in_progress. User must push the lockfile changes and
-  # wait for Konflux to rebuild, then explicitly mark complete.
-  if [ -n "${TRACKER:-}" ] && [ "$COMPONENT_FILTER" = "all" ] && \
-     [ "${#REPOS_FAILED[@]}" -eq 0 ] && [ "$problem_skips" -eq 0 ]; then
-    local data
-    # shellcheck disable=SC2034
-    data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" '{reposUpdated:($count|tonumber)}' | jq -c .) || data="{}"
-  fi
+  # wait for Konflux to rebuild, then explicitly mark complete via autorelease verifier.
 }
 
 main "$@"
