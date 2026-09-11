@@ -303,12 +303,12 @@ print_summary() {
       echo "cd $path"
       echo "git show"
       echo "git push $fork $fix_branch"
-      echo "gh pr create --base $branch --head $head_ref --title \"Update version labels to v$VERSION\" --body \"Enables correct Konflux image tagging.\" --assignee @me --label ready-to-test"
-      echo "gh pr merge --auto --rebase $fix_branch"
+      echo "PR_URL=\$(gh pr create --base $branch --head $head_ref --title \"Update version labels to v$VERSION\" --body \"Enables correct Konflux image tagging.\" --assignee @me --label ready-to-test)"
+      echo "gh pr merge --auto --rebase \"\${PR_URL##*/}\""
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push %s %s\n  gh pr create --base %s --head %s --title "Update version labels to v%s" --body "Enables correct Konflux image tagging." --assignee @me --label ready-to-test\n  gh pr merge --auto --rebase %s\n' \
-          "$path" "$fork" "$fix_branch" "$branch" "$head_ref" "$VERSION" "$fix_branch" \
+        printf '\n  cd %s\n  git push %s %s\n  PR_URL=$(gh pr create --base %s --head %s --title "Update version labels to v%s" --body "Enables correct Konflux image tagging." --assignee @me --label ready-to-test)\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
+          "$path" "$fork" "$fix_branch" "$branch" "$head_ref" "$VERSION" \
           >> "$AUTORELEASE_PUSH_LOG"
       fi
     done

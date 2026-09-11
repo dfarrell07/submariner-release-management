@@ -69,7 +69,8 @@ declare -a REPOS_FAILED=()
 SUBMARINER_BASE="$HOME/go/src/submariner-io"
 readonly FBC_REPO_PATH="${FBC_REPO:-${FBC_REPO_DEFAULT:-$HOME/konflux/submariner-operator-fbc}}"
 
-QUAY_BASE="https://quay.io/v2/konflux-ci/tekton-catalog"
+# Cache for acceptable-bundles data (fetched once, reused per-task)
+_ACCEPTABLE_BUNDLES_DATA=""
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -89,27 +90,44 @@ repo_base_branch() {
   esac
 }
 
-# Query Quay v2 API for the latest X.Y version tag of a task.
-# The API caps at 100 tags per page; paginate with ?last=<tag> until we get
-# fewer than 100 tags (no more pages). Returns empty string on failure.
+# Fetch and cache the merged data-acceptable-bundles content (same sources
+# pipeline-patcher uses). Called once; subsequent calls return from cache.
+_load_acceptable_bundles() {
+  [ -n "$_ACCEPTABLE_BUNDLES_DATA" ] && return 0
+
+  local catalog blob_digest page merged=""
+  for catalog in \
+      "quay.io/konflux-ci/konflux-vanguard/data-acceptable-bundles" \
+      "quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles"; do
+    blob_digest=$(oras manifest fetch "${catalog}:latest" 2>/dev/null \
+      | jq -r '.layers[0].digest' 2>/dev/null) || continue
+    [ -z "$blob_digest" ] || [ "$blob_digest" = "null" ] && continue
+    page=$(oras blob fetch "${catalog}@${blob_digest}" --output - 2>/dev/null) || continue
+    merged="${merged}"$'\n'"${page}"
+  done
+
+  if [ -z "$merged" ]; then
+    echo "  ⚠ Could not fetch data-acceptable-bundles (check oras/network)" >&2
+    return 1
+  fi
+
+  _ACCEPTABLE_BUNDLES_DATA="$merged"
+}
+
+# Return the latest acceptable version for a task by querying the
+# data-acceptable-bundles OCI artifact — the same authoritative source
+# pipeline-patcher uses. Handles X.Y and X.Y.Z version strings correctly,
+# unlike the Quay v2 tags API which only has clean X.Y tags for some tasks.
+# Returns empty string on failure.
 latest_task_version() {
   local task="$1"
-  local url="${QUAY_BASE}/task-${task}/tags/list"
-  local last="" all_versions="" resp count
-  while true; do
-    resp=$(curl -s "${url}${last:+?last=$last}" 2>/dev/null) || break
-    count=$(printf '%s' "$resp" | jq '.tags | length' 2>/dev/null || echo 0)
-    local page_versions
-    page_versions=$(printf '%s' "$resp" \
-      | jq -r '.tags[] // empty' 2>/dev/null \
-      | grep -E "^[0-9]+\.[0-9]+$" || true)
-    [ -n "$page_versions" ] && all_versions="${all_versions}"$'\n'"${page_versions}"
-    [ "$count" -lt 100 ] && break
-    last=$(printf '%s' "$resp" | jq -r '.tags[-1]' 2>/dev/null) || break
-    [ -z "$last" ] || [ "$last" = "null" ] && break
-  done
-  printf '%s\n' "$all_versions" \
-    | grep -E "^[0-9]+\.[0-9]+$" \
+
+  _load_acceptable_bundles 2>/dev/null || return 0
+
+  printf '%s\n' "$_ACCEPTABLE_BUNDLES_DATA" \
+    | grep "task-${task}:" \
+    | grep -oP "(?<=task-${task}:)[0-9]+\.[0-9]+(\.[0-9]+)?" \
+    | grep -E "^[0-9]+\.[0-9]+(\.[0-9]+)?$" \
     | sort -Vu \
     | tail -1 \
     || true
@@ -254,30 +272,31 @@ update_repo() {
   local version_bumped=0
   for task in $tasks_in_tekton; do
     local current_ver latest_ver
+    # Extract full version (X.Y or X.Y.Z) from .tekton/ YAML
     current_ver=$(grep -rh "task-${task}:" .tekton/ 2>/dev/null \
-      | head -1 | grep -oP "(?<=task-${task}:)[0-9]+\.[0-9]+" || true)
+      | head -1 | grep -oP "(?<=task-${task}:)[0-9]+\.[0-9]+(\.[0-9]+)?" || true)
     [ -z "$current_ver" ] && continue
 
     latest_ver=$(latest_task_version "$task")
     if [ -z "$latest_ver" ]; then
-      echo "  ⚠ $task: could not query Quay (skipping version check)" >&2
+      echo "  ⚠ $task: not in data-acceptable-bundles (skipping version check)" >&2
       continue
     fi
 
-    # Only upgrade — never downgrade. Skip if Quay's latest is not strictly
-    # higher than what's already in the repo. Use sort -Vu to compare: if the
-    # highest version when both are sorted together is NOT latest_ver, then
+    # Only upgrade — never downgrade. Skip if acceptable-bundles latest is not
+    # strictly higher than what's already in the repo. Use sort -Vu to compare:
+    # if the highest version when both are sorted together is NOT latest_ver, then
     # current_ver is already higher (or equal) and we leave it alone.
     local highest
     highest=$(printf '%s\n%s\n' "$current_ver" "$latest_ver" | sort -Vu | tail -1)
     if [ "$current_ver" = "$latest_ver" ] || [ "$highest" != "$latest_ver" ]; then
       [ "$current_ver" != "$latest_ver" ] && \
-        echo "  = $task: $current_ver (Quay: $latest_ver — already at or above latest, skipping)" >&2
+        echo "  = $task: $current_ver (acceptable-bundles: $latest_ver — already at or above latest, skipping)" >&2
       continue
     fi
 
     echo "  ↑ $task: $current_ver → $latest_ver"
-    # sed -i.bak for BSD/GNU portability
+    # sed -i.bak for BSD/GNU portability; matches full X.Y or X.Y.Z version string
     for yaml_file in .tekton/*.yaml; do
       [ -f "$yaml_file" ] || continue
       if grep -q "task-${task}:${current_ver}" "$yaml_file" 2>/dev/null; then
@@ -362,7 +381,14 @@ ec_log_diagnosis() {
         | jq -r '[.[] | select(.scenario | contains("enterprise-contract"))][0].status // "unknown"' \
         2>/dev/null) || ec_status="unknown"
 
-      echo "  Failing snapshot: $snap_name (EC: $ec_status)" >&2
+      # BuildPLRInProgress is a normal transient status (not a failure), so
+      # don't label such a snapshot as "Failing" — the EC verdict just hasn't
+      # been finalized on the annotation yet.
+      if [ "$ec_status" = "BuildPLRInProgress" ] || [ "$ec_status" = "TestPassed" ]; then
+        echo "  Latest snapshot: $snap_name (EC: $ec_status)" >&2
+      else
+        echo "  Failing snapshot: $snap_name (EC: $ec_status)" >&2
+      fi
       echo "" >&2
 
       if [ -n "$test_plr" ] && [ "$test_plr" != "null" ]; then
@@ -411,6 +437,20 @@ ec_log_diagnosis() {
               echo "  ⚠  Log says task version bump should fix this, but all versions" >&2
               echo "     appear current. The log may be stale (from a previous run)." >&2
               echo "     Download a fresh log from the URL above and re-run." >&2
+            fi
+            # A confirmed-clean log (empty violations[], not just unparseable)
+            # means this downloaded log is NOT evidence EC is still failing —
+            # it's evidence a passing run already happened. The "failing
+            # snapshot" named above is independently picked as the latest
+            # push/incoming build, so it can be a *different, older* snapshot
+            # than the one this log is for; don't tell the user EC is still
+            # broken when the log they just downloaded says otherwise.
+            if printf '%s' "$parse_out" | grep -q "FIXABLE_BY_VERSION_BUMP: n/a"; then
+              echo "" >&2
+              echo "  ✓ This log shows a clean run (no violations) — EC passed here." >&2
+              echo "    If the conductor still reports EC failing, this log may be for" >&2
+              echo "    a different/newer snapshot than the one named above. Re-run" >&2
+              echo "    /autorelease $version to let verify_ecFixes re-check the cluster." >&2
             fi
             if printf '%s' "$parse_out" | grep -q "NON_TASK_RULES"; then
               local non_task_section
