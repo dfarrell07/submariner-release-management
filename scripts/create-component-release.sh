@@ -559,6 +559,34 @@ main() {
   fi
 
   verify_release
+
+  # Idempotency: if a Release CR for this snapshot is already Succeeded on the
+  # cluster, the step was already applied in a previous run. Mark it complete so
+  # the conductor advances instead of creating a duplicate YAML.
+  if [ -n "${SNAPSHOT_NAME:-}" ]; then
+    local rel_dir="$GIT_ROOT/releases/${VERSION%.*}/$RELEASE_TYPE"
+    local existing_yaml=""
+    existing_yaml=$(grep -rl "snapshot: $SNAPSHOT_NAME" "$rel_dir" 2>/dev/null | head -1 || true)
+    if [ -n "$existing_yaml" ]; then
+      local rel_name
+      rel_name=$(basename "$existing_yaml" .yaml)
+      local rel_status=""
+      rel_status=$(oc get release "$rel_name" -n submariner-tenant \
+        -o jsonpath='{.status.conditions[?(@.type=="Released")].status}' 2>/dev/null || true)
+      if [ "$rel_status" = "True" ]; then
+        echo "✓ $RELEASE_TYPE release already Succeeded for snapshot $SNAPSHOT_NAME ($rel_name)"
+        echo "  Marking $STEP_KEY complete in tracker — no duplicate YAML needed."
+        if [ -n "${TRACKER:-}" ]; then
+          local idem_data
+          idem_data=$(jq -n --arg name "$rel_name" --arg snap "$SNAPSHOT_NAME" --arg type "$RELEASE_TYPE" \
+            '{releaseName:$name,snapshot:$snap,type:$type}' | jq -c .) || idem_data="{}"
+          update_step "$VERSION" "$STEP_KEY" "complete" "$idem_data" "$TRACKER" || true
+        fi
+        return 0
+      fi
+    fi
+  fi
+
   assert_bundle_rebuilt
   generate_yaml
   validate_yaml
