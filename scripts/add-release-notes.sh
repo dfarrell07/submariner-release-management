@@ -118,7 +118,23 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Phase 3: Auto-apply release notes"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-"$ADD_RELEASE_NOTES_DIR/release-notes/auto-apply.sh"
+# auto-apply exits 1 with a clear message when notes are already present and
+# FORCE is not set. Treat that as "already applied" — the user reviewed and
+# finalized notes in a prior run; we should proceed to Phase 4 (verify) rather
+# than failing the whole step. Any other non-zero exit is a real failure.
+_apply_rc=0
+"$ADD_RELEASE_NOTES_DIR/release-notes/auto-apply.sh" || _apply_rc=$?
+if [[ "$_apply_rc" -ne 0 ]]; then
+  _stage_yaml_path=$(jq -r '.metadata.stage_yaml // empty' "$RELEASE_NOTES_DATA" 2>/dev/null || true)
+  _existing=$(grep -c "id: ACM-" "${_stage_yaml_path:-/dev/null}" 2>/dev/null || echo 0)
+  if [[ "$_existing" -gt 0 ]]; then
+    echo "ℹ️  Release notes already present ($_existing issues) — skipping re-apply."
+    echo "   To overwrite: FORCE=true make add-release-notes VERSION=$VERSION"
+    echo "   Proceeding to CVE verification."
+  else
+    exit "$_apply_rc"
+  fi
+fi
 
 echo ""
 

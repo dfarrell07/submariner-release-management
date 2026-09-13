@@ -120,6 +120,12 @@ find_stage_yaml() {
     STAGE_YAML="$STAGE_YAML_ARG"
     if [[ ! -f "$STAGE_YAML" ]]; then
       echo "❌ ERROR: Stage YAML not found: '$STAGE_YAML'" >&2
+      local _cur_br
+      _cur_br=$(git -C "${GIT_ROOT:-.}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+      if [[ -n "$_cur_br" && "$_cur_br" != "main" ]]; then
+        echo "  Note: you are on branch '$_cur_br', not 'main'." >&2
+        echo "  The stage YAML is committed on main — switch branches and re-run." >&2
+      fi
       return 1
     fi
   else
@@ -333,6 +339,12 @@ extract_and_validate_metadata() {
 
   if [[ ! -f "$STAGE_YAML" ]]; then
     echo "❌ ERROR: Stage YAML not found: '$STAGE_YAML'" >&2
+    local _cur_br
+    _cur_br=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [[ -n "$_cur_br" && "$_cur_br" != "main" ]]; then
+      echo "  Note: you are on branch '$_cur_br', not 'main'." >&2
+      echo "  The stage YAML is committed on main — switch branches and re-run." >&2
+    fi
     return 1
   fi
 }
