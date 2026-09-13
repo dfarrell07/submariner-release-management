@@ -344,6 +344,33 @@ handle_step_override() {
     data=$(snapshot_step_data "$version" "$tracker")
   fi
 
+  # Release-YAML steps (componentStage, componentProd) need releaseName stored so
+  # downstream steps (fbcCatalogUpdate) can verify the release Succeeded. When
+  # completing by hand, auto-detect the newest YAML for the right type.
+  if [ "$action" = "complete" ]; then
+    local _rel_type=""
+    case "$step_key" in
+      componentStage) _rel_type="stage" ;;
+      componentProd)  _rel_type="prod" ;;
+    esac
+    if [ -n "$_rel_type" ]; then
+      local _ver_stream="${version%.*}"
+      local _rel_dir="$GIT_ROOT/releases/$_ver_stream/$_rel_type"
+      local _yaml=""
+      # shellcheck disable=SC2012  # ls -t needed for time-sort; no filenames with spaces
+      _yaml=$(ls -t "$_rel_dir"/submariner-*.yaml 2>/dev/null | head -1 || true)
+      if [ -n "$_yaml" ]; then
+        local _rel_name
+        _rel_name=$(basename "$_yaml" .yaml)
+        local _snap=""
+        _snap=$(awk '/^  snapshot:/ {print $2; exit}' "$_yaml" 2>/dev/null || true)
+        data=$(jq -n --arg name "$_rel_name" --arg snap "$_snap" --arg type "$_rel_type" \
+          '{releaseName:$name,snapshot:$snap,type:$type}' | jq -c .) || data="{}"
+        echo "  (releaseName: $_rel_name, snapshot: $_snap)" >&2
+      fi
+    fi
+  fi
+
   update_step "$version" "$step_key" "$action" "$data" "$tracker"
   echo "Step '$step_key' marked as $action for $version (tracker: $tracker)" >&2
 
@@ -1822,6 +1849,18 @@ if [ "${_AUTORELEASE_TESTING:-}" != "true" ]; then
   # Readiness report (never blocks) — surfaces gh/oc cred gaps up front instead
   # of as a cryptic mid-run failure or a silently non-chaining verifier gate.
   run_preflight
+
+  # Warn when not on main — release steps commit YAMLs to main; running from a
+  # feature branch means those commits land on the wrong branch or the scripts
+  # fail with a "not on main" guard. This is advisory only: --dry-run, --complete,
+  # --refresh, and --close are fine from any branch.
+  _cur_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [ -n "$_cur_branch" ] && [ "$_cur_branch" != "main" ] && [ -z "${DRY_RUN:-}" ]; then
+    echo "  ⚠ You are on branch '$_cur_branch', not 'main'." >&2
+    echo "    Release step scripts commit YAMLs to main — switch first:" >&2
+    echo "      git checkout main && git pull" >&2
+    echo "" >&2
+  fi
 
   # --- Push summary: temp file for scripts to append push/PR commands ---
   AUTORELEASE_PUSH_LOG=$(mktemp "${TMPDIR:-/tmp}/autorelease-pushes-XXXXXX")

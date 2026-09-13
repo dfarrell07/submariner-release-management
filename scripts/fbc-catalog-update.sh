@@ -81,9 +81,9 @@ fi
 
 _current_branch=$(git rev-parse --abbrev-ref HEAD)
 if [ "$_current_branch" != "main" ]; then
-  echo "❌ FBC repo is on branch '$_current_branch', not 'main'" >&2
-  echo "   Fix: cd $FBC_REPO && git checkout main && git pull" >&2
-  exit 1
+  echo "⚠️  FBC repo is on branch '$_current_branch', not 'main' — switching automatically" >&2
+  git checkout main
+  _current_branch="main"
 fi
 
 # Verify clean working tree

@@ -2841,26 +2841,26 @@ inheritance *used to* silently misroute the bundle-SHA commit onto a stale/merge
 fix branch and print a wrong `git push origin <fix-branch>` — see the cveFixes
 cross-step caveat and the Script Contract.
 
-**Backstop SHIPPED (the commit-to-HEAD half of the fix).**
-`bundle-image-update.sh` now refuses to commit onto a stray branch:
-`assert_expected_branch` requires the checkout to be `release-<X.Y>` (or the
-Konflux bundle bot branch `konflux-submariner-bundle-<X-Y>`, Y-stream step 3b),
-and it runs unconditionally — both the conductor/scripted (explicit-version) path
-and the manual auto-detect path. A leftover fix branch, detached HEAD, or
-wrong-version branch now hard-stops with `cd … && git checkout release-<X.Y>`
-guidance instead of silently misrouting. (The guard was initially scoped to the
-explicit path on the theory that auto-detect derives the version *from* the branch
-so "only the explicit path can misroute". Review found that false: the old
-auto-detect `*)` fallback greps any `X-Y` token out of the branch name, so a real
-tooling branch like `konflux-submariner-operator-0-25` — `konflux-component-setup.sh`'s
-`BOT_BRANCH` — resolved to `0.25` and slipped past the scoped guard. The fix drops
-that fallback (unknown branches now die at "Cannot auto-detect version") and makes
-the assert unconditional; net ~9 fewer lines, and the guard no longer depends on
-external fix-branch naming.) This defends the one repo bundleShas writes to
-(submariner-operator) at the collision point, so the CONFIRMED data-corruption bug
-can no longer fire even with the external cveFixes tooling unfixed. 10 tests
-(`test-bundle-image-update.sh`, `make test-bundle`), sourcing guard added for
-testability.
+**FIXED — auto-checkout + PR branch (commit-to-HEAD half fully resolved).**
+`bundle-image-update.sh` previously hard-stopped when `assert_expected_branch`
+found a stray branch (`cd … && git checkout release-<X.Y>` guidance). It now:
+
+1. **Auto-fetches remote** (`git fetch origin --quiet`) before any branch
+   inspection, so version detection and stale guards work on current data even if
+   the local clone is stale.
+2. **Auto-checkouts** `release-<X.Y>` when the repo is on a stray branch (left by
+   versionLabels, cveFixes, etc.) instead of hard-stopping. Logs a clear INFO line
+   so the operator can see the auto-fix; still dies if the target branch doesn't
+   exist locally (which means fetch failed or branch was never created).
+3. **Uses a named PR branch** (`update-bundle-shas-<X.Y.Z>-<YYYYMMDD>`) rather
+   than committing directly to `release-<X.Y>`. The PR branch is created from the
+   release branch HEAD, so reviewers can see the SHA-bump diff in a proper PR, and
+   the release branch is not polluted by a direct push. The push/PR-open commands
+   are printed in the summary.
+
+The `assert_expected_branch` function is retained to document the two intended
+branch shapes (release + bundle-bot) but is now used as an auto-fix trigger rather
+than a hard-stop guard.
 
 **Still open (the restore half).** One branch-creating step still strands a repo
 where it lives: versionLabels (restore only on the no-changes path). The external
@@ -2868,8 +2868,9 @@ cve-fix tooling has the same shape (`fix-all.sh` restores `ORIGINAL_REF` only on
 the no-CVE path), but the shipped cveFixes *wrapper* force-restores each repo on
 every exit path — the pattern `tekton-task-refs-update.sh` demonstrates — so
 cveFixes no longer strands at the conductor level even with the external tooling
-unchanged. The backstop turns any residual stranding from silent corruption into
-a clear stop. tektonTasks itself is already safe; it never strands a repo.
+unchanged. bundleShas auto-checkout now recovers from residual stranding silently
+rather than requiring a manual `git checkout`. tektonTasks itself is already safe;
+it never strands a repo.
 
 **FBC prod re-selects the snapshot instead of reusing the QE-validated stage
 snapshot — FIXED (commit 8f8d70c).** `create-fbc-releases.sh` now has a `prod`
