@@ -1132,6 +1132,76 @@ print_review_stop() {
   fi
 }
 
+# --- Auto-push: execute push/PR commands from the push log automatically ---
+# Attempts to run the git-push and gh-pr commands that a review script wrote to
+# AUTORELEASE_PUSH_LOG, so the operator does not have to copy-paste them. Lines
+# that require manual oversight (make apply, make watch) are skipped — they
+# remain in the push log as pending actions for the operator.
+#
+# Strategy: extract only the content this step added (bytes _log_before..end),
+# build a shell script from it that omits make-apply/watch lines, execute it
+# with bash -e in a subshell. On success, rewrite the push log to keep only
+# the skipped (manual) lines — the Pending Actions trailer will show just what
+# still needs human action. On failure, leave the log untouched so the full
+# human-readable fallback prints as before.
+#
+# Returns 0 if all pushable commands succeeded; non-zero on any failure.
+# Args: $1=push-log path  $2=step key  $3=log-size-before (bytes, from wc -c)
+_try_auto_push() {
+  local push_log="$1" step="$2" log_before="${3:-0}"
+  [ -s "$push_log" ] || return 0  # nothing to push
+
+  # Extract only the content this step added
+  local step_content
+  step_content=$(tail -c +"$((log_before + 1))" "$push_log" 2>/dev/null) || return 1
+  [ -z "$step_content" ] && return 0  # this step added nothing
+
+  # Split into push-executable lines and manual-only lines.
+  # make-apply and make-watch require cluster access and are intentionally manual.
+  local exec_script="" manual_lines=""
+  while IFS= read -r line; do
+    case "$line" in
+      *'make apply'*|*'make watch'*)
+        manual_lines="${manual_lines}${line}"$'\n' ;;
+      *)
+        exec_script="${exec_script}${line}"$'\n' ;;
+    esac
+  done <<< "$step_content"
+
+  # Nothing executable (e.g. a pure release-yaml step with only apply/watch)
+  if [ -z "$(printf '%s' "$exec_script" | tr -d '[:space:]')" ]; then
+    return 1
+  fi
+
+  # Write the executable portion to a temp script and run it
+  local tmp_script
+  tmp_script=$(mktemp --suffix=.sh) || return 1
+  { printf '#!/usr/bin/env bash\nset -euo pipefail\n'; printf '%s\n' "$exec_script"; } > "$tmp_script"
+  chmod +x "$tmp_script"
+
+  echo "  ↪ Attempting automatic push/PR..." >&2
+  local push_rc=0
+  bash "$tmp_script" 2>&1 || push_rc=$?
+  rm -f "$tmp_script"
+
+  if [ "$push_rc" -ne 0 ]; then
+    echo "  ↪ Auto-push failed (exit $push_rc) — see Pending Actions below" >&2
+    return 1
+  fi
+
+  # Success: rewrite push log to contain only the manual (apply/watch) lines.
+  # Keep content from before this step's block, then append the manual-only lines.
+  local before_content=""
+  [ "$log_before" -gt 0 ] && before_content=$(head -c "$log_before" "$push_log" 2>/dev/null) || true
+  if [ -n "$manual_lines" ]; then
+    printf '%s%s' "$before_content" "$manual_lines" > "$push_log"
+  else
+    printf '%s' "$before_content" > "$push_log"
+  fi
+  echo "  ✓ Push and PR creation succeeded automatically" >&2
+  return 0
+}
+
 # --- Propagation note: guidance when a step is blocked on an unpushed dep ---
 # Many steps produce LOCAL commits that must be pushed, merged, and (for
 # build-consuming steps) rebuilt in Konflux/FBC before a *downstream* step can
@@ -1677,6 +1747,10 @@ run_conductor() {
 
         if [ "$local_level" = "review" ]; then
           echo "⏸ ${local_title}: REVIEW" >&2
+          # Attempt automatic push/PR creation; fall back to manual pending actions
+          # on failure. _try_auto_push rewrites the push log on success so the
+          # Pending Actions trailer shows only the remaining manual steps (apply/watch).
+          _try_auto_push "$AUTORELEASE_PUSH_LOG" "$NEXT_STEP" "$_log_before" >&2 || true
           print_review_stop "$AUTORELEASE_PUSH_LOG" "$VERSION" >&2
           # Review-level steps intentionally stay in_progress until the verifier
           # confirms external state (PRs merged, etc.) — no write-failure check needed.
