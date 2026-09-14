@@ -96,3 +96,18 @@ acli jira auth status
 | `/get-fbc-urls`             | Get FBC catalog URLs for QE sharing            |
 
 See [.claude/SKILLS.md](.claude/SKILLS.md).
+
+## Codex Skills
+
+Codex discovers repository skills through the relative `.agents/skills` symlink
+to `skills/`; no separate installation or skill copy is needed. Type `$` to select
+a skill, for example `$release-management:autorelease 0.25.1` or
+`$release-management:release-ls 0.25.1`. Use the displayed name if your client omits
+the plugin prefix. The skill files and release scripts are shared with Claude.
+
+Start Codex at this checkout (or open a new session after updating it).
+Follow [AGENTS.md](AGENTS.md) for explicit argument binding in legacy examples.
+The link enables discovery; it does not change release-script behavior.
+In particular, normal `autorelease` execution writes to Jira and can push branches,
+create PRs, and enable PR auto-merge. It requires explicit authorization for those
+actions. Use `--dry-run` to preview.
