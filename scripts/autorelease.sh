@@ -858,6 +858,7 @@ _verify_prs_merged() {
 
   local all_merged=true
   local any_open=false
+  local any_missing=false
   local merged_urls=()
   local open_urls=()
 
@@ -887,12 +888,19 @@ _verify_prs_merged() {
         any_open=true
       else
         echo "  No PR found on $repo (branch: $branch)" >&2
+        any_missing=true
       fi
       all_merged=false
     fi
   done
 
   if ! $all_merged; then
+    # If any repo has no PR at all, the action script still needs to run for it.
+    # Return rc=1 so the conductor re-runs the script rather than waiting — the
+    # script handles already-committed repos with no-changes (benign skip).
+    if $any_missing; then
+      return 1
+    fi
     if $any_open; then
       # Emit open (and any already-merged) URLs on stdout so the caller can
       # post them to Jira. _add_comment cannot be called here because this
