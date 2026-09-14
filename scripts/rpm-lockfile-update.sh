@@ -187,6 +187,13 @@ update_lockfiles() {
 
     local FIX_BRANCH="update-rpm-lockfiles-${REPO_VERSION}"
 
+    # Remember where we are so we can restore after committing.
+    local ORIGINAL_REF
+    ORIGINAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [ -z "$ORIGINAL_REF" ] || [ "$ORIGINAL_REF" = "HEAD" ]; then
+      ORIGINAL_REF="$(git rev-parse HEAD 2>/dev/null || true)"
+    fi
+
     git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1 || \
       { REPOS_FAILED+=("$DISPLAY_NAME:branch-create-failed"); continue; }
 
@@ -194,6 +201,7 @@ update_lockfiles() {
       echo "❌ Failed to copy update-lockfile.sh from origin/devel"
       echo "   Run: git fetch origin devel"
       REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed")
+      git checkout "$ORIGINAL_REF" 2>/dev/null || true
       continue
     }
 
@@ -234,6 +242,7 @@ update_lockfiles() {
 
     if [ $LOCKFILE_EXIT -ne 0 ]; then
       REPOS_FAILED+=("$DISPLAY_NAME:update-script-failed")
+      git checkout "$ORIGINAL_REF" 2>/dev/null || true
     elif git diff --quiet $LOCKFILE_PATTERN 2>/dev/null; then
       cleanup_empty_branch "$REPO_BRANCH" "$BRANCH_REF" "$FIX_BRANCH"
       REPOS_SKIPPED+=("$DISPLAY_NAME:no-changes")
@@ -241,17 +250,21 @@ update_lockfiles() {
       # shellcheck disable=SC2086
       git add $LOCKFILE_PATTERN || {
         REPOS_FAILED+=("$DISPLAY_NAME:stage-failed")
+        git checkout "$ORIGINAL_REF" 2>/dev/null || true
         continue
       }
 
       # shellcheck disable=SC2059
       git commit -s -m "$(printf "$COMMIT_MSG" "$REPO_BRANCH")" || {
         REPOS_FAILED+=("$DISPLAY_NAME:commit-failed")
+        git checkout "$ORIGINAL_REF" 2>/dev/null || true
         continue
       }
 
       echo "✓ Committed lockfile changes"
       REPOS_UPDATED+=("$DISPLAY_NAME#$REPO_NAME#$REPO_VERSION#$REPO_BRANCH")
+      # Restore original branch so later steps don't find the repo on a stray branch.
+      git checkout "$ORIGINAL_REF" 2>/dev/null || true
     fi
   done
 

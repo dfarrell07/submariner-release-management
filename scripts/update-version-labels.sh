@@ -159,6 +159,13 @@ update_repo() {
     fi
   fi
 
+  # Remember where the repo was so we can restore it after committing.
+  local ORIGINAL_REF
+  ORIGINAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ -z "$ORIGINAL_REF" ] || [ "$ORIGINAL_REF" = "HEAD" ]; then
+    ORIGINAL_REF="$(git rev-parse HEAD 2>/dev/null || true)"
+  fi
+
   # Create fix branch from release branch
   if ! git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1; then
     echo "  ✗ Failed to create branch $FIX_BRANCH"
@@ -214,7 +221,7 @@ update_repo() {
   # Check if anything actually changed
   if git diff --quiet; then
     echo "  - Already at v$VERSION"
-    git checkout - 2>/dev/null
+    git checkout "$ORIGINAL_REF" 2>/dev/null || true
     git branch -D "$FIX_BRANCH" 2>/dev/null || true
     REPOS_SKIPPED+=("$REPO:no-changes")
     echo ""
@@ -232,6 +239,9 @@ Enables correct Konflux image tagging via {{ labels.version }}." >/dev/null 2>&1
     echo "  ✗ Commit failed"
     REPOS_FAILED+=("$REPO:commit-failed")
   fi
+
+  # Restore original branch so later steps don't find the repo on a stray branch.
+  git checkout "$ORIGINAL_REF" 2>/dev/null || true
 
   echo ""
 }
