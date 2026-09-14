@@ -194,6 +194,10 @@ test-cve:
 test-bundle:
 	./scripts/lib/test-bundle-image-update.sh
 
+.PHONY: test-version-labels
+test-version-labels:
+	./scripts/lib/test-version-labels.sh
+
 test-drift:
 	./scripts/lib/test-tracker-drift.sh
 
@@ -209,7 +213,7 @@ test-parallel:
 test-parse-ec-log:
 	./scripts/lib/test-parse-ec-log.sh
 
-test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel test-parse-ec-log
+test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel test-parse-ec-log
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

@@ -24,7 +24,7 @@ source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
 
 # ━━━ CONSTANTS ━━━
 
-readonly SUBMARINER_BASE="$HOME/go/src/submariner-io"
+readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
 
 # Repo → Dockerfiles mapping (space-separated within value)
 declare -A REPO_DOCKERFILES=(
@@ -121,6 +121,25 @@ parse_arguments() {
 
 # ━━━ UPDATE LOGIC ━━━
 
+restore_original_ref() {
+  local original_ref="$1" worktree_status
+  if ! worktree_status=$(git status --porcelain --untracked-files=all); then
+    echo "  ✗ Cannot inspect worktree; not restoring $original_ref" >&2
+    return 1
+  fi
+  # Never carry a partial update onto another branch, even if checkout would
+  # allow it. Keep the work available for recovery without discarding or stashing it.
+  if [ -n "$worktree_status" ]; then
+    echo "  ✗ Not restoring $original_ref: uncommitted changes remain in $(pwd)" >&2
+    echo "    Review and commit or stash them before switching branches." >&2
+    return 1
+  fi
+  if ! git checkout --quiet "$original_ref"; then
+    echo "  ✗ Failed to restore $original_ref; check the repository before retrying" >&2
+    return 1
+  fi
+}
+
 update_repo() {
   local REPO="$1"
   local REPO_PATH="$SUBMARINER_BASE/$REPO"
@@ -180,18 +199,19 @@ update_repo() {
     if [ ! -f "$FILE" ]; then
       echo "  ✗ File not found: $FILE"
       REPOS_FAILED+=("$REPO:file-not-found")
+      restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
       echo ""
       return
     fi
 
-    sed -i 's/version="v[0-9.]*"/version="v'"$VERSION"'"/' "$FILE"
-
-    if grep -q "version=\"v${VERSION}\"" "$FILE"; then
+    if sed -i 's/version="v[0-9.]*"/version="v'"$VERSION"'"/' "$FILE" &&
+       grep -q "version=\"v${VERSION}\"" "$FILE"; then
       echo "  ✓ $FILE"
       FILES_UPDATED=$((FILES_UPDATED + 1))
     else
       echo "  ✗ Failed to update $FILE"
       REPOS_FAILED+=("$REPO:sed-failed")
+      restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
       echo ""
       return
     fi
@@ -199,13 +219,12 @@ update_repo() {
 
   # Bundle special case (submariner-operator only)
   if [ "$REPO" = "submariner-operator" ] && [ -f "bundle.Dockerfile.konflux" ]; then
-    sed -i \
+    if sed -i \
       -e 's/^LABEL csv-version="[0-9.]*"/LABEL csv-version="'"$VERSION"'"/' \
       -e 's/^LABEL release="v[0-9.]*"/LABEL release="v'"$VERSION"'"/' \
       -e 's/^LABEL version="v[0-9.]*"/LABEL version="v'"$VERSION"'"/' \
-      bundle.Dockerfile.konflux
-
-    if grep -q "csv-version=\"${VERSION}\"" bundle.Dockerfile.konflux && \
+      bundle.Dockerfile.konflux &&
+       grep -q "csv-version=\"${VERSION}\"" bundle.Dockerfile.konflux && \
        grep -q "release=\"v${VERSION}\"" bundle.Dockerfile.konflux && \
        grep -q "version=\"v${VERSION}\"" bundle.Dockerfile.konflux; then
       echo "  ✓ bundle.Dockerfile.konflux (3 labels)"
@@ -213,6 +232,7 @@ update_repo() {
     else
       echo "  ✗ Failed to update bundle.Dockerfile.konflux"
       REPOS_FAILED+=("$REPO:bundle-sed-failed")
+      restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
       echo ""
       return
     fi
@@ -221,7 +241,11 @@ update_repo() {
   # Check if anything actually changed
   if git diff --quiet; then
     echo "  - Already at v$VERSION"
-    git checkout "$ORIGINAL_REF" 2>/dev/null || true
+    if ! restore_original_ref "$ORIGINAL_REF"; then
+      REPOS_FAILED+=("$REPO:restore-failed")
+      echo ""
+      return
+    fi
     git branch -D "$FIX_BRANCH" 2>/dev/null || true
     REPOS_SKIPPED+=("$REPO:no-changes")
     echo ""
@@ -238,10 +262,15 @@ Enables correct Konflux image tagging via {{ labels.version }}." >/dev/null 2>&1
   else
     echo "  ✗ Commit failed"
     REPOS_FAILED+=("$REPO:commit-failed")
+    restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
+    echo ""
+    return
   fi
 
   # Restore original branch so later steps don't find the repo on a stray branch.
-  git checkout "$ORIGINAL_REF" 2>/dev/null || true
+  if ! restore_original_ref "$ORIGINAL_REF"; then
+    REPOS_FAILED+=("$REPO:restore-failed")
+  fi
 
   echo ""
 }
@@ -365,4 +394,6 @@ main() {
   fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
