@@ -89,13 +89,19 @@ repo_base_branch() {
 # The checkout is forced: a patcher that fails mid-edit leaves .tekton/ dirty, and
 # a plain `git checkout` would refuse ("local changes would be overwritten") and be
 # swallowed by `|| true`, stranding us on the fix branch — the very misroute above.
-# The dirty-tree guard in update_repo means the only uncommitted changes reachable
-# here are our own partial patcher edits, so discarding them with -f is safe.
+# Any pre-existing dirty state is auto-stashed before we start, so the only
+# uncommitted changes reachable here are our own partial patcher edits.
 _restore_repo() {
-  local original_ref="$1" drop_branch="${2:-}"
+  local original_ref="$1" drop_branch="${2:-}" stash_ref="${3:-}"
   git checkout -f "$original_ref" >/dev/null 2>&1 || true
   if [ -n "$drop_branch" ]; then
     git branch -D "$drop_branch" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$stash_ref" ]; then
+    local stash_idx
+    stash_idx=$(git stash list --format='%H %gd' 2>/dev/null \
+      | awk -v sha="$stash_ref" '$1==sha{print $2; exit}')
+    [ -n "$stash_idx" ] && git stash pop "$stash_idx" >/dev/null 2>&1 || true
   fi
 }
 
@@ -189,13 +195,15 @@ update_repo() {
     return
   }
 
-  # Refuse to touch a dirty tree: we switch branches and restore afterwards,
-  # which is unsafe with uncommitted changes (and the patcher would fail anyway).
+  # Auto-stash any dirty tracked state so the branch switch is safe.
+  # We always cut a fresh branch from origin/$BASE_BRANCH, so the working-tree
+  # state is irrelevant to the output — stashing just keeps it from blocking us.
+  local STASH_REF=""
   if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "  ✗ Working tree not clean (commit/stash first)"
-    REPOS_FAILED+=("$REPO:dirty-tree")
-    echo ""
-    return
+    if git stash push -m "tekton-task-refs auto-stash" >/dev/null 2>&1; then
+      STASH_REF=$(git rev-parse 'stash@{0}' 2>/dev/null || true)
+      echo "  ⚠ Stashed dirty working tree (will restore after)"
+    fi
   fi
 
   # Remember where the repo was so we can leave it exactly as found. On a branch
@@ -236,7 +244,7 @@ update_repo() {
   if [ ! -d .tekton ]; then
     echo "  ✗ No .tekton/ directory on $BASE_BRANCH"
     REPOS_FAILED+=("$REPO:no-tekton")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
     echo ""
     return
   fi
@@ -248,7 +256,7 @@ update_repo() {
     echo "  ✗ pipeline-patcher failed:"
     printf '%s\n' "$patcher_out" | sed 's/^/      /'
     REPOS_FAILED+=("$REPO:patcher-failed")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
     echo ""
     return
   fi
@@ -258,7 +266,7 @@ update_repo() {
   git add .tekton/
   if git diff --cached --quiet; then
     echo "  - Task refs already current"
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
     REPOS_SKIPPED+=("$REPO:no-changes")
     echo ""
     return
@@ -272,11 +280,11 @@ Enterprise Contract validation." >/dev/null 2>&1; then
     echo "  ✓ Committed"
     REPOS_UPDATED+=("$REPO#$FIX_BRANCH#$BASE_BRANCH")
     # Keep the fix branch (it holds the commit); restore the original ref.
-    _restore_repo "$ORIGINAL_REF"
+    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF"
   else
     echo "  ✗ Commit failed"
     REPOS_FAILED+=("$REPO:commit-failed")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
   fi
 
   echo ""

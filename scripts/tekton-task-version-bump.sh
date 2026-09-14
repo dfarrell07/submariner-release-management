@@ -153,14 +153,21 @@ find_available_branch() {
   done
 }
 
-# Restore repo to original ref; optionally delete a branch.
+# Restore repo to original ref; optionally delete a branch, and pop a stash.
 # Uses -f to discard any uncommitted changes left by a partial patcher run;
 # without -f, git checkout refuses when .tekton/ is dirty and the || true
 # swallows the error, leaving the repo stranded on the fix branch.
+# stash_ref is the SHA of the stash entry to pop (found via stash@{N} lookup).
 _restore_repo() {
-  local original_ref="$1" del_branch="${2:-}"
+  local original_ref="$1" del_branch="${2:-}" stash_ref="${3:-}"
   git checkout -f "$original_ref" >/dev/null 2>&1 || true
   [ -n "$del_branch" ] && git branch -D "$del_branch" >/dev/null 2>&1 || true
+  if [ -n "$stash_ref" ]; then
+    local stash_idx
+    stash_idx=$(git stash list --format='%H %gd' 2>/dev/null \
+      | awk -v sha="$stash_ref" '$1==sha{print $2; exit}')
+    [ -n "$stash_idx" ] && git stash pop "$stash_idx" >/dev/null 2>&1 || true
+  fi
 }
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
@@ -218,10 +225,15 @@ update_repo() {
 
   cd "$REPO_PATH" || { REPOS_FAILED+=("$REPO:cd-failed"); echo ""; return; }
 
+  # Auto-stash any dirty tracked state so the branch switch is safe.
+  # We always cut a fresh branch from origin/$BASE_BRANCH, so the working-tree
+  # state is irrelevant to the output — stashing just keeps it from blocking us.
+  local STASH_REF=""
   if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "  ✗ Working tree not clean (commit/stash first)" >&2
-    REPOS_FAILED+=("$REPO:dirty-tree")
-    echo ""; return
+    if git stash push -m "tekton-task-bump auto-stash" >/dev/null 2>&1; then
+      STASH_REF=$(git rev-parse 'stash@{0}' 2>/dev/null || true)
+      echo "  ⚠ Stashed dirty working tree (will restore after)"
+    fi
   fi
 
   local ORIGINAL_REF
@@ -257,7 +269,7 @@ update_repo() {
   if [ ! -d .tekton ]; then
     echo "  ✗ No .tekton/ directory on $BASE_BRANCH" >&2
     REPOS_FAILED+=("$REPO:no-tekton")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
     echo ""; return
   fi
 
@@ -313,7 +325,7 @@ update_repo() {
     echo "  ✗ pipeline-patcher failed:" >&2
     printf '%s\n' "$patcher_out" | sed 's/^/      /' >&2
     REPOS_FAILED+=("$REPO:patcher-failed")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
     echo ""; return
   fi
 
@@ -321,7 +333,7 @@ update_repo() {
   git add .tekton/
   if git diff --cached --quiet; then
     echo "  - Already current (no version or SHA changes)"
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
     REPOS_SKIPPED+=("$REPO:no-changes")
     echo ""; return
   fi
@@ -337,11 +349,11 @@ so Konflux builds pass Enterprise Contract validation."
   if git commit -s -m "$msg" >/dev/null 2>&1; then
     echo "  ✓ Committed ($FIX_BRANCH)"
     REPOS_UPDATED+=("$REPO#$FIX_BRANCH#$BASE_BRANCH")
-    _restore_repo "$ORIGINAL_REF"
+    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF"
   else
     echo "  ✗ Commit failed" >&2
     REPOS_FAILED+=("$REPO:commit-failed")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
   fi
 
   echo ""
