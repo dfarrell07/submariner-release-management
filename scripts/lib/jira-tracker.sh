@@ -732,7 +732,8 @@ create_release_tracker() {
       labels: $labels,
       description: {type:"doc",version:1,content:$paragraphs},
       additionalAttributes: {
-        components: [{id:"33720"}]
+        components: [{id:"33720"}],
+        customfield_10464: {id:"10608"}
       }
     }' > "$create_json_file"
 
@@ -776,34 +777,46 @@ create_release_tracker() {
 
     local title="${STEP_TITLES[$step_key]:-$step_key}"
 
-    local sub_desc_file
-    sub_desc_file=$(mktemp)
-    _generate_subtask_description "$step_key" "$version" > "$sub_desc_file"
-
-    # Build create command args
-    local -a create_args=(
-      --project ACM
-      --type Sub-task
-      --parent "$parent_key"
-      --summary "$title"
-      --label "release-tracking,$version_label"
-      --description-file "$sub_desc_file"
-      --json
-    )
+    local sub_desc_text sub_adf_paragraphs sub_json_file sub_assignee
+    sub_desc_text=$(_generate_subtask_description "$step_key" "$version")
+    sub_adf_paragraphs=$(printf '%s' "$sub_desc_text" | while IFS= read -r line || [ -n "$line" ]; do
+      printf '%s' "$line" | jq -Rc '{type:"paragraph",content:[{type:"text",text:.}]}'
+    done | jq -sc '.')
 
     # Assign subtasks: QE to specified engineer (or unassigned), all others to release engineer
     if [ "$step_key" = "qeValidation" ]; then
-      [ -n "$qe_assignee" ] && create_args+=(--assignee "$qe_assignee")
+      sub_assignee="${qe_assignee:-}"
     else
-      create_args+=(--assignee "@me")
+      sub_assignee="@me"
     fi
+
+    sub_json_file=$(mktemp --suffix=.json)
+    jq -n \
+      --arg projectKey "ACM" \
+      --arg type "Sub-task" \
+      --arg parent "$parent_key" \
+      --arg summary "$title" \
+      --argjson labels '["release-tracking","'"$version_label"'"]' \
+      --argjson paragraphs "$sub_adf_paragraphs" \
+      --arg assignee "$sub_assignee" \
+      '{
+        projectKey: $projectKey,
+        type: $type,
+        parentIssueId: $parent,
+        summary: $summary,
+        labels: $labels,
+        description: {type:"doc",version:1,content:$paragraphs},
+        additionalAttributes: {
+          customfield_10464: {id:"10608"}
+        }
+      } + (if $assignee != "" then {assignee: $assignee} else {} end)' > "$sub_json_file"
 
     if [ "${JIRA_TRACKER_DRY_RUN:-}" = "true" ]; then
       echo "[DRY RUN] Would create: Sub-task '$title' under $parent_key" >&2
       subtask_count=$((subtask_count + 1))
     else
       local sub_output
-      if sub_output=$(_acli jira workitem create "${create_args[@]}" </dev/null 2>/dev/null); then
+      if sub_output=$(_acli jira workitem create --from-json "$sub_json_file" --json </dev/null 2>/dev/null); then
         local sub_key
         sub_key=$(echo "$sub_output" | jq -r '.key // empty' 2>/dev/null) || sub_key=""
         echo "  ✓ $title ($sub_key)" >&2
@@ -814,7 +827,7 @@ create_release_tracker() {
       fi
     fi
 
-    rm -f "$sub_desc_file"
+    rm -f "$sub_json_file"
   done
 
   echo "" >&2
