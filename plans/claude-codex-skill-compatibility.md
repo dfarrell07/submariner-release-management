@@ -11,6 +11,25 @@ relative symlink to `skills/`, and Codex currently discovers all 18 skills. The
 remaining work is execution compatibility inside the skills and their backing
 scripts.
 
+## Current status
+
+Phases 1 and 2 are complete. The compatibility contract, shared discovery,
+portable simple delegates, caller-independent repository paths, namespaced
+Claude examples, and public invocation documentation are implemented and
+covered by offline tests. Installed-plugin execution remains in the final host
+matrix.
+
+The remaining compatibility debt is confined to three complex skills:
+
+- `add-team-member` still embeds a stateful mutation and a fixed target checkout.
+- `add-release-notes` still uses `$ARGUMENTS` and launches `claude -p` for review.
+- `konflux-ci-fix` still embeds a stateful workflow with Claude-specific input,
+  prompting, and temporary-state assumptions.
+
+`make test-skills` records ten overlapping debt entries for those three skills
+and the nested release-note reviewer. That count is a ratchet, not ten separate
+features to build.
+
 ## Scope boundaries
 
 In scope:
@@ -35,6 +54,9 @@ Out of scope:
   synchronization.
 - Renaming skills, changing their release behavior, or redesigning release
   workflows unrelated to agent portability.
+- Replacing an existing Claude workflow with a narrower Codex-compatible one.
+- Building a generic dual-agent orchestration framework, generic review engine,
+  or reusable plugin launcher.
 - Adding Codex UI metadata or changing implicit-invocation policy. Neither is
   required for compatibility, and invocation policy should not change without
   an explicit product decision.
@@ -50,26 +72,21 @@ Out of scope:
 - Claude supports plugin skills under `skills/`, namespaced
   `/release-management:skill-name` invocation,
   `$ARGUMENTS`, `allowed-tools`, `context: fork`, and plugin-relative path
-  substitution. These fields can remain for Claude.
-- `AGENTS.md` and `README.md` document Codex discovery and invocation. They are
-  a temporary compatibility aid, not a substitute for portable skill bodies.
+  substitution. Supported optional frontmatter can remain, but shared skill
+  execution must not depend on Claude's `$ARGUMENTS` substitution.
+- `AGENTS.md` and `README.md` document Codex discovery and invocation. The
+  legacy `$ARGUMENTS` paragraph in `AGENTS.md` is temporary; the discovery and
+  safety guidance remains useful.
 - The deterministic release implementations already live primarily under
   `scripts/`, which is the right shared boundary.
 
 ## Audit findings
 
-### 1. Claude argument substitution appears in executable instructions
+### 1. Three complex skills still use Claude argument substitution
 
-Seventeen skills contain `$ARGUMENTS`. Claude replaces it before loading the
-skill; Codex does not. In 16 skills it is used directly in shell or input
-parsing, so Codex would otherwise execute an unset variable, drop arguments, or
-reconstruct a command ad hoc. `learn-release` uses it only to select content,
-but still presents an unresolved token to Codex.
-
-`autorelease` no longer uses `$ARGUMENTS`, but its `RELEASE_ARGS` shell-array
-example still requires the agent to synthesize state before running the shown
-block. It should use the same direct, host-neutral input contract as the other
-skills.
+`add-team-member`, `add-release-notes`, and `konflux-ci-fix` still contain
+`$ARGUMENTS`. Claude replaces it before loading the skill; Codex does not. The
+other 15 skills now use explicit named inputs and direct argument forwarding.
 
 The shared contract should be prose, not another magic variable:
 
@@ -83,14 +100,15 @@ Claude can continue to accept `/release-management:skill-name ...`; Codex can ac
 `$release-management:skill-name ...`. The agent reads the same inputs from the
 user request, so no shared executable block needs `$ARGUMENTS`.
 
-### 2. Script lookup assumes the current checkout
+### 2. Release-management script lookup is fixed
 
-Most thin skills use `git rev-parse --show-toplevel`. That works when Codex is
-started in this repository, but an installed Claude plugin may run while the
-working directory is another repository. `release-ls` is worse: it hard-codes
-`~/konflux/submariner-release-management`.
+The simple skills and repository-owned delegates now resolve the installed
+plugin or source checkout independently of the caller's working directory.
+Offline tests cover the delegates that own release-management data. Do not
+reopen this design unless a host acceptance test demonstrates a remaining
+failure.
 
-Use this shared resolution rule in skill instructions:
+Keep this shared resolution rule in skill instructions:
 
 1. When the host provides the installed plugin root, use it.
 2. Otherwise locate the repository root containing both the selected skill and
@@ -105,9 +123,10 @@ the agent instruction; do not put the Claude substitution in a shell block
 intended for both agents, and do not add a launcher whose own location would
 need another host-specific resolver.
 
-Paths to external working repositories, such as `konflux-release-data`, are
-runtime inputs and should be resolved or accepted by their backing scripts, not
-confused with the release-management plugin root.
+The fixed `~/konflux/konflux-release-data` path inside `add-team-member` is
+different: it is a target working repository, not the plugin root. Its backing
+script should preserve that location as the default while accepting an explicit
+or environment-provided target for testability and non-default checkouts.
 
 ### 3. Two skills embed long, stateful shell workflows
 
@@ -149,10 +168,11 @@ when it supports safe isolated workers, but parallelism is optional and cannot
 alter the review contract. Apply decisions serially in manifest order so file
 updates and commits cannot race.
 
-### 5. Agent-specific syntax is presented as if universal
+### 5. Agent-specific syntax remains only in unfinished skills
 
-Most usage examples show only Claude's bare `/skill-name` syntax. Plugin
-examples should show one compact namespaced pair when direct invocation matters:
+Public documentation and completed skills now use namespaced Claude examples.
+When the three remaining skills are rewritten, give each one compact pair when
+direct invocation matters:
 
 ```text
 Claude: /release-management:skill-name <inputs>
@@ -161,81 +181,48 @@ Codex:  $release-management:skill-name <inputs>
 
 Use the name displayed by the client if it omits the plugin prefix. Do not
 duplicate every example in both syntaxes; examples after the first pair can
-show only the argument tail or the backing `make` command.
+show only the argument tail or the backing command.
 
 ## Target design
 
-Every skill should fit one of four small patterns:
+Every skill should fit one of five small patterns:
 
 - **Thin script delegate:** `add-fbc-ocp-version`, `bundle-image-update`,
   `configure-downstream`, `create-component-release`, `create-fbc-release`,
   `create-release-tracker`, `fbc-update`, `get-fbc-urls`,
   `konflux-bundle-setup`, `konflux-component-setup`, `release-ls`,
-  `rpm-lockfile-update`, and `update-version-labels`. Keep only inputs, safety
-  boundaries, root resolution, and one backing-script call.
+  `rpm-lockfile-update`, `update-version-labels`, and, after Phase 3,
+  `add-team-member`. Keep only inputs, safety boundaries, root resolution, and
+  one backing-script call.
 - **Release conductor:** `autorelease`. Use the same delegate contract plus its
   existing external-write authorization and stop rules.
 - **Host-agent review:** `add-release-notes`. Use deterministic prepare/apply
   scripts with judgment performed by the active host agent.
-- **Knowledge/orchestration:** `learn-release`, `add-team-member`, and
-  `konflux-ci-fix`. Keep portable routing in the skill and deterministic
-  mutations in scripts.
+- **Diagnostic orchestrator:** `konflux-ci-fix`. Preserve its current target
+  selection and diagnosis behavior while scripts own deterministic inspection
+  and mutation.
+- **Knowledge:** `learn-release`. Keep portable routing to the existing workflow
+  references.
 
 No skill should require an agent to paste and execute a large shell program.
 No backing script should select a model vendor.
 
 ## Implementation plan
 
-### Phase 1: Add a compatibility contract test
+### Phase 1: Add a compatibility contract test — complete
 
-Create `scripts/lib/test-skills-compatibility.sh`, wire it as
-`make test-skills`, and include it in `make test`.
+`scripts/lib/test-skills-compatibility.sh` now checks shared discovery,
+frontmatter, referenced scripts, delegate mappings, Claude/Codex invocation
+examples, and exact compatibility-debt sets. It allows supported Claude
+frontmatter extensions. Implemented by `87d8def`.
 
-The static test should verify:
+### Phase 2: Normalize the simple skills — complete
 
-- `.agents/skills` is the expected relative symlink and resolves to `skills/`.
-- Both paths expose the same 18 skill directories.
-- Every directory has parseable YAML frontmatter with matching `name`, a
-  non-empty `description`, and no duplicate name.
-- Every local script explicitly referenced by a skill exists.
-- Shared executable instructions do not contain `$ARGUMENTS`,
-  `AskUserQuestion`, a fixed release-management checkout path, or a direct
-  model-CLI invocation such as `claude -p` or `codex exec`. Invocation examples
-  are documentation and remain allowed.
-- Shared skill workflows do not use terminal prompts or fixed shared temporary
-  state that depends on one persistent shell session.
-- Usage sections do not present slash-only invocation as universal.
-
-Do not reject valid Claude extension fields. The test protects the shared
-subset while allowing `argument-hint`, `allowed-tools`, `user-invocable`, and
-`context: fork` to remain.
-
-Because this test lands before the known violations are removed, encode the
-current violations as an exact compatibility-debt ratchet. New violations fail
-the test. Each later phase removes the entries it fixes, and all debt sets must
-be empty before this plan is complete. Do not add broad exclusions or keep
-resolved entries merely to make the test pass.
-
-### Phase 2: Normalize the simple skills
-
-Update the 13 thin delegates, `autorelease`, and `learn-release`:
-
-- Replace `$ARGUMENTS` and `RELEASE_ARGS` executable examples with explicit
-  named-input instructions and direct argument forwarding.
-- Apply the shared script-root resolution rule and remove the hard-coded
-  `release-ls` path.
-- Add one Claude/Codex invocation pair per skill where useful.
-- Preserve existing required arguments, defaults implemented by scripts,
-  prerequisites, mutation warnings, and Claude frontmatter.
-- Keep descriptions unless a demonstrated discovery ambiguity requires a
-  narrow correction; description rewriting is not part of this effort.
-
-Extend the static compatibility contract with the exact skill-to-script mapping
-and both invocation forms. Skill bodies are declarative prose, so executable
-stub tests cannot exercise their argument handoff without launching a host
-agent. Verify exact runtime `argv`, including an omitted optional value, spaces,
-and shell metacharacters, in the cross-agent acceptance matrix; no test may use
-`eval`.
+The 13 thin delegates, `autorelease`, and `learn-release` now use named inputs,
+direct argument forwarding, shared root resolution, and compact Claude/Codex
+invocation pairs while preserving their interfaces and safety boundaries.
+Implemented by `19f691f`, with namespace, plugin-root, argument-documentation,
+and public-guide corrections in `cd5b00c`, `abf2fb9`, `8cf8f05`, and `472ce1c`.
 
 ### Phase 3: Extract `add-team-member`
 
@@ -245,10 +232,12 @@ delegation.
 
 The script should:
 
-- Accept username, optional role, and an optional or environment-provided
-  `konflux-release-data` path.
-- Preserve contributor as the least-privilege default and all current input
-  validation.
+- Preserve the existing user interface: username plus optional role, including
+  the contributor default and accepted singular/plural role names.
+- Resolve the target as
+  `${KONFLUX_RELEASE_DATA:-$HOME/konflux/konflux-release-data}` so tests and
+  non-default checkouts can override it without expanding the skill interface.
+- Preserve all current input validation.
 - Refuse a dirty target worktree, preserve alphabetical RBAC output, rebuild
   manifests, and create the same signed commit.
 - Never push or publish a message.
@@ -262,6 +251,8 @@ dirty worktrees, missing structure, generated output, and commit contents.
 Refactor `review.sh` and `review-issue.sh` around the prepare/decision/apply
 contract described above. Retain `review-prompt.md` as the common review
 criteria, but remove the `claude -p` invocation and model flags from scripts.
+Preserve the current `add-release-notes <version> [--stage-yaml PATH]` interface
+and Phases 1-4; only the per-issue review boundary changes.
 
 Update `add-release-notes/SKILL.md` to:
 
@@ -278,33 +269,48 @@ independently reversible.
 
 Extend `scripts/release-notes/test-workflow.sh` with stubbed Jira/GitHub data.
 Test prepare output, CVE exclusion, valid KEEP and REMOVE decisions, issue-key
-mismatch, malformed verdicts, missing decisions, command-like reason text,
-partial interruption and resume, and concurrent run-directory isolation.
+mismatch, malformed or missing decisions, partial interruption and resume, and
+concurrent run-directory isolation.
 
-### Phase 5: Finish the `konflux-ci-fix` conversion
+Do not introduce a generic review framework or a host-specific subagent API.
 
-Do not create a second CI-fix implementation. Complete the thin-skill rewrite
-already described in `plans/ec-fix-autorelease-integration.md`, using the
-existing `tekton-task-version-bump.sh`, `parse-ec-log.sh`, and their tests as
-the deterministic path.
+### Phase 5: Make `konflux-ci-fix` host-neutral without narrowing it
+
+Preserve the current Claude-facing contract: current-repository use, branch and
+PR targets, repository shortcuts, explicit paths, and order-independent
+arguments. The existing `tekton-task-version-bump.sh` is the autorelease
+remediation path for stale task versions; it is not a replacement for the
+broader `konflux-ci-fix` diagnosis workflow.
+
+Extract the existing deterministic target resolution, evidence collection,
+log parsing, task remediation, branch handling, and cleanup into
+`scripts/konflux-ci-fix.sh`. Reuse `tekton-task-version-bump.sh`,
+`parse-ec-log.sh`, and shared Git helpers where their contracts fit; do not
+duplicate them or force unrelated CI failures through the task-bump path.
 
 Compatibility-specific requirements are:
 
-- Replace `$ARGUMENTS` parsing with named user inputs passed as separate script
-  arguments.
+- Keep the existing optional, order-independent inputs and pass them as separate
+  script arguments. Add an explicit log-path resume option only if the extracted
+  workflow needs it; do not remove an existing invocation form.
 - Replace `AskUserQuestion` and terminal `read -p` with a host-neutral
-  instruction to report the exact manual action and wait for the user's next
-  message.
-- Replace fixed `/tmp/konflux-*` files with a unique run directory when any
-  residual state is necessary.
+  stop result that reports the exact manual action and resume command.
+- Preserve the existing decision gate before creating a fix branch. Resume the
+  deterministic mutation only through an explicit action after the user chooses
+  to proceed.
+- Use a unique per-run directory for resumable evidence; print its path and
+  validate it on resume. Do not use fixed `/tmp/konflux-*` files.
 - Keep `context: fork` for Claude if useful, but ensure the flow also works
   inline in Codex and after conversation compaction.
 - Keep mutation, retry, and stop boundaries unchanged.
-- Reduce `SKILL.md` to orchestration and links to only the relevant workflow
-  reference; do not migrate unrelated EC behavior as part of compatibility.
+- Reduce `SKILL.md` to inputs, script delegation, interpretation of structured
+  stop results, and links to only the relevant workflow reference.
 
-Add focused tests for input routing, missing prerequisites, no-fix/manual-log
-stop, resumable log parsing, successful deterministic fix, and no push.
+Add focused tests for every existing target form, missing prerequisites,
+no-fix/manual-log stop, validated resume, successful deterministic fix, cleanup,
+and no push. Use `plans/ec-fix-autorelease-integration.md` only as a reference
+for the already-implemented task-bump helpers, not as the behavior contract for
+this skill.
 
 ### Phase 6: Cross-agent acceptance and documentation cleanup
 
@@ -312,32 +318,30 @@ Run the validation ladder below. After it passes, remove the legacy
 `$ARGUMENTS` workaround paragraph from `AGENTS.md`; retain the general rule to
 pass user inputs unchanged and never invent required release values.
 
-Update `README.md` and `.claude/SKILLS.md` only where their invocation or
-release-note reviewer wording is stale. Do not add another compatibility guide;
-this plan and the skill bodies are sufficient.
+Namespaced invocations in `README.md` and `.claude/SKILLS.md` are already fixed.
+Update them again only if Phases 3-5 change a documented argument or release-note
+review instruction. Do not add another compatibility guide; this plan and the
+skill bodies are sufficient.
 
 ## Validation ladder: small to large
 
 Run each level before proceeding to the next so failures identify the smallest
-broken contract.
+broken contract. Run the focused levels during each phase. Run the full suite
+once after the phase is complete; the commit hook provides the independent full
+rerun, so do not add redundant full-suite repetitions.
 
 1. **Single-skill syntax:** parse frontmatter and verify referenced files for
    each changed skill.
 2. **Repository discovery:** run `make test-skills`; compare `skills/` and
    `.agents/skills/` inventories.
-3. **Argument transport:** invoke stub backing scripts with exact argument
-   vectors, including spaces and metacharacters, from the repository root and a
-   nested directory.
-4. **Focused deterministic tests:** run the test target for each changed script
-   (`add-team-member`, release notes, EC fix, and existing delegate tests).
-5. **Read-only skill smoke tests:** invoke `learn-release` and `release-ls`
-   through both hosts against fixtures or stubbed commands. Confirm the same
-   inputs and materially equivalent outcome.
-6. **Mutating dry-run/disposable tests:** invoke delegate and orchestration
-   skills in temporary repositories with network and push commands stubbed.
-   Confirm authorization stops, commits, resume behavior, and exact argv.
-7. **Full local suite:** run `make test` with no live credentials required.
-8. **Manual host matrix:** in a disposable checkout, invoke every skill once
+3. **Focused deterministic tests:** run the phase's test target in disposable
+   repositories with network, push, and cluster commands stubbed. Verify input
+   routing, commits, fail-safe behavior, resume behavior, and stop boundaries.
+4. **Path and argument transport:** invoke changed delegates from the repository
+   root and an unrelated directory. Verify exact argument vectors, including an
+   omitted optional value, spaces, and shell metacharacters; never use `eval`.
+5. **Full local suite:** run `make test` with no live credentials required.
+6. **Manual host matrix:** in a disposable checkout, invoke every skill once
    from Claude and Codex. Use help, dry-run, fixtures, or a stubbed backing
    script for mutating skills. Also test Claude from an installed plugin while
    the current directory is a different repository, and Codex from both the
@@ -361,6 +365,8 @@ write Jira, or publish messages.
   Codex execution works from the root and nested directories.
 - Existing authorization, gate, review, no-push, and no-apply boundaries are
   preserved.
+- No existing Claude invocation form or supported workflow is removed merely to
+  simplify Codex support.
 - Focused tests and `make test` pass, followed by the non-mutating manual
   cross-agent matrix.
 
@@ -368,8 +374,8 @@ write Jira, or publish messages.
 
 Keep review and rollback simple with one concern per commit:
 
-1. `tests: define shared skill compatibility contract`
-2. `skills: make simple delegates portable across Claude and Codex`
+1. `tests: define shared skill compatibility contract` — complete
+2. `skills: make simple delegates portable across Claude and Codex` — complete
 3. `skills: move team-member updates into a tested script`
 4. `release-notes: use the active host agent for issue review`
 5. `konflux-ci-fix: make orchestration host-neutral`
