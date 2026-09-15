@@ -229,9 +229,12 @@ Update the 13 thin delegates, `autorelease`, and `learn-release`:
 - Keep descriptions unless a demonstrated discovery ambiguity requires a
   narrow correction; description rewriting is not part of this effort.
 
-Test each backing-script handoff with a stub executable and argument vectors
-that include an omitted optional value, spaces, and shell metacharacters. The
-stub must receive the exact expected `argv`; no test may use `eval`.
+Extend the static compatibility contract with the exact skill-to-script mapping
+and both invocation forms. Skill bodies are declarative prose, so executable
+stub tests cannot exercise their argument handoff without launching a host
+agent. Verify exact runtime `argv`, including an omitted optional value, spaces,
+and shell metacharacters, in the cross-agent acceptance matrix; no test may use
+`eval`.
 
 ### Phase 3: Extract `add-team-member`
 

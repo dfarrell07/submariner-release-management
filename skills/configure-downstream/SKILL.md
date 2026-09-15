@@ -11,12 +11,14 @@ allowed-tools: Bash, Read, Glob
 
 Configures Konflux CI/CD for a new Submariner minor version (Y-stream releases).
 
-**Usage:**
+**Invocation:**
 
-```bash
-/configure-downstream 0.23
-/configure-downstream 0.23.0  # Extracts major.minor automatically
+```text
+Claude: /configure-downstream 0.23
+Codex:  $release-management:configure-downstream 0.23
 ```
+
+`0.23.0` is also accepted and is reduced to its major/minor version.
 
 **What it does:**
 
@@ -29,28 +31,15 @@ Configures Konflux CI/CD for a new Submariner minor version (Y-stream releases).
 - Verifies all changes before committing
 - Outputs push command and MR instructions
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The new Submariner version is required. Use exactly the value supplied by the
+user; do not infer a release version.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/configure-downstream.sh`. Verify the script exists and is executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ ERROR: Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/configure-downstream.sh" ]; then
-  echo "❌ ERROR: Required orchestrator script not found"
-  echo "This skill requires: scripts/configure-downstream.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/configure-downstream.sh" $ARGUMENTS
-```
+Run `scripts/configure-downstream.sh` with the supplied version as one argument.
+Do not combine arguments into a shell string or use `eval`.

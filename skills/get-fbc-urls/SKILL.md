@@ -13,39 +13,34 @@ Gets FBC catalog URLs for sharing with QE. Default mode extracts quay.io catalog
 on the cluster, falling back to snapshot lookup from local YAML files if Release CRs are garbage-collected.
 Prod-index mode checks the Red Hat operator index at registry.redhat.io.
 
-```bash
-/get-fbc-urls 0.24.0                    # All OCP versions, full output
-/get-fbc-urls 0.24.0 --ocp 4.21         # Single OCP version
-/get-fbc-urls 0.24.0 --raw-url          # URLs only (for automation)
-/get-fbc-urls 0.24.0 --prod-index       # Check prod operator index
-/get-fbc-urls 0.24.0 --prod-index --raw-url  # Prod index URLs only
+```text
+Claude: /get-fbc-urls 0.24.0
+Codex:  $release-management:get-fbc-urls 0.24.0
+```
+
+Additional argument forms:
+
+```text
+0.24.0 --ocp 4.21                   # Single OCP version
+0.24.0 --raw-url                    # URLs only
+0.24.0 --prod-index                 # Check prod operator index
+0.24.0 --prod-index --raw-url       # Prod index URLs only
 make get-fbc-urls VERSION=0.24.0        # Via make target
 make get-fbc-urls VERSION=0.24.0 PROD_INDEX=true
 ```
 
 **Requirements:** `oc login` (default mode), `skopeo` (prod-index mode)
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The version is required. Optional arguments are `--ocp <version>`, `--raw-url`,
+and `--prod-index`. Preserve the user's argument order and do not infer a
+release or OCP version.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/get-fbc-urls.sh`. Verify the script exists and is executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/get-fbc-urls.sh" ]; then
-  echo "❌ Orchestrator script not found: scripts/get-fbc-urls.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/get-fbc-urls.sh" $ARGUMENTS
-```
+Run `scripts/get-fbc-urls.sh`, passing each supplied value as a separate
+argument. Do not combine arguments into a shell string or use `eval`.

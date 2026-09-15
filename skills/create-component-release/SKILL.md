@@ -18,14 +18,15 @@ Automates Step 8 (stage) and Step 15 (prod) of the Submariner release workflow.
 - Validates YAML with make test-remote
 - Automatically commits with descriptive message
 
-**Usage:**
+**Invocation:**
 
-```bash
-/create-component-release 0.22.1          # Stage (default)
-/create-component-release 0.22.1 stage    # Stage (explicit)
-/create-component-release 0.22.1 prod     # Prod (copies stage notes)
-/create-component-release 0.22            # Auto-expands to 0.22.0
+```text
+Claude: /create-component-release 0.22.1 stage
+Codex:  $release-management:create-component-release 0.22.1 stage
 ```
+
+The environment defaults to `stage` when omitted. `prod` copies the stage
+notes, and a two-segment version such as `0.22` expands to `0.22.0`.
 
 **Prerequisites:**
 
@@ -33,28 +34,18 @@ Automates Step 8 (stage) and Step 15 (prod) of the Submariner release workflow.
 - **For stage:** Step 7 complete (bundle SHAs updated)
 - **For prod:** Stage YAML exists with release notes (Steps 8-9 complete)
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The version is required; the optional environment is `stage` or `prod`. Use
+exactly the values supplied by the user and let the backing script apply the
+documented stage default and version normalization.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/create-component-release.sh`. Verify the script exists and is
+executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ ERROR: Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/create-component-release.sh" ]; then
-  echo "❌ ERROR: Required orchestrator script not found"
-  echo "This skill requires: scripts/create-component-release.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/create-component-release.sh" $ARGUMENTS
-```
+Run `scripts/create-component-release.sh`, passing the version and any supplied
+environment as separate arguments in that order. Do not combine arguments into
+a shell string or use `eval`.

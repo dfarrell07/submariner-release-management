@@ -22,40 +22,36 @@ Automate the setup of Konflux CI/CD builds on new release branches for Submarine
 | shipyard            | nettest                                                          |
 | subctl              | subctl                                                           |
 
-**Usage:**
+**Invocation:**
 
-```bash
-/konflux-component-setup operator 0.23
-/konflux-component-setup submariner submariner-gateway 0.23
-/konflux-component-setup lighthouse lighthouse-agent 0.23
-/konflux-component-setup                   # Auto-detect from branch
+```text
+Claude: /konflux-component-setup operator 0.23
+Codex:  $release-management:konflux-component-setup operator 0.23
+```
+
+Additional argument forms:
+
+```text
+submariner submariner-gateway 0.23
+lighthouse lighthouse-agent 0.23
+(none)                                      # Auto-detect from branch
 make konflux-component-setup REPO=operator VERSION=0.23
 ```
 
 **Shortcuts:** operator, submariner, lighthouse, shipyard, subctl
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The repository shortcut, component, and version are optional and
+order-independent. Preserve exactly the values and order supplied by the user;
+otherwise run without arguments and allow the script's documented detection.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/konflux-component-setup.sh`. Verify the script exists and is
+executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ ERROR: Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/konflux-component-setup.sh" ]; then
-  echo "❌ ERROR: Required orchestrator script not found"
-  echo "This skill requires: scripts/konflux-component-setup.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/konflux-component-setup.sh" $ARGUMENTS
-```
+Run `scripts/konflux-component-setup.sh`, passing each supplied value as a
+separate argument, or no arguments for auto-detection. Do not combine arguments
+into a shell string or use `eval`.

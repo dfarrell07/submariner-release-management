@@ -12,11 +12,19 @@ allowed-tools: Bash
 Regenerates RPM lockfiles in submariner and shipyard repositories by creating fix branches, running hermetic builds,
 and committing updated lockfiles.
 
-```bash
-/rpm-lockfile-update                             # Auto-detect branch, all repos
-/rpm-lockfile-update 0.21                        # Explicit branch, all repos
-/rpm-lockfile-update gateway                     # Auto-detect branch, gateway only
-/rpm-lockfile-update 0.21 submariner             # Explicit branch, repo filter
+## Invocation
+
+```text
+Claude: /rpm-lockfile-update 0.21 submariner
+Codex:  $release-management:rpm-lockfile-update 0.21 submariner
+```
+
+Additional argument forms:
+
+```text
+(none)                                      # Auto-detect branch, all repos
+0.21                                        # Explicit branch, all repos
+gateway                                     # Auto-detect branch, gateway only
 make rpm-lockfile-update                         # Auto-detect branch
 make rpm-lockfile-update COMPONENT=gateway       # Auto-detect, component filter
 make rpm-lockfile-update BRANCH=0.21 COMPONENT=gateway  # Explicit branch
@@ -26,27 +34,17 @@ make rpm-lockfile-update BRANCH=0.21 COMPONENT=gateway  # Explicit branch
 
 **Requirements:** Red Hat entitlements, `podman login registry.redhat.io`, `gh auth login`, Bash 4.0+
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The branch and repository/component filter are optional. Preserve exactly the
+values and order supplied by the user; otherwise let the script perform its
+documented branch and repository detection.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/rpm-lockfile-update.sh`. Verify the script exists and is executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/rpm-lockfile-update.sh" ]; then
-  echo "❌ Orchestrator script not found: scripts/rpm-lockfile-update.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/rpm-lockfile-update.sh" $ARGUMENTS
-```
+Run `scripts/rpm-lockfile-update.sh`, passing each supplied value as a separate
+argument, or no arguments for full auto-detection. Do not combine arguments into
+a shell string or use `eval`.

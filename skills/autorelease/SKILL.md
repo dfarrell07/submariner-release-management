@@ -16,19 +16,21 @@ advance after a review, gate, or manual action is complete.
 Uses a Jira release tracker. A normal run creates one if missing; `--dry-run`
 can preview without creating a tracker.
 
-**Usage:**
+**Invocation:**
 
 ```text
-$release-management:autorelease 0.25.1     # Codex invocation (use the displayed skill name)
-/autorelease 0.25.1                        # Claude invocation
-/autorelease 0.25                          # Auto-detect the target patch version
-/autorelease 0.25.1 --dry-run              # Preview without running/writing
-/autorelease 0.25.1 --complete cveFixes     # Mark a step complete
-/autorelease 0.25.1 --refresh bundleShas    # Reset a step to run again
-/autorelease 0.25.1 --close                # After the release has shipped
+Claude: /autorelease 0.25.1
+Codex:  $release-management:autorelease 0.25.1
+```
 
-# Optional arguments are shared by all invocation styles:
-# --dry-run, --complete STEP, --refresh STEP, and --close
+Additional argument forms:
+
+```text
+0.25                             # Auto-detect the target patch version
+0.25.1 --dry-run                 # Preview without running or writing
+0.25.1 --complete cveFixes       # Mark a step complete
+0.25.1 --refresh bundleShas      # Reset a step to run again
+0.25.1 --close                   # After the release has shipped
 ```
 
 **Requires:** `acli jira auth login --web`, `jq`, `gh`, `oc` (logged in for verifier steps), `skopeo` (for auto-close registry probes)
@@ -42,25 +44,14 @@ explicit authorization for those external actions. Without it, offer `--dry-run`
 and stop; do not assume that stopping at review prevents external writes.
 Other mutating flags must likewise be explicitly requested.
 
----
+## Execution
 
-```bash
-#!/bin/bash
-set -euo pipefail
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "ERROR: Not in a git repository" >&2
-  exit 1
-fi
-if [ ! -x "$GIT_ROOT/scripts/autorelease.sh" ]; then
-  echo "ERROR: Required script not found" >&2
-  echo "This skill requires: scripts/autorelease.sh" >&2
-  exit 1
-fi
-# In this call, bind RELEASE_ARGS to the user's individually quoted arguments.
-# Example only, when the user actually requested that version and preview:
-# RELEASE_ARGS=("0.25.1" "--dry-run")
-declare -p RELEASE_ARGS >/dev/null 2>&1 || { echo "ERROR: Bind release arguments first" >&2; exit 1; }
-[[ ${#RELEASE_ARGS[@]} -gt 0 ]] || { echo "ERROR: Release arguments required" >&2; exit 1; }
-exec "$GIT_ROOT/scripts/autorelease.sh" "${RELEASE_ARGS[@]}"
-```
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/autorelease.sh`. Verify the script exists and is executable.
+
+Run `scripts/autorelease.sh`, passing the release version and every supplied
+flag or flag value as separate arguments in the user's original order. Do not
+combine arguments into a shell string, use `eval`, or assume shell variables
+persist across tool calls.

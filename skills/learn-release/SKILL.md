@@ -9,9 +9,13 @@ allowed-tools: Read, Grep, Glob
 
 # Learn Submariner Release Process
 
-Teach users about the Submariner release process. Use $ARGUMENTS to determine what to explain.
+Teach users about the Submariner release process. Determine the requested mode
+from the user's invocation or message.
 
-$ARGUMENTS
+```text
+Claude: /learn-release overview
+Codex:  $release-management:learn-release overview
+```
 
 ---
 
@@ -151,7 +155,7 @@ Each step's workflow is in `.agents/workflows/<step-name>.md`. When it says "fol
 
 | Repo | Local | Docs | Purpose |
 | ---- | ----- | ---- | ------- |
-| [This repo](https://github.com/stolostron/submariner-release-management) | `~/konflux/submariner-release-management` | `.agents/workflows/` (main) | Release orchestration |
+| [This repo](https://github.com/stolostron/submariner-release-management) | release-management root | `.agents/workflows/` (main) | Release orchestration |
 | [submariner-io/releases](https://github.com/submariner-io/releases) | `~/go/src/submariner-io/releases` | `README.md` (devel) | Branch creation, tags |
 | [submariner-io/submariner-operator](https://github.com/submariner-io/submariner-operator) | `~/go/src/submariner-io/submariner-operator` | `.agents/workflows/` (devel) | Operator + bundle |
 | [submariner-io/submariner](https://github.com/submariner-io/submariner) | `~/go/src/submariner-io/submariner` | `.agents/workflows/` (devel) | Gateway, globalnet, route-agent |

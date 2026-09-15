@@ -71,32 +71,41 @@ expected_skills = {
     "update-version-labels",
 }
 
+portable_delegates = {
+    "add-fbc-ocp-version": "scripts/add-fbc-ocp-version.sh",
+    "autorelease": "scripts/autorelease.sh",
+    "bundle-image-update": "scripts/bundle-image-update.sh",
+    "configure-downstream": "scripts/configure-downstream.sh",
+    "create-component-release": "scripts/create-component-release.sh",
+    "create-fbc-release": "scripts/create-fbc-releases.sh",
+    "create-release-tracker": "scripts/create-release-tracker.sh",
+    "fbc-update": "scripts/fbc-catalog-update.sh",
+    "get-fbc-urls": "scripts/get-fbc-urls.sh",
+    "konflux-bundle-setup": "scripts/konflux-bundle-setup.sh",
+    "konflux-component-setup": "scripts/konflux-component-setup.sh",
+    "release-ls": "scripts/release-status.sh",
+    "rpm-lockfile-update": "scripts/rpm-lockfile-update.sh",
+    "update-version-labels": "scripts/update-version-labels.sh",
+}
+portable_knowledge_skills = {"learn-release"}
+
 # These sets are a ratchet, not permanent exceptions. A compatibility change
 # must remove the entries it resolves. Adding an entry means adding new debt and
 # should not be done merely to make this test pass. All sets must be empty when
 # the compatibility plan is complete.
-expected_argument_debt = expected_skills - {"autorelease"}
-expected_slash_only_debt = {
-    "add-fbc-ocp-version",
+expected_argument_debt = {
+    "add-release-notes",
     "add-team-member",
-    "bundle-image-update",
-    "configure-downstream",
-    "create-component-release",
-    "create-fbc-release",
-    "create-release-tracker",
-    "fbc-update",
-    "get-fbc-urls",
-    "konflux-bundle-setup",
     "konflux-ci-fix",
-    "konflux-component-setup",
-    "release-ls",
-    "rpm-lockfile-update",
-    "update-version-labels",
+}
+expected_slash_only_debt = {
+    "add-team-member",
+    "konflux-ci-fix",
 }
 expected_host_tool_debt = {"konflux-ci-fix"}
 expected_terminal_read_debt = {"konflux-ci-fix"}
 expected_shared_tmp_debt = {"konflux-ci-fix"}
-expected_release_root_debt = {"learn-release", "release-ls"}
+expected_release_root_debt: set[str] = set()
 expected_target_root_debt = {"add-team-member"}
 expected_model_cli_debt = {"scripts/release-notes/review-issue.sh"}
 
@@ -120,6 +129,7 @@ skill_text: dict[str, str] = {}
 frontmatter_ok = True
 references_ok = True
 reference_errors: list[str] = []
+references_by_skill: dict[str, set[str]] = {}
 
 for directory_name in canonical_names:
     skill_file = skills_root / directory_name / "SKILL.md"
@@ -154,6 +164,7 @@ for directory_name in canonical_names:
         reference_errors.append(f"skills/{directory_name}/SKILL.md: {error}")
 
     references = set(re.findall(r"\b(scripts/[A-Za-z0-9_./-]+\.(?:sh|py))", text))
+    references_by_skill[directory_name] = references
     for reference in references:
         referenced_path = root / reference
         if ".." in Path(reference).parts or not referenced_path.is_file():
@@ -165,6 +176,34 @@ check(seen_names == expected_skills, "frontmatter names are unique and match the
 check(references_ok, "all referenced local scripts exist")
 for error in reference_errors:
     print(f"    {error}")
+
+delegate_mismatches = []
+for name, expected_script in portable_delegates.items():
+    actual_scripts = references_by_skill.get(name, set())
+    if actual_scripts != {expected_script}:
+        delegate_mismatches.append(
+            f"{name}: expected only {expected_script}, found {sorted(actual_scripts)}"
+        )
+check(
+    not delegate_mismatches,
+    "portable delegates reference exactly their intended backing script",
+    "; ".join(delegate_mismatches),
+)
+
+invocation_mismatches = []
+for name in portable_delegates.keys() | portable_knowledge_skills:
+    text = skill_text.get(name, "")
+    has_claude = re.search(rf"/{re.escape(name)}(?:\s|$)", text) is not None
+    has_codex = re.search(
+        rf"\$release-management:{re.escape(name)}(?:\s|$)", text
+    ) is not None
+    if not has_claude or not has_codex:
+        invocation_mismatches.append(name)
+check(
+    not invocation_mismatches,
+    "portable skills document Claude and Codex invocation",
+    ", ".join(sorted(invocation_mismatches)),
+)
 
 print("\n=== Compatibility Debt Ratchet ===")
 actual_argument_debt = {name for name, text in skill_text.items() if "$ARGUMENTS" in text}

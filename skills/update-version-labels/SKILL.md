@@ -12,9 +12,16 @@ allowed-tools: Bash
 Updates Dockerfile `version` labels across 5 upstream repos (9 Dockerfiles) so Konflux's `{{ labels.version }}` tag
 expansion produces correct image tags. Required for Z-stream releases before cutting upstream release.
 
-```bash
-/update-version-labels 0.23.1                    # All 5 repos
-/update-version-labels 0.23.1 subctl             # Single repo
+## Invocation
+
+```text
+Claude: /update-version-labels 0.23.1 subctl
+Codex:  $release-management:update-version-labels 0.23.1 subctl
+```
+
+Omit the repository to update all five. Equivalent Make forms are:
+
+```text
 make update-version-labels VERSION=0.23.1        # All 5 repos
 make update-version-labels VERSION=0.23.1 REPO=subctl  # Single repo
 ```
@@ -23,27 +30,16 @@ make update-version-labels VERSION=0.23.1 REPO=subctl  # Single repo
 
 **Requirements:** `git`, SSH key for git fetch
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The version is required; the repository filter is optional. Use exactly the
+values supplied by the user and do not infer a release version.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/update-version-labels.sh`. Verify the script exists and is executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/update-version-labels.sh" ]; then
-  echo "❌ Orchestrator script not found: scripts/update-version-labels.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/update-version-labels.sh" $ARGUMENTS
-```
+Run `scripts/update-version-labels.sh`, passing the version and any supplied
+repository as separate arguments in that order. Do not combine arguments into a
+shell string or use `eval`.
