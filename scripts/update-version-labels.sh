@@ -122,22 +122,7 @@ parse_arguments() {
 # ━━━ UPDATE LOGIC ━━━
 
 restore_original_ref() {
-  local original_ref="$1" worktree_status
-  if ! worktree_status=$(git status --porcelain --untracked-files=all); then
-    echo "  ✗ Cannot inspect worktree; not restoring $original_ref" >&2
-    return 1
-  fi
-  # Never carry a partial update onto another branch, even if checkout would
-  # allow it. Keep the work available for recovery without discarding or stashing it.
-  if [ -n "$worktree_status" ]; then
-    echo "  ✗ Not restoring $original_ref: uncommitted changes remain in $(pwd)" >&2
-    echo "    Review and commit or stash them before switching branches." >&2
-    return 1
-  fi
-  if ! git checkout --quiet "$original_ref"; then
-    echo "  ✗ Failed to restore $original_ref; check the repository before retrying" >&2
-    return 1
-  fi
+  restore_clean_ref "$1"
 }
 
 update_repo() {

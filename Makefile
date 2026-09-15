@@ -178,6 +178,7 @@ test-tracker:
 
 test-autorelease:
 	./scripts/lib/test-autorelease.sh
+	./scripts/lib/test-auto-push.sh
 
 test-conductor:
 	./scripts/lib/test-conductor-integration.sh
@@ -198,6 +199,10 @@ test-bundle:
 test-version-labels:
 	./scripts/lib/test-version-labels.sh
 
+.PHONY: test-worktree-safety
+test-worktree-safety:
+	./scripts/lib/test-worktree-safety.sh
+
 test-drift:
 	./scripts/lib/test-tracker-drift.sh
 
@@ -213,7 +218,7 @@ test-parallel:
 test-parse-ec-log:
 	./scripts/lib/test-parse-ec-log.sh
 
-test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel test-parse-ec-log
+test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel test-parse-ec-log
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

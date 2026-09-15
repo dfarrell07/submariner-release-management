@@ -205,9 +205,9 @@ parse_arguments() {
   if ! assert_expected_branch "$BRANCH" "$VERSION_DOT" "$VERSION_DASH"; then
     echo "INFO: submariner-operator is on branch '$BRANCH', not release-$VERSION_DOT"
     echo "      Auto-checking out release-$VERSION_DOT (left by a prior release step)"
-    if ! git checkout -f "release-$VERSION_DOT" 2>/dev/null; then
+    if ! restore_clean_ref "release-$VERSION_DOT"; then
       die "Failed to checkout release-$VERSION_DOT" \
-        "Branch may not exist locally. Try:
+        "Commit or stash any local changes first. If the branch is missing, try:
   cd $OPERATOR_REPO && git fetch origin && git checkout release-$VERSION_DOT"
     fi
     BRANCH="release-$VERSION_DOT"

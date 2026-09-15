@@ -201,6 +201,40 @@ rm -f "$_stale_ctr"
 unset JIRA_TRACKER_DRY_RUN _JIRA_STALE_RETRY_DELAY
 query_jira() { echo "[]"; }
 
+# Validate real create payloads, not just dry-run descriptions. Stub only the
+# transport: no Jira work items are created. Both release types exercise the
+# new Activity Type field and the subtask --from-json conversion.
+_payloads=$(mktemp)
+(
+  _JIRA_STALE_RETRY_DELAY=0
+  acli() {
+    local payload=''
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --from-json ]; then payload="$2"; break; fi
+      shift
+    done
+    [ -n "$payload" ] || return 1
+    jq -c . "$payload" >> "$_payloads"
+    printf '{"key":"ACM-TEST"}\n'
+  }
+  create_release_tracker 0.24.0 y-stream qe@example.invalid >/dev/null 2>&1
+  create_release_tracker 0.24.1 z-stream >/dev/null 2>&1
+)
+assert_eq "create payloads: two parents and 33 subtasks" "$(jq -s length "$_payloads")" 35
+assert_eq "create payloads: Activity Type on every issue" \
+  "$(jq -s 'all(.[]; .additionalAttributes.customfield_10464.id == "10608")' "$_payloads")" true
+assert_eq "create payloads: parent component retained" \
+  "$(jq -s 'all(.[] | select(.type == "Task"); .additionalAttributes.components == [{id:"33720"}])' "$_payloads")" true
+assert_eq "create payloads: subtask parent retained" \
+  "$(jq -s 'all(.[] | select(.type == "Sub-task"); .parentIssueId == "ACM-TEST")' "$_payloads")" true
+assert_eq "create payloads: release engineer assignee retained" \
+  "$(jq -s --arg qe "${STEP_TITLES[qeValidation]}" 'all(.[] | select(.type == "Sub-task" and .summary != $qe); .assignee == "@me")' "$_payloads")" true
+assert_eq "create payloads: explicit and omitted QE assignees" \
+  "$(jq -cs --arg qe "${STEP_TITLES[qeValidation]}" '[.[] | select(.summary == $qe) | .assignee // null]' "$_payloads")" '["qe@example.invalid",null]'
+assert_eq "create payloads: ADF docs contain no empty text nodes" \
+  "$(jq -s 'all(.[]; .description.type == "doc" and .description.version == 1 and (.description.content | length) > 0) and all(.[] | .description | .. | objects | select(.type? == "text"); (.text | length) > 0)' "$_payloads")" true
+rm -f "$_payloads"
+
 # ============================================================================
 echo ""
 echo "=== 4. check_freshness ==="

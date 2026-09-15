@@ -92,17 +92,7 @@ repo_base_branch() {
 # Any pre-existing dirty state is auto-stashed before we start, so the only
 # uncommitted changes reachable here are our own partial patcher edits.
 _restore_repo() {
-  local original_ref="$1" drop_branch="${2:-}" stash_ref="${3:-}"
-  git checkout -f "$original_ref" >/dev/null 2>&1 || true
-  if [ -n "$drop_branch" ]; then
-    git branch -D "$drop_branch" >/dev/null 2>&1 || true
-  fi
-  if [ -n "$stash_ref" ]; then
-    local stash_idx
-    stash_idx=$(git stash list --format='%H %gd' 2>/dev/null \
-      | awk -v sha="$stash_ref" '$1==sha{print $2; exit}')
-    [ -n "$stash_idx" ] && git stash pop "$stash_idx" >/dev/null 2>&1 || true
-  fi
+  restore_stashed_worktree "$PWD" "$@"
 }
 
 # ━━━ PREREQUISITES ━━━
@@ -195,17 +185,6 @@ update_repo() {
     return
   }
 
-  # Auto-stash any dirty tracked state so the branch switch is safe.
-  # We always cut a fresh branch from origin/$BASE_BRANCH, so the working-tree
-  # state is irrelevant to the output — stashing just keeps it from blocking us.
-  local STASH_REF=""
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    if git stash push -m "tekton-task-refs auto-stash" >/dev/null 2>&1; then
-      STASH_REF=$(git rev-parse 'stash@{0}' 2>/dev/null || true)
-      echo "  ⚠ Stashed dirty working tree (will restore after)"
-    fi
-  fi
-
   # Remember where the repo was so we can leave it exactly as found. On a branch
   # this is the branch name (so we return *to the branch*, not a detached commit).
   # On a detached HEAD `--abbrev-ref` prints the literal "HEAD" (exit 0), so fall
@@ -233,10 +212,18 @@ update_repo() {
     fi
   fi
 
+  # Resolve prerequisites before stashing; every later exit must restore it.
+  local STASH_REF
+  if ! STASH_REF=$(stash_worktree "$PWD" "tekton-task-refs auto-stash"); then
+    REPOS_FAILED+=("$REPO:stash-failed")
+    return
+  fi
+
   # Create fix branch from base branch (still on ORIGINAL_REF if this fails)
   if ! git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1; then
     echo "  ✗ Failed to create branch $FIX_BRANCH"
     REPOS_FAILED+=("$REPO:branch-create-failed")
+    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF" || true
     echo ""
     return
   fi
@@ -244,7 +231,7 @@ update_repo() {
   if [ ! -d .tekton ]; then
     echo "  ✗ No .tekton/ directory on $BASE_BRANCH"
     REPOS_FAILED+=("$REPO:no-tekton")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
     echo ""
     return
   fi
@@ -256,18 +243,25 @@ update_repo() {
     echo "  ✗ pipeline-patcher failed:"
     printf '%s\n' "$patcher_out" | sed 's/^/      /'
     REPOS_FAILED+=("$REPO:patcher-failed")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
     echo ""
     return
   fi
 
   # Stage only .tekton changes. Skip the commit if the patcher was a no-op (refs
   # already latest, or a re-run) — an unconditional commit would fail.
-  git add .tekton/
+  if ! git add .tekton/; then
+    REPOS_FAILED+=("$REPO:stage-failed")
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
+    return
+  fi
   if git diff --cached --quiet; then
     echo "  - Task refs already current"
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
-    REPOS_SKIPPED+=("$REPO:no-changes")
+    if _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"; then
+      REPOS_SKIPPED+=("$REPO:no-changes")
+    else
+      REPOS_FAILED+=("$REPO:restore-failed")
+    fi
     echo ""
     return
   fi
@@ -280,11 +274,11 @@ Enterprise Contract validation." >/dev/null 2>&1; then
     echo "  ✓ Committed"
     REPOS_UPDATED+=("$REPO#$FIX_BRANCH#$BASE_BRANCH")
     # Keep the fix branch (it holds the commit); restore the original ref.
-    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF"
+    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF" || REPOS_FAILED+=("$REPO:restore-failed")
   else
     echo "  ✗ Commit failed"
     REPOS_FAILED+=("$REPO:commit-failed")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
   fi
 
   echo ""

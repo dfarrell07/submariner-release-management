@@ -1158,12 +1158,19 @@ _try_auto_push() {
 
   # Split into push-executable lines and manual-only lines.
   # make-apply and make-watch require cluster access and are intentionally manual.
-  local exec_script="" manual_lines=""
+  local exec_script="" manual_lines="" current_cd=""
   while IFS= read -r line; do
     case "$line" in
       *'make apply'*|*'make watch'*)
+        if [ -n "$current_cd" ]; then
+          manual_lines="${manual_lines}${current_cd}"$'\n'
+          current_cd=""
+        fi
         manual_lines="${manual_lines}${line}"$'\n' ;;
       *)
+        # Retain the directory context for deferred apply/watch commands too;
+        # cd in the push subprocess cannot change the operator's shell.
+        if [[ "$line" =~ ^[[:space:]]*cd[[:space:]] ]]; then current_cd="$line"; fi
         exec_script="${exec_script}${line}"$'\n' ;;
     esac
   done <<< "$step_content"
@@ -1191,12 +1198,16 @@ _try_auto_push() {
 
   # Success: rewrite push log to contain only the manual (apply/watch) lines.
   # Keep content from before this step's block, then append the manual-only lines.
-  local before_content=""
-  [ "$log_before" -gt 0 ] && before_content=$(head -c "$log_before" "$push_log" 2>/dev/null) || true
-  if [ -n "$manual_lines" ]; then
-    printf '%s%s' "$before_content" "$manual_lines" > "$push_log"
-  else
-    printf '%s' "$before_content" > "$push_log"
+  local remaining_log
+  remaining_log=$(mktemp "${push_log}.XXXXXX") || return 1
+  # Preserve the preceding block byte-for-byte, including its trailing newlines.
+  if ! { head -c "$log_before" "$push_log" && printf '%s' "$manual_lines"; } > "$remaining_log"; then
+    rm -f "$remaining_log"
+    return 1
+  fi
+  if ! mv "$remaining_log" "$push_log"; then
+    rm -f "$remaining_log"
+    return 1
   fi
   echo "  ✓ Push and PR creation succeeded automatically" >&2
   return 0
