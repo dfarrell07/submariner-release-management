@@ -13,20 +13,18 @@ scripts.
 
 ## Current status
 
-Phases 1 through 3 are complete. The compatibility contract, shared discovery,
+Phases 1 through 4 are complete. The compatibility contract, shared discovery,
 portable delegates, caller-independent repository paths, namespaced Claude
 examples, and public invocation documentation are implemented and covered by
 offline tests. Installed-plugin execution remains in the final host matrix.
 
-The remaining compatibility debt is confined to two complex skills:
+The remaining compatibility debt is confined to one complex skill:
 
-- `add-release-notes` still uses `$ARGUMENTS` and launches `claude -p` for review.
 - `konflux-ci-fix` still embeds a stateful workflow with Claude-specific input,
   prompting, and temporary-state assumptions.
 
-`make test-skills` records seven overlapping debt entries for those two skills
-and the nested release-note reviewer. That count is a ratchet, not seven
-separate features to build.
+`make test-skills` records five overlapping debt entries for that skill. That
+count is a ratchet, not five separate features to build.
 
 ## Scope boundaries
 
@@ -80,11 +78,11 @@ Out of scope:
 
 ## Audit findings
 
-### 1. Two complex skills still use Claude argument substitution
+### 1. One complex skill still uses Claude argument substitution
 
-`add-release-notes` and `konflux-ci-fix` still contain `$ARGUMENTS`. Claude
-replaces it before loading the skill; Codex does not. The other 16 skills now
-use explicit named inputs and direct argument forwarding.
+`konflux-ci-fix` still contains `$ARGUMENTS`. Claude replaces it before loading
+the skill; Codex does not. The other 17 skills now use explicit named inputs and
+direct argument forwarding.
 
 The shared contract should be prose, not another magic variable:
 
@@ -137,13 +135,14 @@ It should keep concise shared orchestration in `SKILL.md` and move repeatable
 mechanics into tested scripts. Claude-only frontmatter may remain because it is
 an optional Claude enhancement, not part of the correctness contract.
 
-### 4. Release-note review invokes Claude directly
+### 4. Release-note review is host-neutral
 
-`scripts/release-notes/review-issue.sh` calls `claude -p`. As a result, invoking
-`add-release-notes` from Codex still requires a separately installed and
-authenticated Claude CLI. This is the clearest remaining host-agent coupling.
+`scripts/release-notes/review-issue.sh` now prepares evidence without invoking a
+model. The active Claude or Codex agent records decisions, and `review.sh apply`
+validates and applies them serially.
 
-Separate deterministic evidence and mutation from model judgment:
+The implemented boundary separates deterministic evidence and mutation from
+model judgment:
 
 - A prepare operation collects evidence for each issue and writes an isolated
   review bundle plus a manifest.
@@ -162,10 +161,10 @@ when it supports safe isolated workers, but parallelism is optional and cannot
 alter the review contract. Apply decisions serially in manifest order so file
 updates and commits cannot race.
 
-### 5. Agent-specific syntax remains only in unfinished skills
+### 5. Agent-specific syntax remains only in the unfinished skill
 
 Public documentation and completed skills now use namespaced Claude examples.
-When the two remaining skills are rewritten, give each one a compact pair when
+When the remaining skill is rewritten, give it a compact pair when
 direct invocation matters:
 
 ```text
@@ -227,33 +226,16 @@ targets, refuses to overwrite existing local or remote work branches, and never
 pushes. Disposable-repository tests cover roles, validation, duplicates, target
 resolution, generated output, branch collisions, and commit contents.
 
-### Phase 4: Make release-note review host-neutral
+### Phase 4: Make release-note review host-neutral — complete
 
-Refactor `review.sh` and `review-issue.sh` around the prepare/decision/apply
-contract described above. Retain `review-prompt.md` as the common review
-criteria, but remove the `claude -p` invocation and model flags from scripts.
-Preserve the current `add-release-notes <version> [--stage-yaml PATH]` interface
-and Phases 1-4; only the per-issue review boundary changes.
-
-Update `add-release-notes/SKILL.md` to:
-
-1. Run the existing collection, filter, apply, and CVE verification phases.
-2. Prepare per-issue review bundles.
-3. Review each bundle with the active agent against `review-prompt.md`.
-4. Submit structured decisions to the deterministic apply operation.
-5. Summarize kept, removed, failed, and unreviewed issues and stop for human
-   review before any push.
-
-Preserve the invariant that CVE issues are never sent through the removable
-non-CVE review path. Preserve one signed commit per removal so each decision is
-independently reversible.
-
-Extend `scripts/release-notes/test-workflow.sh` with stubbed Jira/GitHub data.
-Test prepare output, CVE exclusion, valid KEEP and REMOVE decisions, issue-key
-mismatch, malformed or missing decisions, partial interruption and resume, and
-concurrent run-directory isolation.
-
-Do not introduce a generic review framework or a host-specific subagent API.
+`review.sh prepare` now creates an isolated manifest and evidence bundle per
+non-CVE issue. The active host agent writes structured KEEP/REMOVE decisions,
+and `review.sh apply` validates and applies them serially with one signed commit
+per removal. Missing, malformed, mismatched, stale, or unsafe inputs fail closed
+without removing an issue; interrupted runs resume from recorded results and
+recover committed removals. The existing release-note phases and version/stage
+interface are unchanged. Offline tests use stubbed Jira/GitHub data and cover
+the complete decision contract without a nested model CLI or host-specific API.
 
 ### Phase 5: Make `konflux-ci-fix` host-neutral without narrowing it
 
@@ -357,8 +339,8 @@ Keep review and rollback simple with one concern per commit:
 
 1. `tests: define shared skill compatibility contract` — complete
 2. `skills: make simple delegates portable across Claude and Codex` — complete
-3. `skills: move team-member updates into a tested script`
-4. `release-notes: use the active host agent for issue review`
+3. `skills: move team-member updates into a tested script` — complete
+4. `release-notes: use the active host agent for issue review` — complete
 5. `konflux-ci-fix: make orchestration host-neutral`
 6. `docs: finish Claude and Codex skill compatibility guidance`
 

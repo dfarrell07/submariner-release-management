@@ -1,4 +1,4 @@
-.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-parallel test-parse-ec-log test-skills test-release-root test-add-team-member
+.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-parallel test-parse-ec-log test-skills test-release-root test-add-team-member test-release-note-review
 
 .DEFAULT_GOAL := help
 
@@ -54,9 +54,8 @@ help:
 	@echo "                           Example: make add-release-notes VERSION=0.22.1"
 	@echo "                           Example: make add-release-notes VERSION=0.22.1 STAGE_YAML=releases/0.22/stage/submariner-0-22-1-stage-20260316-01.yaml"
 	@echo "  make review-release-notes VERSION=... [STAGE_YAML=...]"
-	@echo "                         - Per-issue agent review of release notes (run after add-release-notes)"
-	@echo "                           Spawns one Claude agent per issue to verify it belongs"
-	@echo "                           Each removal is a separate commit (easily revertable)"
+	@echo "                         - Prepare evidence bundles for active-agent review"
+	@echo "                           Prints the run directory and deterministic apply command"
 	@echo "                           Example: make review-release-notes VERSION=0.22.1"
 	@echo "  make verify-cve-fixes STAGE_YAML=..."
 	@echo "                         - Verify CVE fixes in snapshot images via Clair reports (requires oc login)"
@@ -96,6 +95,7 @@ help:
 	@echo "  make test-skills       - Shared Claude/Codex skill compatibility contract"
 	@echo "  make test-release-root - Delegate working-directory independence"
 	@echo "  make test-add-team-member - Team RBAC update tests"
+	@echo "  make test-release-note-review - Host-neutral issue review tests"
 	@echo ""
 	@echo "Release Operations:"
 	@echo "  make apply FILE=...    - Validate and apply release YAML to cluster (requires oc login)"
@@ -227,10 +227,13 @@ test-skills:
 test-add-team-member:
 	./scripts/lib/test-add-team-member.sh
 
+test-release-note-review:
+	./scripts/release-notes/test-workflow.sh --review-contract
+
 test-release-root:
 	./scripts/lib/test-release-root.sh
 
-test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-skills test-release-root test-add-team-member test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel test-parse-ec-log
+test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-skills test-release-root test-add-team-member test-release-note-review test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel test-parse-ec-log
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

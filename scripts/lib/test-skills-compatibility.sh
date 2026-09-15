@@ -89,13 +89,13 @@ portable_delegates = {
     "update-version-labels": "scripts/update-version-labels.sh",
 }
 portable_knowledge_skills = {"learn-release"}
+portable_host_review_skills = {"add-release-notes"}
 
 # These sets are a ratchet, not permanent exceptions. A compatibility change
 # must remove the entries it resolves. Adding an entry means adding new debt and
 # should not be done merely to make this test pass. All sets must be empty when
 # the compatibility plan is complete.
 expected_argument_debt = {
-    "add-release-notes",
     "konflux-ci-fix",
 }
 expected_slash_only_debt = {
@@ -106,7 +106,7 @@ expected_terminal_read_debt = {"konflux-ci-fix"}
 expected_shared_tmp_debt = {"konflux-ci-fix"}
 expected_release_root_debt: set[str] = set()
 expected_target_root_debt: set[str] = set()
-expected_model_cli_debt = {"scripts/release-notes/review-issue.sh"}
+expected_model_cli_debt: set[str] = set()
 
 print("=== Shared Skill Discovery ===")
 check(codex_skills.is_symlink(), ".agents/skills is a symlink")
@@ -190,7 +190,7 @@ check(
 )
 
 invocation_mismatches = []
-for name in portable_delegates.keys() | portable_knowledge_skills:
+for name in portable_delegates.keys() | portable_knowledge_skills | portable_host_review_skills:
     text = skill_text.get(name, "")
     has_claude = re.search(
         rf"/release-management:{re.escape(name)}(?:\s|$)", text

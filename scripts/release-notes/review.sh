@@ -1,158 +1,406 @@
 #!/bin/bash
-# Review release notes issues with per-issue agent review
-# Spawns one Claude agent per non-CVE issue to verify it belongs
-# Usage: review.sh VERSION [--stage-yaml PATH]
+# Prepare host-agent release-note reviews and apply validated decisions.
+
 set -euo pipefail
 
-# ============================================================================
-# Argument Parsing
-# ============================================================================
-
-VERSION=""
-STAGE_YAML_ARG=""
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --stage-yaml)
-      STAGE_YAML_ARG="$2"
-      shift 2
-      ;;
-    -*)
-      echo "Unknown option: $1" >&2
-      exit 1
-      ;;
-    *)
-      if [[ -z "$VERSION" ]]; then
-        VERSION="$1"
-      else
-        echo "Multiple positional arguments not supported" >&2
-        exit 1
-      fi
-      shift
-      ;;
-  esac
-done
-
-if [[ -z "$VERSION" ]]; then
-  echo "Usage: $0 VERSION [--stage-yaml PATH]" >&2
-  exit 1
-fi
-
-if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
-  VERSION="${VERSION}.0"
-fi
-
-# ============================================================================
-# Initialize
-# ============================================================================
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd)"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+LIB_DIR=$(cd "$SCRIPT_DIR/../lib" && pwd)
 
 # shellcheck source=../lib/release-notes-common.sh
 source "$LIB_DIR/release-notes-common.sh"
 
-banner "Review Release Notes Issues: $VERSION"
+usage() {
+  cat >&2 <<EOF
+Usage:
+  $0 [prepare] VERSION [--stage-yaml PATH]
+  $0 apply RUN_DIR
+EOF
+}
 
-# ============================================================================
-# Locate Stage YAML
-# ============================================================================
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
 
-calculate_acm_version
-find_stage_yaml "$VERSION" "$STAGE_YAML_ARG"
+absolute_path() {
+  local path=$1 directory base
+  directory=$(dirname "$path")
+  base=$(basename "$path")
+  printf '%s/%s\n' "$(cd "$directory" && pwd -P)" "$base"
+}
 
-echo "Version: $VERSION"
-echo "ACM Version: $ACM_VERSION"
-echo "Stage YAML: $STAGE_YAML"
+write_result() {
+  local run_dir=$1 key=$2 decision=$3 reason=$4 commit=${5:-}
+  local result_file="$run_dir/results/$key.json" temporary
+  temporary=$(mktemp "$run_dir/results/.${key}.XXXXXX")
+  jq -n \
+    --arg issue_key "$key" \
+    --arg decision "$decision" \
+    --arg reason "$reason" \
+    --arg commit "$commit" \
+    '{issue_key:$issue_key, decision:$decision, reason:$reason,
+      commit:(if $commit == "" then null else $commit end)}' > "$temporary"
+  mv "$temporary" "$result_file"
+}
 
-# ============================================================================
-# Extract Non-CVE Issue Keys
-# ============================================================================
+prepare_reviews() {
+  local version="" stage_yaml_arg=""
 
-# Get all issue keys from YAML
-ALL_ISSUE_KEYS=$(yq eval '.spec.data.releaseNotes.issues.fixed[].id' "$STAGE_YAML" 2>/dev/null || echo "")
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --stage-yaml)
+        [[ $# -ge 2 ]] || die "--stage-yaml requires a path"
+        stage_yaml_arg=$2
+        shift 2
+        ;;
+      -*) die "Unknown option: $1" ;;
+      *)
+        [[ -z "$version" ]] || die "Multiple positional arguments are not supported"
+        version=$1
+        shift
+        ;;
+    esac
+  done
 
-if [[ -z "$ALL_ISSUE_KEYS" ]]; then
-  echo "No issues found in YAML — nothing to review"
-  exit 0
-fi
-
-# Get CVE issue keys to skip (security-critical, always included). These keys come
-# only from collect.sh's structured output — the stage YAML has no per-issue CVE marker.
-# Re-collect whenever that file is missing OR for the wrong version: otherwise
-# CVE_ISSUE_KEYS would be empty, every CVE issue would fall through to the removal agent,
-# and a shipped security CVE could be silently dropped.
-_REVIEW_DATA="${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}"
-DATA_VERSION=""
-if [[ -f "$_REVIEW_DATA" ]]; then
-  DATA_VERSION=$(jq -r '.metadata.version // ""' "$_REVIEW_DATA" 2>/dev/null || echo "")
-fi
-if [[ "$DATA_VERSION" != "$VERSION" ]]; then
-  echo "⚠️  Data file missing or for '${DATA_VERSION:-none}', not $VERSION — re-collecting..."
-  if ! "$SCRIPT_DIR/collect.sh" "$VERSION" --stage-yaml "$STAGE_YAML" >/dev/null 2>&1; then
-    echo "❌ collect.sh failed (Jira auth/network?) — cannot build the CVE-skip list." >&2
-    echo "   Aborting: reviewing without it could drop a shipped CVE from the release notes." >&2
-    exit 1
+  [[ -n "$version" ]] || { usage; exit 1; }
+  if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    version="${version}.0"
   fi
-fi
-CVE_ISSUE_KEYS=$(jq -r '.cve_issues[].issue_key // empty' "$_REVIEW_DATA" 2>/dev/null || echo "")
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Invalid version: $version"
 
-# Build list of non-CVE issue keys to review
-REVIEW_KEYS=()
-for KEY in $ALL_ISSUE_KEYS; do
-  if echo "$CVE_ISSUE_KEYS" | grep -qw "$KEY" 2>/dev/null; then
-    echo "Skipping $KEY (CVE issue — always included)"
-  else
-    REVIEW_KEYS+=("$KEY")
+  VERSION=$version
+  calculate_acm_version
+  find_stage_yaml "$VERSION" "$stage_yaml_arg"
+
+  local repo_root stage_yaml stage_relative branch base_commit status
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || die "Not in a Git repository"
+  repo_root=$(cd "$repo_root" && pwd -P)
+  stage_yaml=$(absolute_path "$STAGE_YAML")
+  [[ "$stage_yaml" == "$repo_root/"* ]] || die "Stage YAML is outside the repository: $stage_yaml"
+  [[ ! -L "$stage_yaml" ]] || die "Stage YAML must not be a symbolic link"
+  stage_relative=${stage_yaml#"$repo_root/"}
+  git -C "$repo_root" ls-files --error-unmatch -- "$stage_relative" >/dev/null 2>&1 || \
+    die "Stage YAML is not tracked: $stage_relative"
+  branch=$(git -C "$repo_root" branch --show-current)
+  [[ -n "$branch" ]] || die "Detached HEAD is not supported"
+  status=$(git -C "$repo_root" status --porcelain --untracked-files=all)
+  [[ -z "$status" ]] || die "Repository worktree must be clean before preparing reviews"
+  base_commit=$(git -C "$repo_root" rev-parse HEAD)
+
+  banner "Prepare Release Notes Reviews: $VERSION"
+  echo "Version: $VERSION"
+  echo "ACM Version: $ACM_VERSION"
+  echo "Stage YAML: $stage_yaml"
+
+  local review_data data_version
+  review_data=${RELEASE_NOTES_DATA:-/tmp/release-notes-${VERSION}-data.json}
+  data_version=""
+  if [[ -f "$review_data" ]]; then
+    data_version=$(jq -r '.metadata.version // ""' "$review_data" 2>/dev/null || true)
   fi
-done
-
-TOTAL=${#REVIEW_KEYS[@]}
-if [[ "$TOTAL" -eq 0 ]]; then
-  echo "No non-CVE issues to review"
-  exit 0
-fi
-
-echo ""
-echo "Reviewing $TOTAL non-CVE issues (CVE issues skipped)..."
-echo ""
-
-# ============================================================================
-# Per-Issue Agent Review
-# ============================================================================
-
-KEPT=0
-REMOVED=0
-CURRENT=0
-
-for KEY in "${REVIEW_KEYS[@]}"; do
-  CURRENT=$((CURRENT + 1))
-  echo "[$CURRENT/$TOTAL] Reviewing $KEY..."
-
-  "$SCRIPT_DIR/review-issue.sh" "$KEY" "$VERSION" "$STAGE_YAML" || {
-    echo "  ? KEEP  $KEY - review failed, keeping by default"
-  }
-
-  # Check if issue was removed (no longer in YAML)
-  if ! yq eval ".spec.data.releaseNotes.issues.fixed[] | select(.id == \"$KEY\")" "$STAGE_YAML" 2>/dev/null | grep -q "$KEY"; then
-    REMOVED=$((REMOVED + 1))
-  else
-    KEPT=$((KEPT + 1))
+  if [[ "$data_version" != "$VERSION" ]]; then
+    echo "Data file missing or for '${data_version:-none}', not $VERSION; re-collecting..."
+    if ! RELEASE_NOTES_DATA="$review_data" \
+      "$SCRIPT_DIR/collect.sh" "$VERSION" --stage-yaml "$stage_yaml" >/dev/null; then
+      die "collect.sh failed; refusing to review without a current CVE exclusion list"
+    fi
   fi
-done
+  jq -e --arg version "$VERSION" '
+    .metadata.version == $version and
+    (.cve_issues | type == "array") and
+    ([.cve_issues[]?.issue_key |
+      type == "string" and test("^[A-Z][A-Z0-9]+-[0-9]+$")] | all)
+  ' "$review_data" >/dev/null || \
+    die "Invalid review data or CVE exclusion list: $review_data"
+  yq eval -e \
+    '.spec.data.releaseNotes.issues.fixed | type == "!!seq"' \
+    "$stage_yaml" >/dev/null || die "Stage YAML has no valid fixed-issues list: $stage_yaml"
 
-# ============================================================================
-# Summary
-# ============================================================================
+  mapfile -t all_keys < <(
+    yq eval '.spec.data.releaseNotes.issues.fixed[]?.id // ""' "$stage_yaml" |
+      sed '/^$/d'
+  )
+  if [[ ${#all_keys[@]} -eq 0 ]]; then
+    echo "No issues found in the stage YAML; nothing to review."
+    return 0
+  fi
 
-banner "Review Complete"
-echo "Results: $KEPT kept, $REMOVED removed out of $TOTAL reviewed"
+  mapfile -t cve_keys < <(jq -r '.cve_issues[]?.issue_key // empty' "$review_data")
+  local -A cve_set=() seen=()
+  local key
+  for key in "${cve_keys[@]}"; do
+    [[ "$key" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] || die "Invalid CVE issue key in data: $key"
+    cve_set["$key"]=1
+  done
 
-if [[ "$REMOVED" -gt 0 ]]; then
-  echo ""
-  echo "Review removals:"
-  echo "  git log --oneline -$REMOVED"
-  echo ""
-  echo "Revert a removal:"
-  echo "  git revert <commit-hash>"
+  local -a review_keys=()
+  for key in "${all_keys[@]}"; do
+    [[ "$key" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] || die "Invalid issue key in stage YAML: $key"
+    [[ -z "${seen[$key]:-}" ]] || die "Duplicate issue key in stage YAML: $key"
+    seen["$key"]=1
+    if [[ -n "${cve_set[$key]:-}" ]]; then
+      echo "Skipping $key (CVE issue; always included)"
+    else
+      review_keys+=("$key")
+    fi
+  done
+
+  if [[ ${#review_keys[@]} -eq 0 ]]; then
+    echo "No non-CVE issues to review."
+    return 0
+  fi
+
+  local run_dir run_parent manifest issues_json cve_json created_at
+  run_parent=${TMPDIR:-/tmp}
+  [[ -d "$run_parent" ]] || die "Temporary directory does not exist: $run_parent"
+  run_dir=$(mktemp -d "$run_parent/release-notes-review.XXXXXX")
+  mkdir "$run_dir/bundles" "$run_dir/decisions" "$run_dir/results"
+  echo "REVIEW_RUN_DIR=$run_dir"
+
+  local current=0 total=${#review_keys[@]} bundle decision
+  for key in "${review_keys[@]}"; do
+    current=$((current + 1))
+    bundle="$run_dir/bundles/$key.md"
+    decision="$run_dir/decisions/$key.json"
+    echo "[$current/$total] Collecting evidence for $key"
+    if ! "$SCRIPT_DIR/review-issue.sh" \
+      "$key" "$VERSION" "$stage_yaml" "$bundle" "$decision"; then
+      die "Evidence collection failed for $key; partial run retained at $run_dir"
+    fi
+  done
+
+  issues_json=$(printf '%s\n' "${review_keys[@]}" | jq -Rsc '
+    split("\n")[:-1] |
+    map({key:., bundle:("bundles/" + . + ".md"),
+         decision:("decisions/" + . + ".json"),
+         result:("results/" + . + ".json")})')
+  cve_json=$(printf '%s\n' "${cve_keys[@]}" | jq -Rsc 'split("\n")[:-1]')
+  created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  manifest="$run_dir/manifest.json"
+  jq -n \
+    --argjson schema 1 \
+    --arg version "$VERSION" \
+    --arg repo_root "$repo_root" \
+    --arg stage_yaml "$stage_yaml" \
+    --arg stage_relative "$stage_relative" \
+    --arg branch "$branch" \
+    --arg base_commit "$base_commit" \
+    --arg created_at "$created_at" \
+    --argjson issues "$issues_json" \
+    --argjson excluded_cve_keys "$cve_json" \
+    '{schema:$schema, version:$version, repo_root:$repo_root,
+      stage_yaml:$stage_yaml, stage_relative:$stage_relative, branch:$branch,
+      base_commit:$base_commit, created_at:$created_at, issues:$issues,
+      excluded_cve_keys:$excluded_cve_keys}' > "$manifest"
+
+  echo
+  echo "Prepared ${#review_keys[@]} review bundles."
+  echo "Manifest: $manifest"
+  echo "Criteria: $SCRIPT_DIR/review-prompt.md"
+  echo "Write one decision JSON file per manifest entry, then run:"
+  printf '  %q apply %q\n' "$0" "$run_dir"
+}
+
+apply_reviews() {
+  [[ $# -eq 1 ]] || { usage; exit 1; }
+  local run_dir manifest
+  run_dir=$1
+  [[ -d "$run_dir" ]] || die "Review run directory not found: $run_dir"
+  run_dir=$(cd "$run_dir" && pwd -P)
+  manifest="$run_dir/manifest.json"
+  [[ -f "$manifest" ]] || die "Review manifest not found: $manifest"
+
+  jq -e '
+    .schema == 1 and
+    (.version | type == "string") and
+    (.repo_root | type == "string") and
+    (.stage_yaml | type == "string") and
+    (.stage_relative | type == "string") and
+    (.branch | type == "string") and
+    (.base_commit | test("^[0-9a-f]{40}$")) and
+    (.issues | type == "array" and length > 0) and
+    ([.issues[].key] | length == (unique | length)) and
+    ([.issues[] | .key | test("^[A-Z][A-Z0-9]+-[0-9]+$")] | all) and
+    (.excluded_cve_keys | type == "array") and
+    ([.excluded_cve_keys[] |
+      type == "string" and test("^[A-Z][A-Z0-9]+-[0-9]+$")] | all)
+  ' "$manifest" >/dev/null || die "Invalid review manifest: $manifest"
+
+  local version repo_root stage_yaml stage_relative branch base_commit
+  version=$(jq -r '.version' "$manifest")
+  repo_root=$(jq -r '.repo_root' "$manifest")
+  stage_yaml=$(jq -r '.stage_yaml' "$manifest")
+  stage_relative=$(jq -r '.stage_relative' "$manifest")
+  branch=$(jq -r '.branch' "$manifest")
+  base_commit=$(jq -r '.base_commit' "$manifest")
+
+  [[ -d "$repo_root/.git" || -f "$repo_root/.git" ]] || die "Review repository not found: $repo_root"
+  [[ "$(git -C "$repo_root" rev-parse --show-toplevel)" == "$repo_root" ]] || \
+    die "Review repository root no longer matches the manifest"
+  [[ "$stage_relative" != /* && "$stage_relative" != .. && \
+    "$stage_relative" != ../* && "$stage_relative" != */../* && \
+    "$stage_relative" != */.. ]] || die "Manifest stage path is unsafe"
+  [[ "$stage_yaml" == "$repo_root/$stage_relative" ]] || die "Manifest stage path is inconsistent"
+  [[ -f "$stage_yaml" ]] || die "Stage YAML not found: $stage_yaml"
+  [[ ! -L "$stage_yaml" ]] || die "Stage YAML must not be a symbolic link"
+  [[ "$(absolute_path "$stage_yaml")" == "$stage_yaml" ]] || die "Stage YAML path is not canonical"
+  git -C "$repo_root" ls-files --error-unmatch -- "$stage_relative" >/dev/null 2>&1 || \
+    die "Stage YAML is no longer tracked: $stage_relative"
+  [[ "$(git -C "$repo_root" branch --show-current)" == "$branch" ]] || \
+    die "Review branch changed; expected $branch"
+  git -C "$repo_root" merge-base --is-ancestor "$base_commit" HEAD || \
+    die "Review base commit is not an ancestor of HEAD"
+
+  local status
+  status=$(git -C "$repo_root" status --porcelain --untracked-files=all)
+  [[ -z "$status" ]] || die "Repository worktree must be clean before applying decisions"
+
+  local kept=0 removed=0 failed=0 unreviewed=0 recovered=0
+  local key bundle_rel decision_rel result_rel bundle_file decision_file result_file
+  local decision_key verdict reason count commit expected_subject found_commit
+
+  while IFS=$'\t' read -r key bundle_rel decision_rel result_rel; do
+    [[ "$bundle_rel" == "bundles/$key.md" ]] || die "Invalid bundle path for $key"
+    [[ "$decision_rel" == "decisions/$key.json" ]] || die "Invalid decision path for $key"
+    [[ "$result_rel" == "results/$key.json" ]] || die "Invalid result path for $key"
+    if jq -e --arg key "$key" '.excluded_cve_keys | index($key) == null' \
+      "$manifest" >/dev/null; then
+      :
+    else
+      die "Manifest attempts to review excluded CVE issue $key"
+    fi
+
+    bundle_file="$run_dir/$bundle_rel"
+    [[ -f "$bundle_file" && ! -L "$bundle_file" ]] || \
+      die "Evidence bundle missing or unsafe for $key: $bundle_file"
+    decision_file="$run_dir/$decision_rel"
+    result_file="$run_dir/$result_rel"
+    count=$(ISSUE_KEY="$key" yq eval \
+      '[.spec.data.releaseNotes.issues.fixed[]? | select(.id == strenv(ISSUE_KEY))] | length' \
+      "$stage_yaml")
+    if [[ -f "$result_file" ]]; then
+      verdict=$(jq -r --arg key "$key" '
+        if .issue_key == $key and
+          (.decision == "KEEP" or .decision == "REMOVE") and
+          (.reason | type == "string" and length > 0) and
+          ((.decision == "KEEP" and .commit == null) or
+           (.decision == "REMOVE" and (.commit | test("^[0-9a-f]{40}$"))))
+        then .decision else empty end' "$result_file" 2>/dev/null || true)
+      [[ -n "$verdict" ]] || die "Invalid existing result for $key"
+      if [[ "$verdict" == KEEP ]]; then
+        [[ "$count" -eq 1 ]] || die "KEEP result for $key disagrees with the stage YAML"
+        kept=$((kept + 1))
+      else
+        [[ "$count" -eq 0 ]] || die "REMOVE result for $key disagrees with the stage YAML"
+        removed=$((removed + 1))
+      fi
+      echo "  = $verdict $key (already applied)"
+      continue
+    fi
+
+    if [[ "$count" -eq 0 ]]; then
+      expected_subject="Remove $key from $version release notes"
+      found_commit=$(git -C "$repo_root" log --format='%H%x09%s' \
+        "$base_commit..HEAD" -- "$stage_relative" |
+        awk -F '\t' -v subject="$expected_subject" '$2 == subject {print $1; exit}')
+      if [[ -n "$found_commit" ]]; then
+        write_result "$run_dir" "$key" REMOVE "Recovered previously committed removal" "$found_commit"
+        removed=$((removed + 1))
+        recovered=$((recovered + 1))
+        echo "  = REMOVE $key (recovered commit $found_commit)"
+        continue
+      fi
+      echo "  ! KEEP $key - issue is absent without a recorded review removal" >&2
+      failed=$((failed + 1))
+      continue
+    elif [[ "$count" -ne 1 ]]; then
+      echo "  ! KEEP $key - expected one stage entry, found $count" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+
+    if [[ ! -f "$decision_file" ]]; then
+      echo "  ? KEEP $key - decision missing: $decision_file"
+      unreviewed=$((unreviewed + 1))
+      continue
+    fi
+    if ! jq -e '
+      type == "object" and
+      (.issue_key | type == "string") and
+      (.decision == "KEEP" or .decision == "REMOVE") and
+      (.reason | type == "string" and length > 0 and
+        (test("[\\r\\n]") | not))
+    ' "$decision_file" >/dev/null 2>&1; then
+      echo "  ! KEEP $key - malformed decision" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+    decision_key=$(jq -r '.issue_key' "$decision_file")
+    verdict=$(jq -r '.decision' "$decision_file")
+    reason=$(jq -r '.reason' "$decision_file")
+    if [[ "$decision_key" != "$key" ]]; then
+      echo "  ! KEEP $key - decision issue key is $decision_key" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+    if [[ "$reason" == *$'\n'* || "$reason" == *$'\r'* ]]; then
+      echo "  ! KEEP $key - decision reason must be one line" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+
+    if [[ "$verdict" == KEEP ]]; then
+      write_result "$run_dir" "$key" KEEP "$reason"
+      kept=$((kept + 1))
+      echo "  ✓ KEEP $key - $reason"
+      continue
+    fi
+
+    status=$(git -C "$repo_root" status --porcelain --untracked-files=all)
+    [[ -z "$status" ]] || die "Worktree became dirty before applying $key"
+    local backup
+    backup=$(mktemp "$run_dir/.stage-backup.XXXXXX")
+    cp "$stage_yaml" "$backup"
+    if ! ISSUE_KEY="$key" yq eval -i \
+      'del(.spec.data.releaseNotes.issues.fixed[] | select(.id == strenv(ISSUE_KEY)))' \
+      "$stage_yaml" || ! yq eval '.' "$stage_yaml" >/dev/null; then
+      cp "$backup" "$stage_yaml"
+      rm -f "$backup"
+      echo "  ! KEEP $key - failed to produce valid YAML" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+    rm -f "$backup"
+    git -C "$repo_root" add -- "$stage_relative"
+    if ! git -C "$repo_root" commit -s \
+      -m "Remove $key from $version release notes" \
+      -m "${reason:0:78}"; then
+      die "Commit failed for $key; changes remain for inspection"
+    fi
+    commit=$(git -C "$repo_root" rev-parse HEAD)
+    write_result "$run_dir" "$key" REMOVE "$reason" "$commit"
+    removed=$((removed + 1))
+    echo "  ✗ REMOVE $key - $reason"
+  done < <(jq -r '.issues[] | [.key, .bundle, .decision, .result] | @tsv' "$manifest")
+
+  banner "Review Decision Summary"
+  echo "Results: $kept kept, $removed removed, $failed failed, $unreviewed unreviewed"
+  [[ "$recovered" -eq 0 ]] || echo "Recovered committed removals: $recovered"
+  echo "Run directory: $run_dir"
+
+  if [[ "$failed" -gt 0 || "$unreviewed" -gt 0 ]]; then
+    echo "No undecided or invalid issue was removed. Fix decisions and rerun apply." >&2
+    return 1
+  fi
+}
+
+mode=prepare
+if [[ ${1:-} == prepare || ${1:-} == apply ]]; then
+  mode=$1
+  shift
 fi
+
+case "$mode" in
+  prepare) prepare_reviews "$@" ;;
+  apply) apply_reviews "$@" ;;
+esac

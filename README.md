@@ -54,7 +54,7 @@ make watch NAME=submariner-0-20-2-stage-20250930-01
 # Add release notes to stage release (requires acli authentication)
 make add-release-notes VERSION=0.22.1                          # Auto-find latest stage YAML
 make add-release-notes VERSION=0.22.1 STAGE_YAML=...           # Use specific YAML
-make review-release-notes VERSION=0.22.1                       # Per-issue agent review
+make review-release-notes VERSION=0.22.1                       # Prepare active-agent review bundles
 
 # Get FBC catalog URLs for QE sharing (requires cluster login or skopeo)
 make get-fbc-urls VERSION=0.24.0                          # All OCP versions

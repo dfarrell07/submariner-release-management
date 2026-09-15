@@ -171,14 +171,19 @@ make bundle-image-update VERSION=0.21.2 SNAPSHOT=submariner-0-21-xxxxx
 
 ## /release-management:add-release-notes
 
-Add release notes from Jira to stage YAML
+Add and review release notes from Jira in the stage YAML.
 
-Queries Jira, filters, auto-applies, commits.
+Queries Jira, filters, auto-applies, verifies CVEs, then reviews each non-CVE
+issue using the active Claude agent and deterministic decision application.
 
 ```bash
-make add-release-notes VERSION=0.22.1              # Auto-find latest stage YAML
-make add-release-notes VERSION=0.22.1 STAGE_YAML=path/to/file.yaml
+/release-management:add-release-notes 0.22.1
+/release-management:add-release-notes 0.22.1 --stage-yaml path/to/file.yaml
 ```
+
+For manual execution, `make add-release-notes VERSION=0.22.1` runs the
+deterministic add and CVE-verification phases, and
+`make review-release-notes VERSION=0.22.1` prepares the review bundles.
 
 **Requirements:**
 
@@ -191,8 +196,11 @@ make add-release-notes VERSION=0.22.1 STAGE_YAML=path/to/file.yaml
 2. Filters (excludes published, invalid resolutions; keeps Unresolved)
 3. Z-stream: also filters by date
 4. Auto-applies, validates, commits
+5. Prepares isolated evidence bundles and excludes CVE issues from removal review
+6. Applies validated KEEP/REMOVE decisions, one signed commit per removal
 
-**After running:** Review (`git show`), amend, push
+**After running:** Review the release-note and removal commits. Push separately
+only when explicitly requested.
 
 ## /release-management:rpm-lockfile-update
 
