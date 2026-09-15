@@ -14,7 +14,7 @@ Adds FBC (File-Based Catalog) support for a new OCP version in Konflux release d
 **Invocation:**
 
 ```text
-Claude: /add-fbc-ocp-version 4.22 0.23
+Claude: /release-management:add-fbc-ocp-version 4.22 0.23
 Codex:  $release-management:add-fbc-ocp-version 4.22 0.23
 ```
 

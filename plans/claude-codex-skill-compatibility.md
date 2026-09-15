@@ -47,7 +47,8 @@ Out of scope:
   18 skills to Codex from the repository root and its subdirectories.
 - Codex accepts the existing `name` and `description` fields and discovers the
   skills despite Claude-specific optional frontmatter.
-- Claude supports plugin skills under `skills/`, `/skill-name` invocation,
+- Claude supports plugin skills under `skills/`, namespaced
+  `/release-management:skill-name` invocation,
   `$ARGUMENTS`, `allowed-tools`, `context: fork`, and plugin-relative path
   substitution. These fields can remain for Claude.
 - `AGENTS.md` and `README.md` document Codex discovery and invocation. They are
@@ -78,7 +79,7 @@ The shared contract should be prose, not another magic variable:
 4. Do not invent missing required values, use `eval`, or assume shell variables
    persist across tool calls.
 
-Claude can continue to accept `/skill-name ...`; Codex can accept
+Claude can continue to accept `/release-management:skill-name ...`; Codex can accept
 `$release-management:skill-name ...`. The agent reads the same inputs from the
 user request, so no shared executable block needs `$ARGUMENTS`.
 
@@ -150,11 +151,11 @@ updates and commits cannot race.
 
 ### 5. Agent-specific syntax is presented as if universal
 
-Most usage examples show only Claude's `/skill-name` syntax. Examples should
-show one compact pair when direct invocation matters:
+Most usage examples show only Claude's bare `/skill-name` syntax. Plugin
+examples should show one compact namespaced pair when direct invocation matters:
 
 ```text
-Claude: /skill-name <inputs>
+Claude: /release-management:skill-name <inputs>
 Codex:  $release-management:skill-name <inputs>
 ```
 

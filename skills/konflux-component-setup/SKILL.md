@@ -25,7 +25,7 @@ Automate the setup of Konflux CI/CD builds on new release branches for Submarine
 **Invocation:**
 
 ```text
-Claude: /konflux-component-setup operator 0.23
+Claude: /release-management:konflux-component-setup operator 0.23
 Codex:  $release-management:konflux-component-setup operator 0.23
 ```
 

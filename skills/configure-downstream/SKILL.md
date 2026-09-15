@@ -14,7 +14,7 @@ Configures Konflux CI/CD for a new Submariner minor version (Y-stream releases).
 **Invocation:**
 
 ```text
-Claude: /configure-downstream 0.23
+Claude: /release-management:configure-downstream 0.23
 Codex:  $release-management:configure-downstream 0.23
 ```
 

@@ -13,7 +13,7 @@ Teach users about the Submariner release process. Determine the requested mode
 from the user's invocation or message.
 
 ```text
-Claude: /learn-release overview
+Claude: /release-management:learn-release overview
 Codex:  $release-management:learn-release overview
 ```
 

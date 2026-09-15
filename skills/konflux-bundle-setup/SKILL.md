@@ -18,7 +18,7 @@ Creates 6-9 commits.
 **Invocation:**
 
 ```text
-Claude: /konflux-bundle-setup 0.23
+Claude: /release-management:konflux-bundle-setup 0.23
 Codex:  $release-management:konflux-bundle-setup 0.23
 ```
 

@@ -15,7 +15,7 @@ and committing updated lockfiles.
 ## Invocation
 
 ```text
-Claude: /rpm-lockfile-update 0.21 submariner
+Claude: /release-management:rpm-lockfile-update 0.21 submariner
 Codex:  $release-management:rpm-lockfile-update 0.21 submariner
 ```
 

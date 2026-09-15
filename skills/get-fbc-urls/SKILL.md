@@ -14,7 +14,7 @@ on the cluster, falling back to snapshot lookup from local YAML files if Release
 Prod-index mode checks the Red Hat operator index at registry.redhat.io.
 
 ```text
-Claude: /get-fbc-urls 0.24.0
+Claude: /release-management:get-fbc-urls 0.24.0
 Codex:  $release-management:get-fbc-urls 0.24.0
 ```
 

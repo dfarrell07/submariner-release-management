@@ -19,7 +19,7 @@ can preview without creating a tracker.
 **Invocation:**
 
 ```text
-Claude: /autorelease 0.25.1
+Claude: /release-management:autorelease 0.25.1
 Codex:  $release-management:autorelease 0.25.1
 ```
 

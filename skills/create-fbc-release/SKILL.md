@@ -23,7 +23,7 @@ Automates Step 12 (FBC stage releases) and Step 17 (FBC prod releases) of the Su
 **Invocation:**
 
 ```text
-Claude: /create-fbc-release 0.22.1 stage
+Claude: /release-management:create-fbc-release 0.22.1 stage
 Codex:  $release-management:create-fbc-release 0.22.1 stage
 ```
 

@@ -14,7 +14,7 @@ Report completed release phases, blockers, and the exact next action.
 ## Invocation
 
 ```text
-Claude: /release-ls 0.22.0
+Claude: /release-management:release-ls 0.22.0
 Codex:  $release-management:release-ls 0.22.0
 ```
 

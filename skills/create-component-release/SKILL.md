@@ -21,7 +21,7 @@ Automates Step 8 (stage) and Step 15 (prod) of the Submariner release workflow.
 **Invocation:**
 
 ```text
-Claude: /create-component-release 0.22.1 stage
+Claude: /release-management:create-component-release 0.22.1 stage
 Codex:  $release-management:create-component-release 0.22.1 stage
 ```
 

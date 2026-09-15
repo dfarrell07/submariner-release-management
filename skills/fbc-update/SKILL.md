@@ -22,7 +22,7 @@ Automates Step 11 (FBC catalog update) of the Submariner release workflow.
 ## Usage
 
 ```text
-Claude: /fbc-update 0.22.1
+Claude: /release-management:fbc-update 0.22.1
 Codex:  $release-management:fbc-update 0.22.1
 ```
 

@@ -193,7 +193,9 @@ check(
 invocation_mismatches = []
 for name in portable_delegates.keys() | portable_knowledge_skills:
     text = skill_text.get(name, "")
-    has_claude = re.search(rf"/{re.escape(name)}(?:\s|$)", text) is not None
+    has_claude = re.search(
+        rf"/release-management:{re.escape(name)}(?:\s|$)", text
+    ) is not None
     has_codex = re.search(
         rf"\$release-management:{re.escape(name)}(?:\s|$)", text
     ) is not None
@@ -221,7 +223,9 @@ actual_target_root_debt = {
 
 actual_slash_only_debt: set[str] = set()
 for name, text in skill_text.items():
-    has_slash_usage = re.search(rf"/{re.escape(name)}(?:\s|$)", text) is not None
+    has_slash_usage = re.search(
+        rf"/(?:release-management:)?{re.escape(name)}(?:\s|$)", text
+    ) is not None
     has_codex_usage = re.search(
         rf"\$(?:release-management:)?{re.escape(name)}(?:\s|$)", text
     ) is not None

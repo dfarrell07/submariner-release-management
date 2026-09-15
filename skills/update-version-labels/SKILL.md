@@ -15,7 +15,7 @@ expansion produces correct image tags. Required for Z-stream releases before cut
 ## Invocation
 
 ```text
-Claude: /update-version-labels 0.23.1 subctl
+Claude: /release-management:update-version-labels 0.23.1 subctl
 Codex:  $release-management:update-version-labels 0.23.1 subctl
 ```
 

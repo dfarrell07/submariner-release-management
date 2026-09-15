@@ -18,7 +18,7 @@ Safe to re-run — returns the existing tracker if one already exists for that v
 **Invocation:**
 
 ```text
-Claude: /create-release-tracker 0.24.0 --dry-run
+Claude: /release-management:create-release-tracker 0.24.0 --dry-run
 Codex:  $release-management:create-release-tracker 0.24.0 --dry-run
 ```
 

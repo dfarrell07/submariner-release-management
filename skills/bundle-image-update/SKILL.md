@@ -18,7 +18,7 @@ verifies all SHAs match, and creates a single commit.
 **Invocation:**
 
 ```text
-Claude: /bundle-image-update 0.21.2
+Claude: /release-management:bundle-image-update 0.21.2
 Codex:  $release-management:bundle-image-update 0.21.2
 ```
 
