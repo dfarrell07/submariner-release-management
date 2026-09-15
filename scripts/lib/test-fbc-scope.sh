@@ -93,13 +93,15 @@ get_fbc_ocp_scope() { _spy_args="$*"; }
 MAJOR_MINOR="0.24"
 # shellcheck disable=SC2034  # consumed by get_release_ocp_scope via globals
 FULL_VERSION_DASH="0-24-1"
+# shellcheck disable=SC2034  # consumed by get_release_ocp_scope via globals
+RELEASE_ROOT="$ROOT"
 get_release_ocp_scope "prod" >/dev/null 2>&1 || true
 
 # Restore the original implementation.
 eval "$_saved_get_fbc_ocp_scope"
 
 # The spy must have been called with:
-#   arg1 = "."  (repo root — a literal dot)
+#   arg1 = "$ROOT"  (absolute release-management root)
 #   arg2 = "0.24"  (MAJOR_MINOR — NOT FULL_VERSION_DASH)
 #   arg3 = "0-24-1"  (FULL_VERSION_DASH — NOT MAJOR_MINOR)
 #   arg4 = "prod"  (the env passed to the wrapper)
@@ -109,7 +111,7 @@ _spy_arg2=$(echo "$_spy_args" | awk '{print $2}')
 _spy_arg3=$(echo "$_spy_args" | awk '{print $3}')
 _spy_arg4=$(echo "$_spy_args" | awk '{print $4}')
 
-assert_eq "get_release_ocp_scope: arg1 is repo root '.'" "$_spy_arg1" "."
+assert_eq "get_release_ocp_scope: arg1 is absolute repo root" "$_spy_arg1" "$ROOT"
 assert_eq "get_release_ocp_scope: arg2 is MAJOR_MINOR (0.24)" "$_spy_arg2" "0.24"
 assert_eq "get_release_ocp_scope: arg3 is FULL_VERSION_DASH (0-24-1)" "$_spy_arg3" "0-24-1"
 assert_eq "get_release_ocp_scope: arg4 is env (prod)" "$_spy_arg4" "prod"

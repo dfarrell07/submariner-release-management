@@ -24,6 +24,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ━━━ CONSTANTS ━━━
 
 readonly KONFLUX_UI="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com"
@@ -37,7 +39,7 @@ VERSION=""
 RAW_URL=false
 OCP_FILTER=""
 PROD_INDEX=false
-GIT_ROOT=""
+GIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMPDIR=""
 # Per-OCP catalog fragment URLs captured by get_urls, used to populate the
 # QE subtask description in main() (Phase 3).
@@ -79,7 +81,6 @@ check_prerequisites() {
     fi
   fi
 
-  GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "Not in a git repository"
 }
 
 # ━━━ ARGUMENT PARSING ━━━
@@ -143,7 +144,6 @@ parse_arguments() {
 
 # ━━━ PARALLEL JOB HELPERS (shared lib, relies on global TMPDIR) ━━━
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/parallel-jobs.sh
 source "$SCRIPT_DIR/lib/parallel-jobs.sh"
 # shellcheck source=lib/fbc-scope.sh
@@ -462,4 +462,8 @@ main() {
   fi
 }
 
-main "$@"
+# Run main only when executed directly; sourcing exposes path resolution and
+# functions to the offline test harness without querying the cluster.
+if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
+  main "$@"
+fi

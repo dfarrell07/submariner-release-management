@@ -151,6 +151,11 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 
 Each step's workflow is in `.agents/workflows/<step-name>.md`. When it says "follow docs in X repo", read that repo's workflow docs.
 
+Resolve those paths against this plugin's release-management root: use the
+expanded `${CLAUDE_PLUGIN_ROOT}` when Claude provides it; otherwise use the
+checkout containing this skill and `.agents/workflows`. Do not resolve them
+against the caller's working directory.
+
 **Note:** Branch in parentheses (`devel` for submariner-io repos, `main` for others).
 
 | Repo | Local | Docs | Purpose |
