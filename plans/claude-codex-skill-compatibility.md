@@ -13,22 +13,20 @@ scripts.
 
 ## Current status
 
-Phases 1 and 2 are complete. The compatibility contract, shared discovery,
-portable simple delegates, caller-independent repository paths, namespaced
-Claude examples, and public invocation documentation are implemented and
-covered by offline tests. Installed-plugin execution remains in the final host
-matrix.
+Phases 1 through 3 are complete. The compatibility contract, shared discovery,
+portable delegates, caller-independent repository paths, namespaced Claude
+examples, and public invocation documentation are implemented and covered by
+offline tests. Installed-plugin execution remains in the final host matrix.
 
-The remaining compatibility debt is confined to three complex skills:
+The remaining compatibility debt is confined to two complex skills:
 
-- `add-team-member` still embeds a stateful mutation and a fixed target checkout.
 - `add-release-notes` still uses `$ARGUMENTS` and launches `claude -p` for review.
 - `konflux-ci-fix` still embeds a stateful workflow with Claude-specific input,
   prompting, and temporary-state assumptions.
 
-`make test-skills` records ten overlapping debt entries for those three skills
-and the nested release-note reviewer. That count is a ratchet, not ten separate
-features to build.
+`make test-skills` records seven overlapping debt entries for those two skills
+and the nested release-note reviewer. That count is a ratchet, not seven
+separate features to build.
 
 ## Scope boundaries
 
@@ -224,27 +222,14 @@ invocation pairs while preserving their interfaces and safety boundaries.
 Implemented by `19f691f`, with namespace, plugin-root, argument-documentation,
 and public-guide corrections in `cd5b00c`, `abf2fb9`, `8cf8f05`, and `472ce1c`.
 
-### Phase 3: Extract `add-team-member`
+### Phase 3: Extract `add-team-member` — complete
 
-Move its deterministic implementation to `scripts/add-team-member.sh` and
-reduce the skill to inputs, prerequisites, authorization boundary, and script
-delegation.
-
-The script should:
-
-- Preserve the existing user interface: username plus optional role, including
-  the contributor default and accepted singular/plural role names.
-- Resolve the target as
-  `${KONFLUX_RELEASE_DATA:-$HOME/konflux/konflux-release-data}` so tests and
-  non-default checkouts can override it without expanding the skill interface.
-- Preserve all current input validation.
-- Refuse a dirty target worktree, preserve alphabetical RBAC output, rebuild
-  manifests, and create the same signed commit.
-- Never push or publish a message.
-
-Add focused tests using a disposable fake `konflux-release-data` repository.
-Cover all roles, the default role, invalid users and roles, duplicate users,
-dirty worktrees, missing structure, generated output, and commit contents.
+`add-team-member` is now a portable delegate to
+`scripts/add-team-member.sh`. The script preserves its username and role
+interface, contributor default, singular/plural roles, target default, RBAC
+sorting, manifest rebuild, and local signed commit. It rejects dirty or invalid
+targets and never pushes. Disposable-repository tests cover roles, validation,
+duplicates, target resolution, generated output, and commit contents.
 
 ### Phase 4: Make release-note review host-neutral
 

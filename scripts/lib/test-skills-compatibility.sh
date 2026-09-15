@@ -73,6 +73,7 @@ expected_skills = {
 
 portable_delegates = {
     "add-fbc-ocp-version": "scripts/add-fbc-ocp-version.sh",
+    "add-team-member": "scripts/add-team-member.sh",
     "autorelease": "scripts/autorelease.sh",
     "bundle-image-update": "scripts/bundle-image-update.sh",
     "configure-downstream": "scripts/configure-downstream.sh",
@@ -95,18 +96,16 @@ portable_knowledge_skills = {"learn-release"}
 # the compatibility plan is complete.
 expected_argument_debt = {
     "add-release-notes",
-    "add-team-member",
     "konflux-ci-fix",
 }
 expected_slash_only_debt = {
-    "add-team-member",
     "konflux-ci-fix",
 }
 expected_host_tool_debt = {"konflux-ci-fix"}
 expected_terminal_read_debt = {"konflux-ci-fix"}
 expected_shared_tmp_debt = {"konflux-ci-fix"}
 expected_release_root_debt: set[str] = set()
-expected_target_root_debt = {"add-team-member"}
+expected_target_root_debt: set[str] = set()
 expected_model_cli_debt = {"scripts/release-notes/review-issue.sh"}
 
 print("=== Shared Skill Discovery ===")
