@@ -80,11 +80,11 @@ Out of scope:
 
 ## Audit findings
 
-### 1. Three complex skills still use Claude argument substitution
+### 1. Two complex skills still use Claude argument substitution
 
-`add-team-member`, `add-release-notes`, and `konflux-ci-fix` still contain
-`$ARGUMENTS`. Claude replaces it before loading the skill; Codex does not. The
-other 15 skills now use explicit named inputs and direct argument forwarding.
+`add-release-notes` and `konflux-ci-fix` still contain `$ARGUMENTS`. Claude
+replaces it before loading the skill; Codex does not. The other 16 skills now
+use explicit named inputs and direct argument forwarding.
 
 The shared contract should be prose, not another magic variable:
 
@@ -121,23 +121,19 @@ the agent instruction; do not put the Claude substitution in a shell block
 intended for both agents, and do not add a launcher whose own location would
 need another host-specific resolver.
 
-The fixed `~/konflux/konflux-release-data` path inside `add-team-member` is
-different: it is a target working repository, not the plugin root. Its backing
-script should preserve that location as the default while accepting an explicit
-or environment-provided target for testability and non-default checkouts.
+The former fixed `~/konflux/konflux-release-data` path in `add-team-member` was
+different: it identified a target working repository, not the plugin root. Its
+backing script now preserves that location as the default while accepting an
+environment-provided target for testability and non-default checkouts.
 
-### 3. Two skills embed long, stateful shell workflows
-
-`add-team-member` embeds roughly 200 lines of mutating shell. It parses
-`$ARGUMENTS`, hard-codes the `konflux-release-data` checkout, and requires the
-agent to execute one large block without losing state.
+### 3. One skill still embeds a long, stateful shell workflow
 
 `konflux-ci-fix` is over 1,100 lines, uses `$ARGUMENTS`, Claude's
 `AskUserQuestion` name, terminal `read -p`, and shared `/tmp/konflux-*` state.
 Its `context: fork` field is valid for Claude but has no equivalent execution
 effect in Codex. The workflow must not rely on the fork for correctness.
 
-Both should keep concise shared orchestration in `SKILL.md` and move repeatable
+It should keep concise shared orchestration in `SKILL.md` and move repeatable
 mechanics into tested scripts. Claude-only frontmatter may remain because it is
 an optional Claude enhancement, not part of the correctness contract.
 
@@ -169,7 +165,7 @@ updates and commits cannot race.
 ### 5. Agent-specific syntax remains only in unfinished skills
 
 Public documentation and completed skills now use namespaced Claude examples.
-When the three remaining skills are rewritten, give each one compact pair when
+When the two remaining skills are rewritten, give each one a compact pair when
 direct invocation matters:
 
 ```text
@@ -189,9 +185,8 @@ Every skill should fit one of five small patterns:
   `configure-downstream`, `create-component-release`, `create-fbc-release`,
   `create-release-tracker`, `fbc-update`, `get-fbc-urls`,
   `konflux-bundle-setup`, `konflux-component-setup`, `release-ls`,
-  `rpm-lockfile-update`, `update-version-labels`, and, after Phase 3,
-  `add-team-member`. Keep only inputs, safety boundaries, root resolution, and
-  one backing-script call.
+  `rpm-lockfile-update`, `update-version-labels`, and `add-team-member`. Keep
+  only inputs, safety boundaries, root resolution, and one backing-script call.
 - **Release conductor:** `autorelease`. Use the same delegate contract plus its
   existing external-write authorization and stop rules.
 - **Host-agent review:** `add-release-notes`. Use deterministic prepare/apply
@@ -228,8 +223,9 @@ and public-guide corrections in `cd5b00c`, `abf2fb9`, `8cf8f05`, and `472ce1c`.
 `scripts/add-team-member.sh`. The script preserves its username and role
 interface, contributor default, singular/plural roles, target default, RBAC
 sorting, manifest rebuild, and local signed commit. It rejects dirty or invalid
-targets and never pushes. Disposable-repository tests cover roles, validation,
-duplicates, target resolution, generated output, and commit contents.
+targets, refuses to overwrite existing local or remote work branches, and never
+pushes. Disposable-repository tests cover roles, validation, duplicates, target
+resolution, generated output, branch collisions, and commit contents.
 
 ### Phase 4: Make release-note review host-neutral
 

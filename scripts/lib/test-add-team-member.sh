@@ -124,6 +124,8 @@ run_success() {
   else
     fail "$name commit body"
   fi
+  assert_eq "$name clean after commit" \
+    "$(git -C "$root" status --porcelain --untracked-files=all)" ''
   if [[ "$output" == *"No branch was pushed."* ]]; then
     pass "$name reports local-only result"
   else
@@ -145,7 +147,7 @@ expect_failure() {
 }
 
 echo "=== Successful role updates ==="
-run_success admin bmiller admin admin
+run_success 'path with spaces' bmiller admin admin
 run_success maintainer csmith maintainers maintainer
 run_success default-contributor dgreen '' contributor
 
@@ -159,7 +161,9 @@ done
 
 default_home="$TEST_ROOT/default-home"
 default_root=$(new_fixture 'default-home/konflux/konflux-release-data')
-output=$(env -u KONFLUX_RELEASE_DATA HOME="$default_home" "$ADD_TEAM_MEMBER" auser 2>&1)
+yamllint_site=$(python3 -c 'import pathlib, yamllint; print(pathlib.Path(yamllint.__file__).resolve().parent.parent)')
+output=$(env -u KONFLUX_RELEASE_DATA HOME="$default_home" PYTHONPATH="$yamllint_site" \
+  "$ADD_TEAM_MEMBER" auser 2>&1)
 if [[ "$output" == *"No changes needed."* ]] && [ "$default_root" = "$default_home/konflux/konflux-release-data" ]; then
   pass 'default target path'
 else
@@ -200,6 +204,41 @@ rm "$missing_rbac/tenants-config/cluster/kflux-prd-rh02/tenants/submariner-tenan
 git -C "$missing_rbac" add -u
 git -C "$missing_rbac" commit -qm 'Remove admin RBAC'
 expect_failure missing-rbac 'RBAC file not found' "$missing_rbac" newuser admin
+
+malformed_rbac=$(new_fixture malformed-rbac)
+printf 'subjects:\n  - name: [\n' > \
+  "$malformed_rbac/tenants-config/cluster/kflux-prd-rh02/tenants/submariner-tenant/rbac-admins.yaml"
+git -C "$malformed_rbac" add -u
+git -C "$malformed_rbac" commit -qm 'Break admin RBAC YAML'
+expect_failure malformed-rbac 'syntax error' "$malformed_rbac" newuser admin
+assert_eq 'malformed RBAC does not create branch' \
+  "$(git -C "$malformed_rbac" branch --show-current)" main
+
+wrong_root=$(new_fixture wrong-root)
+mkdir "$wrong_root/nested"
+mv "$wrong_root/tenants-config" "$wrong_root/nested/"
+git -C "$wrong_root" add -A
+git -C "$wrong_root" commit -qm 'Nest target structure'
+expect_failure wrong-git-root 'Git root does not match target directory' \
+  "$wrong_root/nested" newuser
+
+local_branch=$(new_fixture local-branch)
+git -C "$local_branch" checkout -qb add-newuser-contributor
+printf 'preserve me\n' > "$local_branch/local-work"
+git -C "$local_branch" add local-work
+git -C "$local_branch" commit -qm 'Unpushed branch work'
+local_branch_sha=$(git -C "$local_branch" rev-parse HEAD)
+git -C "$local_branch" checkout -q main
+expect_failure local-branch-exists 'already exists locally' "$local_branch" newuser
+assert_eq 'existing local branch is preserved' \
+  "$(git -C "$local_branch" rev-parse add-newuser-contributor)" "$local_branch_sha"
+
+remote_branch=$(new_fixture remote-branch)
+git -C "$remote_branch" update-ref \
+  refs/remotes/origin/add-newuser-contributor HEAD
+expect_failure remote-branch-exists 'already exists on origin' "$remote_branch" newuser
+assert_eq 'remote collision does not create local branch' \
+  "$(git -C "$remote_branch" branch --list add-newuser-contributor)" ''
 
 stale_generated=$(new_fixture stale-generated)
 cat > "$stale_generated/tenants-config/build-single.sh" <<'EOF'

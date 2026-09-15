@@ -40,8 +40,11 @@ cd "$TARGET_ROOT"
 
 [ -f tenants-config/build-single.sh ] || \
   die "Invalid konflux-release-data repository (missing tenants-config/build-single.sh)"
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+git_root=$(git rev-parse --show-toplevel 2>/dev/null) || \
   die "Target is not a Git worktree: $TARGET_ROOT"
+if [ "$(cd "$git_root" && pwd -P)" != "$(pwd -P)" ]; then
+  die "Git root does not match target directory: $TARGET_ROOT"
+fi
 
 worktree_status=$(git status --porcelain --untracked-files=all) || \
   die "Failed to inspect target worktree"
@@ -53,6 +56,7 @@ fi
 
 RBAC_FILE="tenants-config/cluster/kflux-prd-rh02/tenants/submariner-tenant/rbac-${ROLE}s.yaml"
 [ -f "$RBAC_FILE" ] || die "RBAC file not found: $RBAC_FILE"
+yamllint "$RBAC_FILE"
 
 if TARGET_USER="$TARGET_USER" yq eval -e \
   '.subjects[] | select(.kind == "User" and .name == strenv(TARGET_USER))' \
@@ -63,10 +67,10 @@ fi
 
 BRANCH="add-${TARGET_USER}-${ROLE}"
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
-  if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
-    die "Branch '$BRANCH' exists locally and on origin; remove it manually before retrying"
-  fi
-  git branch -D "$BRANCH" >/dev/null
+  die "Branch '$BRANCH' already exists locally; review or remove it manually before retrying"
+fi
+if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+  die "Branch '$BRANCH' already exists on origin; choose the existing work or remove it before retrying"
 fi
 git checkout -b "$BRANCH"
 
