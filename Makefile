@@ -1,4 +1,4 @@
-.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-parallel test-parse-ec-log
+.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-parallel test-parse-ec-log test-skills
 
 .DEFAULT_GOAL := help
 
@@ -93,6 +93,7 @@ help:
 	@echo "  make test-drift        - Tracker-vs-reality drift detection tests"
 	@echo "  make test-prod-bundle  - Prod-bundle shipped-check (tag-scheme) tests"
 	@echo "  make test-fbc-scope    - FBC per-release OCP-scope derivation tests"
+	@echo "  make test-skills       - Shared Claude/Codex skill compatibility contract"
 	@echo ""
 	@echo "Release Operations:"
 	@echo "  make apply FILE=...    - Validate and apply release YAML to cluster (requires oc login)"
@@ -218,7 +219,10 @@ test-parallel:
 test-parse-ec-log:
 	./scripts/lib/test-parse-ec-log.sh
 
-test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel test-parse-ec-log
+test-skills:
+	./scripts/lib/test-skills-compatibility.sh
+
+test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-skills test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-tracker test-parallel test-parse-ec-log
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

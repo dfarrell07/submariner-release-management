@@ -201,11 +201,19 @@ The static test should verify:
   `AskUserQuestion`, a fixed release-management checkout path, or a direct
   model-CLI invocation such as `claude -p` or `codex exec`. Invocation examples
   are documentation and remain allowed.
+- Shared skill workflows do not use terminal prompts or fixed shared temporary
+  state that depends on one persistent shell session.
 - Usage sections do not present slash-only invocation as universal.
 
 Do not reject valid Claude extension fields. The test protects the shared
 subset while allowing `argument-hint`, `allowed-tools`, `user-invocable`, and
 `context: fork` to remain.
+
+Because this test lands before the known violations are removed, encode the
+current violations as an exact compatibility-debt ratchet. New violations fail
+the test. Each later phase removes the entries it fixes, and all debt sets must
+be empty before this plan is complete. Do not add broad exclusions or keep
+resolved entries merely to make the test pass.
 
 ### Phase 2: Normalize the simple skills
 
