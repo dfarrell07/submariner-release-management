@@ -207,6 +207,20 @@ check(
     ", ".join(sorted(invocation_mismatches)),
 )
 
+bare_public_invocations = []
+for public_doc in (root / "README.md", root / ".claude" / "SKILLS.md"):
+    text = public_doc.read_text(encoding="utf-8")
+    for name in expected_skills:
+        if re.search(rf"/{re.escape(name)}(?:\s|`|$)", text):
+            bare_public_invocations.append(
+                f"{public_doc.relative_to(root)}: /{name}"
+            )
+check(
+    not bare_public_invocations,
+    "public Claude examples use the plugin namespace",
+    ", ".join(sorted(bare_public_invocations)),
+)
+
 print("\n=== Compatibility Debt Ratchet ===")
 actual_argument_debt = {name for name, text in skill_text.items() if "$ARGUMENTS" in text}
 actual_host_tool_debt = {name for name, text in skill_text.items() if "AskUserQuestion" in text}

@@ -78,22 +78,22 @@ acli jira auth status
 /plugin install release-management@submariner-release
 ```
 
-| Command                     | Purpose                                        |
-|-----------------------------|------------------------------------------------|
-| `/learn-release`            | Learn 20-step release workflow                 |
-| `/release-ls`               | Check release status                           |
-| `/configure-downstream`     | Create Konflux app for new version             |
-| `/add-fbc-ocp-version`      | Add FBC support for new OCP version            |
-| `/add-team-member`          | Add user to Submariner Konflux RBAC            |
-| `/konflux-ci-fix`           | Fix Konflux CI Enterprise Contract issues      |
-| `/konflux-component-setup`  | Automate Konflux component setup on new branch |
-| `/bundle-image-update`      | Update bundle image SHAs from snapshots        |
-| `/add-release-notes`        | Add release notes from Jira, per-issue review  |
-| `/rpm-lockfile-update`      | Update RPM lockfiles across repos              |
-| `/konflux-bundle-setup`     | Automate Konflux bundle setup on new branch    |
-| `/create-component-release` | Create component release (stage or prod)       |
-| `/create-fbc-release`       | Create FBC releases for all OCP versions       |
-| `/get-fbc-urls`             | Get FBC catalog URLs for QE sharing            |
+| Command                                        | Purpose                                        |
+|------------------------------------------------|------------------------------------------------|
+| `/release-management:learn-release`            | Learn 20-step release workflow                 |
+| `/release-management:release-ls`               | Check release status                           |
+| `/release-management:configure-downstream`     | Create Konflux app for new version             |
+| `/release-management:add-fbc-ocp-version`      | Add FBC support for new OCP version            |
+| `/release-management:add-team-member`          | Add user to Submariner Konflux RBAC            |
+| `/release-management:konflux-ci-fix`           | Fix Konflux CI Enterprise Contract issues      |
+| `/release-management:konflux-component-setup`  | Automate Konflux component setup on new branch |
+| `/release-management:bundle-image-update`      | Update bundle image SHAs from snapshots        |
+| `/release-management:add-release-notes`        | Add release notes from Jira, per-issue review  |
+| `/release-management:rpm-lockfile-update`      | Update RPM lockfiles across repos              |
+| `/release-management:konflux-bundle-setup`     | Automate Konflux bundle setup on new branch    |
+| `/release-management:create-component-release` | Create component release (stage or prod)       |
+| `/release-management:create-fbc-release`       | Create FBC releases for all OCP versions       |
+| `/release-management:get-fbc-urls`             | Get FBC catalog URLs for QE sharing            |
 
 See [.claude/SKILLS.md](.claude/SKILLS.md).
 

@@ -1,38 +1,38 @@
 # Skills
 
-## /learn-release
+## /release-management:learn-release
 
 Teaches Submariner release process
 
 ```bash
-/learn-release overview
-/learn-release step 5
+/release-management:learn-release overview
+/release-management:learn-release step 5
 ```
 
-## /release-ls
+## /release-management:release-ls
 
 Checks release status
 
 ```bash
-/release-ls 0.22.0
+/release-management:release-ls 0.22.0
 ```
 
-## /configure-downstream
+## /release-management:configure-downstream
 
 Configure Konflux for new Submariner version (Y-stream releases)
 
 ```bash
-/configure-downstream 0.23
-/configure-downstream 0.23.0  # Extracts major.minor
+/release-management:configure-downstream 0.23
+/release-management:configure-downstream 0.23.0  # Extracts major.minor
 make configure-downstream VERSION=0.23
 ```
 
-## /add-fbc-ocp-version
+## /release-management:add-fbc-ocp-version
 
 Add FBC support for new OCP version in Konflux release data
 
 ```bash
-/add-fbc-ocp-version 4.22 0.23
+/release-management:add-fbc-ocp-version 4.22 0.23
 make add-fbc-ocp-version OCP_VERSION=4.22 MIN_SUB=0.23
 ```
 
@@ -47,38 +47,38 @@ make add-fbc-ocp-version OCP_VERSION=4.22 MIN_SUB=0.23
 
 **After running:** Push branch, create GitLab MR, then handle bot PR per Phase 2 instructions
 
-## /add-team-member
+## /release-management:add-team-member
 
 Add user to Submariner Konflux team RBAC
 
 ```bash
-/add-team-member alice maintainer
-/add-team-member bob admin
-/add-team-member charlie  # Defaults to contributor (read-only)
+/release-management:add-team-member alice maintainer
+/release-management:add-team-member bob admin
+/release-management:add-team-member charlie  # Defaults to contributor (read-only)
 ```
 
-## /konflux-ci-fix
+## /release-management:konflux-ci-fix
 
 Diagnose and fix Konflux CI Enterprise Contract violations
 
 ```bash
 # From release-management (use shortcuts):
-/konflux-ci-fix operator              # Short form
-/konflux-ci-fix lighthouse 0.21       # Short form with branch
-/konflux-ci-fix PR-1234 subctl        # Short form with PR
+/release-management:konflux-ci-fix operator              # Short form
+/release-management:konflux-ci-fix lighthouse 0.21       # Short form with branch
+/release-management:konflux-ci-fix PR-1234 subctl        # Short form with PR
 
 # Or use full paths:
-/konflux-ci-fix ~/go/src/submariner-io/submariner-operator
+/release-management:konflux-ci-fix ~/go/src/submariner-io/submariner-operator
 
 # From component repo:
-/konflux-ci-fix                       # Current repo, current branch
-/konflux-ci-fix 0.21                  # Current repo, specified branch
-/konflux-ci-fix PR-1234               # Current repo, specific PR
+/release-management:konflux-ci-fix                       # Current repo, current branch
+/release-management:konflux-ci-fix 0.21                  # Current repo, specified branch
+/release-management:konflux-ci-fix PR-1234               # Current repo, specific PR
 ```
 
 **Shortcuts:** operator, submariner, lighthouse, shipyard, subctl
 
-## /konflux-component-setup
+## /release-management:konflux-component-setup
 
 Automate Konflux component setup on new release branches
 
@@ -87,16 +87,16 @@ Handles 8 components across 5 repos. Runs 12 automated setup steps and creates p
 
 ```bash
 # From release-management (use shortcuts):
-/konflux-component-setup operator 0.23              # Setup operator
-/konflux-component-setup submariner submariner-gateway 0.23  # Multi-component repo
-/konflux-component-setup lighthouse lighthouse-agent 0.23    # Specify component
+/release-management:konflux-component-setup operator 0.23
+/release-management:konflux-component-setup submariner submariner-gateway 0.23
+/release-management:konflux-component-setup lighthouse lighthouse-agent 0.23
 
 # From component repo (auto-detection):
-/konflux-component-setup                            # Detect from branch
-/konflux-component-setup 0.23                       # Specify version
+/release-management:konflux-component-setup        # Detect from branch
+/release-management:konflux-component-setup 0.23   # Specify version
 
 # Use full paths:
-/konflux-component-setup ~/go/src/submariner-io/subctl subctl 0.23
+/release-management:konflux-component-setup ~/go/src/submariner-io/subctl subctl 0.23
 ```
 
 **Shortcuts:** operator, submariner, lighthouse, shipyard, subctl
@@ -118,7 +118,7 @@ make konflux-component-setup REPO=submariner COMPONENT=submariner-gateway VERSIO
 
 **Requirements:**
 
-- `/configure-downstream` must be complete (bot PR branches created)
+- `/release-management:configure-downstream` must be complete (bot PR branches created)
 - Previous release branch must exist (e.g., `release-0.22` when setting up 0.23)
 
 **What it does:**
@@ -130,7 +130,7 @@ make konflux-component-setup REPO=submariner COMPONENT=submariner-gateway VERSIO
 
 **After running:** Review commits, validate YAML, push to remote, wait for build (~15-30 min)
 
-## /bundle-image-update
+## /release-management:bundle-image-update
 
 Update bundle component image SHAs from Konflux snapshots
 
@@ -138,9 +138,9 @@ Automates extraction of component SHAs from passing Konflux snapshots, updates b
 regenerates bundle manifests, and verifies all SHAs match.
 
 ```bash
-/bundle-image-update                              # Auto: latest snapshot, SHA-only
-/bundle-image-update 0.21.2                       # Version bump to 0.21.2
-/bundle-image-update --snapshot submariner-0-21-xxxxx  # Specific snapshot
+/release-management:bundle-image-update                              # Auto: latest snapshot, SHA-only
+/release-management:bundle-image-update 0.21.2                       # Version bump to 0.21.2
+/release-management:bundle-image-update --snapshot submariner-0-21-xxxxx  # Specific snapshot
 ```
 
 **Alternative (make target):**
@@ -169,7 +169,7 @@ make bundle-image-update VERSION=0.21.2 SNAPSHOT=submariner-0-21-xxxxx
 
 **After running:** Review commit, push to remote, wait for bundle rebuild (~15-30 min)
 
-## /add-release-notes
+## /release-management:add-release-notes
 
 Add release notes from Jira to stage YAML
 
@@ -194,16 +194,16 @@ make add-release-notes VERSION=0.22.1 STAGE_YAML=path/to/file.yaml
 
 **After running:** Review (`git show`), amend, push
 
-## /rpm-lockfile-update
+## /release-management:rpm-lockfile-update
 
 Regenerates RPM lockfiles in submariner and shipyard repositories by creating fix branches, running hermetic builds,
 and committing updated lockfiles.
 
 ```bash
-/rpm-lockfile-update                             # Auto-detect branch, all repos
-/rpm-lockfile-update 0.21                        # Explicit branch, all repos
-/rpm-lockfile-update gateway                     # Auto-detect branch, gateway only
-/rpm-lockfile-update 0.21 submariner             # Explicit branch, repo filter
+/release-management:rpm-lockfile-update                             # Auto-detect branch, all repos
+/release-management:rpm-lockfile-update 0.21                        # Explicit branch, all repos
+/release-management:rpm-lockfile-update gateway                     # Auto-detect branch, gateway only
+/release-management:rpm-lockfile-update 0.21 submariner             # Explicit branch, repo filter
 make rpm-lockfile-update                         # Auto-detect branch
 make rpm-lockfile-update COMPONENT=gateway       # Auto-detect, component filter
 make rpm-lockfile-update BRANCH=0.21 COMPONENT=gateway  # Explicit branch
@@ -215,7 +215,7 @@ make rpm-lockfile-update BRANCH=0.21 COMPONENT=gateway  # Explicit branch
 
 **After running:** Review commits, push to remote, create PRs per repo
 
-## /konflux-bundle-setup
+## /release-management:konflux-bundle-setup
 
 Automate Konflux bundle setup on new release branches
 
@@ -224,8 +224,8 @@ Runs 14 automated setup steps and creates 6-9 commits for easy review.
 
 ```bash
 # Can run from anywhere (auto-navigates to submariner-operator):
-/konflux-bundle-setup              # Auto-detect version from branch
-/konflux-bundle-setup 0.23         # Specify version explicitly
+/release-management:konflux-bundle-setup              # Auto-detect version from branch
+/release-management:konflux-bundle-setup 0.23         # Specify version explicitly
 ```
 
 **Alternative (make target):**
@@ -237,7 +237,7 @@ make konflux-bundle-setup VERSION=0.23
 **Requirements:**
 
 - `~/go/src/submariner-io/submariner-operator` repository must exist (auto-navigates if needed)
-- `/configure-downstream` must be complete (bot PR branch created)
+- `/release-management:configure-downstream` must be complete (bot PR branch created)
 - Previous release branch must exist (e.g., `release-0.20`)
 
 **What it does:**
@@ -256,30 +256,30 @@ make konflux-bundle-setup VERSION=0.23
 
 **After running:** Review commits, validate YAML (`make yamllint`), push to remote, wait for build (~15-30 min)
 
-## /get-fbc-urls
+## /release-management:get-fbc-urls
 
 Get FBC catalog URLs for QE sharing (Release CRs, snapshots, or prod index)
 
 ```bash
-/get-fbc-urls 0.24.0                    # All OCP versions
-/get-fbc-urls 0.24.0 --ocp 4.21         # Single OCP version
-/get-fbc-urls 0.24.0 --raw-url          # URLs only (for automation)
-/get-fbc-urls 0.24.0 --prod-index       # Prod operator index URLs
+/release-management:get-fbc-urls 0.24.0                    # All OCP versions
+/release-management:get-fbc-urls 0.24.0 --ocp 4.21         # Single OCP version
+/release-management:get-fbc-urls 0.24.0 --raw-url          # URLs only (for automation)
+/release-management:get-fbc-urls 0.24.0 --prod-index       # Prod operator index URLs
 make get-fbc-urls VERSION=0.24.0        # Via make target
 make get-fbc-urls VERSION=0.24.0 PROD_INDEX=true
 ```
 
-## /create-fbc-release
+## /release-management:create-fbc-release
 
 Create FBC releases for all OCP versions (stage or prod) with comprehensive verification
 
 Automates Step 12 (FBC stage releases) and Step 17 (FBC prod releases) of the Submariner release workflow.
 
 ```bash
-/create-fbc-release 0.22.1 --stage   # Create stage releases
-/create-fbc-release 0.22.1 --prod    # Create prod releases
-/create-fbc-release 0.22 --stage     # Auto-detects latest patch
-/create-fbc-release 0.22             # Defaults to stage
+/release-management:create-fbc-release 0.22.1 stage  # Create stage releases
+/release-management:create-fbc-release 0.22.1 prod   # Create prod releases
+/release-management:create-fbc-release 0.22 stage    # Expands to 0.22.0
+/release-management:create-fbc-release 0.22          # Defaults to stage
 ```
 
 **Alternative (make target):**
@@ -314,17 +314,17 @@ make create-fbc-releases VERSION=0.22.1 TYPE=prod    # Production
 
 **To undo:** `git reset HEAD~1`
 
-## /create-component-release
+## /release-management:create-component-release
 
 Create component release (stage or prod) with comprehensive verification
 
 Automates Step 8 (stage) and Step 15 (prod) of the Submariner release workflow.
 
 ```bash
-/create-component-release 0.22.1          # Stage (default)
-/create-component-release 0.22.1 stage    # Stage (explicit)
-/create-component-release 0.22.1 prod     # Prod (copies stage)
-/create-component-release 0.22            # Auto-expands to 0.22.0
+/release-management:create-component-release 0.22.1          # Stage (default)
+/release-management:create-component-release 0.22.1 stage    # Stage (explicit)
+/release-management:create-component-release 0.22.1 prod     # Prod (copies stage)
+/release-management:create-component-release 0.22            # Auto-expands to 0.22.0
 ```
 
 **Alternative (make target):**
