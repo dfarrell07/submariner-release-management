@@ -2,7 +2,7 @@
 name: create-release-tracker
 description: Create Jira release tracker with parent task and 15-18 subtasks for Submariner release workflow tracking
 version: 1.0.0
-argument-hint: "<version> [--qe-assignee EMAIL] [--dry-run]"
+argument-hint: "<version> [--y-stream|--z-stream] [--qe-assignee EMAIL] [--dry-run]"
 user-invocable: true
 allowed-tools: Bash
 ---
@@ -23,16 +23,20 @@ Codex:  $release-management:create-release-tracker 0.24.0 --dry-run
 ```
 
 Without `--dry-run`, the skill creates or reuses the tracker. The version may
-be two or three segments. Use `--qe-assignee <email>` to assign the QE subtask.
+be two or three segments. The script normally infers the stream from the
+version; pass `--y-stream` or `--z-stream` only when the user explicitly asks
+to override that inference. The stream flags are mutually exclusive. Use
+`--qe-assignee <email>` to assign the QE subtask.
 
 **Requires:** `acli jira auth login --web` (needed even for `--dry-run`, which
 still does a read-only Jira check for an existing tracker), `jq`
 
 ## Inputs and execution
 
-The release version is required. Optional arguments are `--qe-assignee <email>`
-and `--dry-run`. Use exactly the values supplied by the user; do not infer a
-version, assignee, or mutation mode.
+The release version is required. Optional arguments are `--y-stream`,
+`--z-stream`, `--qe-assignee <email>`, and `--dry-run`. Use exactly the values
+supplied by the user; do not infer a version, stream override, assignee, or
+mutation mode.
 
 Resolve the release-management root before running the operation. If
 `${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
