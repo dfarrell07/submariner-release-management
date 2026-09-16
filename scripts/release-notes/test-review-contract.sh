@@ -48,6 +48,10 @@ make_tools() {
   mkdir -p "$bin"
   cat > "$bin/acli" <<'EOF'
 #!/bin/bash
+if [[ " $* " == *" workitem search "* ]]; then
+  echo '[]'
+  exit 0
+fi
 cat <<JSON
 {
   "fields": {
@@ -94,7 +98,11 @@ new_fixture() {
     echo '  data:'
     echo '    releaseNotes:'
     echo '      issues:'
-    echo '        fixed:'
+    if [[ $# -eq 0 ]]; then
+      echo '        fixed: []'
+    else
+      echo '        fixed:'
+    fi
     local key
     for key in "$@"; do
       printf '          - id: %s\n' "$key"
@@ -163,8 +171,13 @@ run_dir=$(prepare_run "$repo" "$stage" "$data" "$tools" "$tmp")
 assert_eq 'manifest contains only non-CVE issues' \
   "$(jq -r '[.issues[].key] | join(",")' "$run_dir/manifest.json")" \
   'ACM-200,ACM-300,ACM-400,ACM-500,ACM-600'
+assert_eq 'manifest uses the current contract schema' \
+  "$(jq -r '.schema' "$run_dir/manifest.json")" 2
 assert_eq 'manifest records excluded CVE' \
   "$(jq -r '.excluded_cve_keys | join(",")' "$run_dir/manifest.json")" ACM-100
+assert_eq 'manifest records complete prepared issue set' \
+  "$(jq -r '.stage_issue_keys | join(",")' "$run_dir/manifest.json")" \
+  'ACM-100,ACM-200,ACM-300,ACM-400,ACM-500,ACM-600'
 assert_eq 'one evidence bundle per review issue' \
   "$(find "$run_dir/bundles" -type f -name '*.md' | wc -l)" 5
 if rg -q 'Pre-fetched Evidence for ACM-200' "$run_dir/bundles/ACM-200.md" && \
@@ -256,6 +269,61 @@ else
 fi
 
 echo
+echo "=== No-review terminal result ==="
+IFS=$'\t' read -r repo_none stage_none data_none tools_none tmp_none < <(
+  new_fixture no-issues
+)
+none_output=$(cd "$repo_none" && \
+  PATH="$tools_none:$PATH" TMPDIR="$tmp_none" RELEASE_NOTES_DATA="$data_none" \
+  "$REVIEW_SCRIPT" prepare 0.23.1 --stage-yaml "$stage_none")
+assert_contains 'empty issue list returns explicit terminal status' "$none_output" \
+  'REVIEW_STATUS=no-reviewable-issues'
+
+IFS=$'\t' read -r repo_cves stage_cves data_cves tools_cves tmp_cves < <(
+  new_fixture all-cves ACM-100
+)
+cves_output=$(cd "$repo_cves" && \
+  PATH="$tools_cves:$PATH" TMPDIR="$tmp_cves" RELEASE_NOTES_DATA="$data_cves" \
+  "$REVIEW_SCRIPT" prepare 0.23.1 --stage-yaml "$stage_cves")
+assert_contains 'all-CVE issue list returns explicit terminal status' "$cves_output" \
+  'REVIEW_STATUS=no-reviewable-issues'
+assert_eq 'no-review result does not emit a run directory' \
+  "$(grep -c '^REVIEW_RUN_DIR=' <<< "$cves_output" || true)" 0
+
+echo
+echo "=== Stage drift rejection ==="
+IFS=$'\t' read -r repo_drift stage_drift data_drift tools_drift tmp_drift < <(
+  new_fixture added-issue-drift ACM-100 ACM-710
+)
+drift_run=$(prepare_run "$repo_drift" "$stage_drift" "$data_drift" "$tools_drift" "$tmp_drift")
+ISSUE_KEY=ACM-711 yq eval -i \
+  '.spec.data.releaseNotes.issues.fixed += [{"id": strenv(ISSUE_KEY)}]' "$stage_drift"
+git -C "$repo_drift" add -- "$stage_drift"
+git -C "$repo_drift" commit -qm 'add issue after review preparation'
+drift_rc=0
+drift_output=$(PATH="$tools_drift:$PATH" "$REVIEW_SCRIPT" apply "$drift_run" 2>&1) || drift_rc=$?
+assert_eq 'issue added after preparation rejects apply' "$drift_rc" 1
+assert_contains 'added issue drift has explicit error' "$drift_output" \
+  'Stage YAML contains issue added after review preparation: ACM-711'
+
+IFS=$'\t' read -r repo_cve_drift stage_cve_drift data_cve_drift tools_cve_drift tmp_cve_drift < <(
+  new_fixture cve-drift ACM-100 ACM-720
+)
+cve_drift_run=$(prepare_run \
+  "$repo_cve_drift" "$stage_cve_drift" "$data_cve_drift" "$tools_cve_drift" "$tmp_cve_drift")
+ISSUE_KEY=ACM-100 yq eval -i \
+  'del(.spec.data.releaseNotes.issues.fixed[] | select(.id == strenv(ISSUE_KEY)))' \
+  "$stage_cve_drift"
+git -C "$repo_cve_drift" add -- "$stage_cve_drift"
+git -C "$repo_cve_drift" commit -qm 'remove CVE after review preparation'
+cve_drift_rc=0
+cve_drift_output=$(PATH="$tools_cve_drift:$PATH" \
+  "$REVIEW_SCRIPT" apply "$cve_drift_run" 2>&1) || cve_drift_rc=$?
+assert_eq 'excluded CVE removed after preparation rejects apply' "$cve_drift_rc" 1
+assert_contains 'missing excluded CVE has explicit error' "$cve_drift_output" \
+  'Excluded CVE issue is missing from the stage YAML: ACM-100'
+
+echo
 echo "=== Corrupt input and manifest rejection ==="
 IFS=$'\t' read -r repo3 stage3 data3 tools3 tmp3 < <(
   new_fixture corrupt-data ACM-100 ACM-800
@@ -270,6 +338,19 @@ assert_eq 'invalid CVE exclusion data fails preparation' "$corrupt_rc" 1
 assert_contains 'invalid CVE data has explicit error' "$corrupt_output" \
   'Invalid review data or CVE exclusion list'
 
+IFS=$'\t' read -r repo_cache stage_cache data_cache tools_cache tmp_cache < <(
+  new_fixture wrong-stage-cache ACM-100 ACM-810
+)
+jq '.metadata.stage_yaml = (.metadata.stage_yaml + ".other")' \
+  "$data_cache" > "$data_cache.tmp"
+mv "$data_cache.tmp" "$data_cache"
+cache_run=$(prepare_run "$repo_cache" "$stage_cache" "$data_cache" "$tools_cache" "$tmp_cache")
+assert_eq 'same-version cache is rebound to selected stage' \
+  "$(jq -r '.metadata.stage_yaml' "$data_cache")" "$stage_cache"
+assert_eq 'wrong-stage CVE cache is not trusted' \
+  "$(jq -r '[.issues[].key] | join(",")' "$cache_run/manifest.json")" \
+  'ACM-100,ACM-810'
+
 IFS=$'\t' read -r repo4 stage4 data4 tools4 tmp4 < <(
   new_fixture unsafe-manifest ACM-100 ACM-900
 )
@@ -282,6 +363,21 @@ unsafe_rc=0
 unsafe_output=$(PATH="$tools4:$PATH" "$REVIEW_SCRIPT" apply "$unsafe_run" 2>&1) || unsafe_rc=$?
 assert_eq 'unsafe manifest path rejected' "$unsafe_rc" 1
 assert_contains 'unsafe path has explicit error' "$unsafe_output" 'Manifest stage path is unsafe'
+
+IFS=$'\t' read -r repo_partition stage_partition data_partition tools_partition tmp_partition < <(
+  new_fixture incomplete-manifest ACM-100 ACM-925
+)
+partition_run=$(prepare_run \
+  "$repo_partition" "$stage_partition" "$data_partition" "$tools_partition" "$tmp_partition")
+jq 'del(.stage_issue_keys[] | select(. == "ACM-925"))' \
+  "$partition_run/manifest.json" > "$partition_run/manifest.tmp"
+mv "$partition_run/manifest.tmp" "$partition_run/manifest.json"
+partition_rc=0
+partition_output=$(PATH="$tools_partition:$PATH" \
+  "$REVIEW_SCRIPT" apply "$partition_run" 2>&1) || partition_rc=$?
+assert_eq 'incomplete manifest issue partition rejected' "$partition_rc" 1
+assert_contains 'incomplete partition has explicit error' "$partition_output" \
+  'Invalid review manifest'
 
 IFS=$'\t' read -r repo5 stage5 data5 tools5 tmp5 < <(
   new_fixture missing-bundle ACM-100 ACM-950

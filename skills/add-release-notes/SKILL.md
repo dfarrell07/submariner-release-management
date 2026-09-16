@@ -34,7 +34,9 @@ checkout containing this `SKILL.md`, `scripts/add-release-notes.sh`, and
    `--stage-yaml` arguments as separate values. This performs collection,
    filtering, auto-apply, and CVE verification using the existing workflow.
 2. Run `scripts/release-notes/review.sh prepare` with the same inputs. Record the
-   printed `REVIEW_RUN_DIR`; it is required for review and recovery.
+   printed `REVIEW_RUN_DIR`; it is required for review and recovery. If the
+   command instead prints `REVIEW_STATUS=no-reviewable-issues`, report that
+   there are no non-CVE issues to review and stop without running apply.
 3. Read `manifest.json` and every evidence bundle listed in it. Each bundle
    contains the review criteria and issue evidence. Review only those manifest
    entries. CVE issues are excluded by preparation and must never receive

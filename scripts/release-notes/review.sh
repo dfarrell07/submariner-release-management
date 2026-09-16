@@ -92,14 +92,20 @@ prepare_reviews() {
   echo "ACM Version: $ACM_VERSION"
   echo "Stage YAML: $stage_yaml"
 
-  local review_data data_version
+  local review_data data_version data_stage data_stage_absolute
   review_data=${RELEASE_NOTES_DATA:-/tmp/release-notes-${VERSION}-data.json}
   data_version=""
+  data_stage=""
+  data_stage_absolute=""
   if [[ -f "$review_data" ]]; then
     data_version=$(jq -r '.metadata.version // ""' "$review_data" 2>/dev/null || true)
+    data_stage=$(jq -r '.metadata.stage_yaml // ""' "$review_data" 2>/dev/null || true)
+    if [[ -n "$data_stage" && -f "$data_stage" ]]; then
+      data_stage_absolute=$(absolute_path "$data_stage")
+    fi
   fi
-  if [[ "$data_version" != "$VERSION" ]]; then
-    echo "Data file missing or for '${data_version:-none}', not $VERSION; re-collecting..."
+  if [[ "$data_version" != "$VERSION" || "$data_stage_absolute" != "$stage_yaml" ]]; then
+    echo "Data file missing or does not match $VERSION and $stage_yaml; re-collecting..."
     if ! RELEASE_NOTES_DATA="$review_data" \
       "$SCRIPT_DIR/collect.sh" "$VERSION" --stage-yaml "$stage_yaml" >/dev/null; then
       die "collect.sh failed; refusing to review without a current CVE exclusion list"
@@ -107,11 +113,17 @@ prepare_reviews() {
   fi
   jq -e --arg version "$VERSION" '
     .metadata.version == $version and
+    (.metadata.stage_yaml | type == "string" and length > 0) and
     (.cve_issues | type == "array") and
     ([.cve_issues[]?.issue_key |
       type == "string" and test("^[A-Z][A-Z0-9]+-[0-9]+$")] | all)
   ' "$review_data" >/dev/null || \
     die "Invalid review data or CVE exclusion list: $review_data"
+  data_stage=$(jq -r '.metadata.stage_yaml' "$review_data")
+  [[ -f "$data_stage" ]] || die "Review data stage YAML not found: $data_stage"
+  data_stage_absolute=$(absolute_path "$data_stage")
+  [[ "$data_stage_absolute" == "$stage_yaml" ]] || \
+    die "Review data does not match the selected stage YAML: $review_data"
   yq eval -e \
     '.spec.data.releaseNotes.issues.fixed | type == "!!seq"' \
     "$stage_yaml" >/dev/null || die "Stage YAML has no valid fixed-issues list: $stage_yaml"
@@ -122,6 +134,7 @@ prepare_reviews() {
   )
   if [[ ${#all_keys[@]} -eq 0 ]]; then
     echo "No issues found in the stage YAML; nothing to review."
+    echo "REVIEW_STATUS=no-reviewable-issues"
     return 0
   fi
 
@@ -147,10 +160,11 @@ prepare_reviews() {
 
   if [[ ${#review_keys[@]} -eq 0 ]]; then
     echo "No non-CVE issues to review."
+    echo "REVIEW_STATUS=no-reviewable-issues"
     return 0
   fi
 
-  local run_dir run_parent manifest issues_json cve_json created_at
+  local run_dir run_parent manifest issues_json cve_json stage_keys_json created_at
   run_parent=${TMPDIR:-/tmp}
   [[ -d "$run_parent" ]] || die "Temporary directory does not exist: $run_parent"
   run_dir=$(mktemp -d "$run_parent/release-notes-review.XXXXXX")
@@ -175,10 +189,11 @@ prepare_reviews() {
          decision:("decisions/" + . + ".json"),
          result:("results/" + . + ".json")})')
   cve_json=$(printf '%s\n' "${cve_keys[@]}" | jq -Rsc 'split("\n")[:-1]')
+  stage_keys_json=$(printf '%s\n' "${all_keys[@]}" | jq -Rsc 'split("\n")[:-1]')
   created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   manifest="$run_dir/manifest.json"
   jq -n \
-    --argjson schema 1 \
+    --argjson schema 2 \
     --arg version "$VERSION" \
     --arg repo_root "$repo_root" \
     --arg stage_yaml "$stage_yaml" \
@@ -188,10 +203,12 @@ prepare_reviews() {
     --arg created_at "$created_at" \
     --argjson issues "$issues_json" \
     --argjson excluded_cve_keys "$cve_json" \
+    --argjson stage_issue_keys "$stage_keys_json" \
     '{schema:$schema, version:$version, repo_root:$repo_root,
       stage_yaml:$stage_yaml, stage_relative:$stage_relative, branch:$branch,
       base_commit:$base_commit, created_at:$created_at, issues:$issues,
-      excluded_cve_keys:$excluded_cve_keys}' > "$manifest"
+      excluded_cve_keys:$excluded_cve_keys,
+      stage_issue_keys:$stage_issue_keys}' > "$manifest"
 
   echo
   echo "Prepared ${#review_keys[@]} review bundles."
@@ -211,7 +228,8 @@ apply_reviews() {
   [[ -f "$manifest" ]] || die "Review manifest not found: $manifest"
 
   jq -e '
-    .schema == 1 and
+    ([.issues[].key]) as $review_keys |
+    .schema == 2 and
     (.version | type == "string") and
     (.repo_root | type == "string") and
     (.stage_yaml | type == "string") and
@@ -219,11 +237,18 @@ apply_reviews() {
     (.branch | type == "string") and
     (.base_commit | test("^[0-9a-f]{40}$")) and
     (.issues | type == "array" and length > 0) and
-    ([.issues[].key] | length == (unique | length)) and
+    ($review_keys | length == (unique | length)) and
     ([.issues[] | .key | test("^[A-Z][A-Z0-9]+-[0-9]+$")] | all) and
     (.excluded_cve_keys | type == "array") and
     ([.excluded_cve_keys[] |
-      type == "string" and test("^[A-Z][A-Z0-9]+-[0-9]+$")] | all)
+      type == "string" and test("^[A-Z][A-Z0-9]+-[0-9]+$")] | all) and
+    (.stage_issue_keys | type == "array" and length > 0) and
+    ([.stage_issue_keys[]] | length == (unique | length)) and
+    ([.stage_issue_keys[] |
+      type == "string" and test("^[A-Z][A-Z0-9]+-[0-9]+$")] | all) and
+    (($review_keys - .stage_issue_keys) | length == 0) and
+    ((.stage_issue_keys - ($review_keys + .excluded_cve_keys)) | length == 0) and
+    (($review_keys - .excluded_cve_keys) | length == ($review_keys | length))
   ' "$manifest" >/dev/null || die "Invalid review manifest: $manifest"
 
   local version repo_root stage_yaml stage_relative branch base_commit
@@ -254,6 +279,29 @@ apply_reviews() {
   local status
   status=$(git -C "$repo_root" status --porcelain --untracked-files=all)
   [[ -z "$status" ]] || die "Repository worktree must be clean before applying decisions"
+
+  yq eval -e '.spec.data.releaseNotes.issues.fixed | type == "!!seq"' \
+    "$stage_yaml" >/dev/null || die "Stage YAML has no valid fixed-issues list: $stage_yaml"
+  local -A original_set=() current_set=()
+  local original_key current_key excluded_key
+  while IFS= read -r original_key; do
+    original_set["$original_key"]=1
+  done < <(jq -r '.stage_issue_keys[]' "$manifest")
+  while IFS= read -r current_key; do
+    [[ -n "$current_key" ]] || continue
+    [[ "$current_key" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] || \
+      die "Invalid issue key in current stage YAML: $current_key"
+    [[ -z "${current_set[$current_key]:-}" ]] || \
+      die "Duplicate issue key in current stage YAML: $current_key"
+    [[ -n "${original_set[$current_key]:-}" ]] || \
+      die "Stage YAML contains issue added after review preparation: $current_key"
+    current_set["$current_key"]=1
+  done < <(yq eval '.spec.data.releaseNotes.issues.fixed[]?.id // ""' "$stage_yaml")
+  while IFS= read -r excluded_key; do
+    if [[ -n "${original_set[$excluded_key]:-}" && -z "${current_set[$excluded_key]:-}" ]]; then
+      die "Excluded CVE issue is missing from the stage YAML: $excluded_key"
+    fi
+  done < <(jq -r '.excluded_cve_keys[]' "$manifest")
 
   local kept=0 removed=0 failed=0 unreviewed=0 recovered=0
   local key bundle_rel decision_rel result_rel bundle_file decision_file result_file

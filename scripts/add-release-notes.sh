@@ -49,6 +49,15 @@ if [[ -z "$VERSION" ]]; then
   exit 1
 fi
 
+if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  VERSION="${VERSION}.0"
+fi
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "❌ ERROR: Invalid version format: $VERSION" >&2
+  echo "Expected format: X.Y or X.Y.Z (e.g., 0.23 or 0.23.1)" >&2
+  exit 1
+fi
+
 # ============================================================================
 # Source Shared Library
 # ============================================================================

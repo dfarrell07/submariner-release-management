@@ -50,7 +50,7 @@ help:
 	@echo "                           Example: make cve-fixes-update VERSION=0.23.1 REPO=submariner"
 	@echo "  make add-release-notes VERSION=... [STAGE_YAML=...]"
 	@echo "                         - Auto-apply ALL filtered release notes to stage YAML and commit"
-	@echo "                           Then run 'make review-release-notes' for per-issue agent review"
+	@echo "                           Then run the add-release-notes skill for active-agent review"
 	@echo "                           Example: make add-release-notes VERSION=0.22.1"
 	@echo "                           Example: make add-release-notes VERSION=0.22.1 STAGE_YAML=releases/0.22/stage/submariner-0-22-1-stage-20260316-01.yaml"
 	@echo "  make review-release-notes VERSION=... [STAGE_YAML=...]"
