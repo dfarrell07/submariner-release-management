@@ -11,12 +11,14 @@ allowed-tools: Bash, Read, Glob
 
 Adds FBC (File-Based Catalog) support for a new OCP version in Konflux release data.
 
-**Usage:**
+**Invocation:**
 
-```bash
-/add-fbc-ocp-version 4.22 0.23
-/add-fbc-ocp-version 4-22 0.23  # Hyphenated format also accepted
+```text
+Claude: /release-management:add-fbc-ocp-version 4.22 0.23
+Codex:  $release-management:add-fbc-ocp-version 4.22 0.23
 ```
+
+The OCP version may also use hyphenated form, for example `4-22 0.23`.
 
 **What it does:**
 
@@ -29,28 +31,16 @@ Adds FBC (File-Based Catalog) support for a new OCP version in Konflux release d
 - Verifies all changes before committing
 - Outputs push command, MR instructions, and Phase 2 instructions
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The OCP version and minimum Submariner version are required. Use exactly the
+values supplied by the user; do not infer either value.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/add-fbc-ocp-version.sh`. Verify the script exists and is executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ ERROR: Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/add-fbc-ocp-version.sh" ]; then
-  echo "❌ ERROR: Required orchestrator script not found"
-  echo "This skill requires: scripts/add-fbc-ocp-version.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/add-fbc-ocp-version.sh" $ARGUMENTS
-```
+Run `scripts/add-fbc-ocp-version.sh`, passing the OCP version and minimum
+Submariner version as two separate arguments in that order. Do not combine
+arguments into a shell string or use `eval`.

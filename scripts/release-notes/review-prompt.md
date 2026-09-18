@@ -127,11 +127,17 @@ Keep if ANY of the following:
 
 ## Decision
 
-Print exactly one of these as the LAST line of your output:
+Write exactly one JSON object to `${DECISION_FILE}`:
 
-- `KEEP: <one-line reason>`
-- `REMOVE: <one-line reason>`
+```json
+{
+  "issue_key": "${ISSUE_KEY}",
+  "decision": "KEEP",
+  "reason": "One-line reason grounded in the evidence"
+}
+```
 
-Do NOT run any bash commands, modify files, or make git commits.
-The calling script handles YAML modification and commits based on
-your verdict line. Just output your reasoning and the verdict.
+Use only `KEEP` or `REMOVE` for `decision`. Keep `reason` to one
+non-empty line. Do not modify the stage YAML or Git repository; the
+apply command validates this file and owns all release-note changes
+and commits. If the evidence is unclear, choose `KEEP`.

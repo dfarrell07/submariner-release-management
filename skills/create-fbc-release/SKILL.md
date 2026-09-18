@@ -20,13 +20,15 @@ Automates Step 12 (FBC stage releases) and Step 17 (FBC prod releases) of the Su
 - Validates YAMLs with make test-remote
 - Automatically commits with descriptive message
 
-**Usage:**
+**Invocation:**
 
-```bash
-/create-fbc-release 0.22.1 stage     # Create stage releases
-/create-fbc-release 0.22.1 prod      # Create prod releases
-/create-fbc-release 0.22.1           # Defaults to stage
+```text
+Claude: /release-management:create-fbc-release 0.22.1 stage
+Codex:  $release-management:create-fbc-release 0.22.1 stage
 ```
+
+Use `prod` for production releases. The environment defaults to `stage` when
+omitted.
 
 **Prerequisites:**
 
@@ -35,28 +37,17 @@ Automates Step 12 (FBC stage releases) and Step 17 (FBC prod releases) of the Su
 - Step 11 complete (FBC catalog updated)
 - FBC snapshots rebuilt (~15-30 min after Step 11)
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The version is required; the optional environment is `stage` or `prod`, and
+the two values are order-independent. Use exactly the values supplied by the
+user and let the backing script apply the documented stage default.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/create-fbc-releases.sh`. Verify the script exists and is executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ ERROR: Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/create-fbc-releases.sh" ]; then
-  echo "❌ ERROR: Required orchestrator script not found"
-  echo "This skill requires: scripts/create-fbc-releases.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/create-fbc-releases.sh" $ARGUMENTS
-```
+Run `scripts/create-fbc-releases.sh`, passing each supplied value as a separate
+argument in the user's original order. Do not combine arguments into a shell
+string or use `eval`.

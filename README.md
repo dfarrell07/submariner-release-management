@@ -54,7 +54,7 @@ make watch NAME=submariner-0-20-2-stage-20250930-01
 # Add release notes to stage release (requires acli authentication)
 make add-release-notes VERSION=0.22.1                          # Auto-find latest stage YAML
 make add-release-notes VERSION=0.22.1 STAGE_YAML=...           # Use specific YAML
-make review-release-notes VERSION=0.22.1                       # Per-issue agent review
+make review-release-notes VERSION=0.22.1                       # Prepare active-agent review bundles
 
 # Get FBC catalog URLs for QE sharing (requires cluster login or skopeo)
 make get-fbc-urls VERSION=0.24.0                          # All OCP versions
@@ -78,21 +78,36 @@ acli jira auth status
 /plugin install release-management@submariner-release
 ```
 
-| Command                     | Purpose                                        |
-|-----------------------------|------------------------------------------------|
-| `/learn-release`            | Learn 20-step release workflow                 |
-| `/release-ls`               | Check release status                           |
-| `/configure-downstream`     | Create Konflux app for new version             |
-| `/add-fbc-ocp-version`      | Add FBC support for new OCP version            |
-| `/add-team-member`          | Add user to Submariner Konflux RBAC            |
-| `/konflux-ci-fix`           | Fix Konflux CI Enterprise Contract issues      |
-| `/konflux-component-setup`  | Automate Konflux component setup on new branch |
-| `/bundle-image-update`      | Update bundle image SHAs from snapshots        |
-| `/add-release-notes`        | Add release notes from Jira, per-issue review  |
-| `/rpm-lockfile-update`      | Update RPM lockfiles across repos              |
-| `/konflux-bundle-setup`     | Automate Konflux bundle setup on new branch    |
-| `/create-component-release` | Create component release (stage or prod)       |
-| `/create-fbc-release`       | Create FBC releases for all OCP versions       |
-| `/get-fbc-urls`             | Get FBC catalog URLs for QE sharing            |
+| Command                                        | Purpose                                        |
+|------------------------------------------------|------------------------------------------------|
+| `/release-management:learn-release`            | Learn 20-step release workflow                 |
+| `/release-management:release-ls`               | Check release status                           |
+| `/release-management:configure-downstream`     | Create Konflux app for new version             |
+| `/release-management:add-fbc-ocp-version`      | Add FBC support for new OCP version            |
+| `/release-management:add-team-member`          | Add user to Submariner Konflux RBAC            |
+| `/release-management:konflux-ci-fix`           | Fix Konflux CI Enterprise Contract issues      |
+| `/release-management:konflux-component-setup`  | Automate Konflux component setup on new branch |
+| `/release-management:bundle-image-update`      | Update bundle image SHAs from snapshots        |
+| `/release-management:add-release-notes`        | Add release notes from Jira, per-issue review  |
+| `/release-management:rpm-lockfile-update`      | Update RPM lockfiles across repos              |
+| `/release-management:konflux-bundle-setup`     | Automate Konflux bundle setup on new branch    |
+| `/release-management:create-component-release` | Create component release (stage or prod)       |
+| `/release-management:create-fbc-release`       | Create FBC releases for all OCP versions       |
+| `/release-management:get-fbc-urls`             | Get FBC catalog URLs for QE sharing            |
 
 See [.claude/SKILLS.md](.claude/SKILLS.md).
+
+## Codex Skills
+
+Codex discovers repository skills through the relative `.agents/skills` symlink
+to `skills/`; no separate installation or skill copy is needed. Type `$` to select
+a skill, for example `$release-management:autorelease 0.25.1` or
+`$release-management:release-ls 0.25.1`. Use the displayed name if your client omits
+the plugin prefix. The skill files and release scripts are shared with Claude.
+
+Start Codex at this checkout (or open a new session after updating it).
+Follow [AGENTS.md](AGENTS.md) for explicit argument binding in legacy examples.
+The link enables discovery; it does not change release-script behavior.
+In particular, normal `autorelease` execution writes to Jira and can push branches,
+create PRs, and enable PR auto-merge. It requires explicit authorization for those
+actions. Use `--dry-run` to preview.

@@ -15,38 +15,33 @@ Automate the setup of Konflux CI/CD bundle builds on new release branches for Su
 configures hermetic builds, multi-platform support, file change filters, and updates task references.
 Creates 6-9 commits.
 
-**Usage:**
+**Invocation:**
 
-```bash
-/konflux-bundle-setup              # Auto-detect version from branch
-/konflux-bundle-setup 0.23         # Specify version explicitly
+```text
+Claude: /release-management:konflux-bundle-setup 0.23
+Codex:  $release-management:konflux-bundle-setup 0.23
+```
+
+Omit the version to auto-detect it from the branch. The equivalent Make form
+is:
+
+```text
 make konflux-bundle-setup VERSION=0.23
 ```
 
 **Requirements:** `~/go/src/submariner-io/submariner-operator` must exist. Auto-navigates if needed.
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The version is optional. Preserve a supplied version; otherwise run the script
+without arguments and allow its documented branch detection. Do not invent a
+version.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/konflux-bundle-setup.sh`. Verify the script exists and is executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "❌ ERROR: Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/konflux-bundle-setup.sh" ]; then
-  echo "❌ ERROR: Required orchestrator script not found"
-  echo "This skill requires: scripts/konflux-bundle-setup.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/konflux-bundle-setup.sh" $ARGUMENTS
-```
+Run `scripts/konflux-bundle-setup.sh` with the supplied version as one argument,
+or with no arguments for auto-detection. Do not combine arguments into a shell
+string or use `eval`.

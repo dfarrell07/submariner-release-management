@@ -24,7 +24,7 @@ source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
 
 # ━━━ CONSTANTS ━━━
 
-readonly SUBMARINER_BASE="$HOME/go/src/submariner-io"
+readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
 
 # Repo → Dockerfiles mapping (space-separated within value)
 declare -A REPO_DOCKERFILES=(
@@ -121,6 +121,10 @@ parse_arguments() {
 
 # ━━━ UPDATE LOGIC ━━━
 
+restore_original_ref() {
+  restore_clean_ref "$1"
+}
+
 update_repo() {
   local REPO="$1"
   local REPO_PATH="$SUBMARINER_BASE/$REPO"
@@ -159,6 +163,13 @@ update_repo() {
     fi
   fi
 
+  # Remember where the repo was so we can restore it after committing.
+  local ORIGINAL_REF
+  ORIGINAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ -z "$ORIGINAL_REF" ] || [ "$ORIGINAL_REF" = "HEAD" ]; then
+    ORIGINAL_REF="$(git rev-parse HEAD 2>/dev/null || true)"
+  fi
+
   # Create fix branch from release branch
   if ! git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1; then
     echo "  ✗ Failed to create branch $FIX_BRANCH"
@@ -173,18 +184,19 @@ update_repo() {
     if [ ! -f "$FILE" ]; then
       echo "  ✗ File not found: $FILE"
       REPOS_FAILED+=("$REPO:file-not-found")
+      restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
       echo ""
       return
     fi
 
-    sed -i 's/version="v[0-9.]*"/version="v'"$VERSION"'"/' "$FILE"
-
-    if grep -q "version=\"v${VERSION}\"" "$FILE"; then
+    if sed -i 's/version="v[0-9.]*"/version="v'"$VERSION"'"/' "$FILE" &&
+       grep -q "version=\"v${VERSION}\"" "$FILE"; then
       echo "  ✓ $FILE"
       FILES_UPDATED=$((FILES_UPDATED + 1))
     else
       echo "  ✗ Failed to update $FILE"
       REPOS_FAILED+=("$REPO:sed-failed")
+      restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
       echo ""
       return
     fi
@@ -192,13 +204,12 @@ update_repo() {
 
   # Bundle special case (submariner-operator only)
   if [ "$REPO" = "submariner-operator" ] && [ -f "bundle.Dockerfile.konflux" ]; then
-    sed -i \
+    if sed -i \
       -e 's/^LABEL csv-version="[0-9.]*"/LABEL csv-version="'"$VERSION"'"/' \
       -e 's/^LABEL release="v[0-9.]*"/LABEL release="v'"$VERSION"'"/' \
       -e 's/^LABEL version="v[0-9.]*"/LABEL version="v'"$VERSION"'"/' \
-      bundle.Dockerfile.konflux
-
-    if grep -q "csv-version=\"${VERSION}\"" bundle.Dockerfile.konflux && \
+      bundle.Dockerfile.konflux &&
+       grep -q "csv-version=\"${VERSION}\"" bundle.Dockerfile.konflux && \
        grep -q "release=\"v${VERSION}\"" bundle.Dockerfile.konflux && \
        grep -q "version=\"v${VERSION}\"" bundle.Dockerfile.konflux; then
       echo "  ✓ bundle.Dockerfile.konflux (3 labels)"
@@ -206,6 +217,7 @@ update_repo() {
     else
       echo "  ✗ Failed to update bundle.Dockerfile.konflux"
       REPOS_FAILED+=("$REPO:bundle-sed-failed")
+      restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
       echo ""
       return
     fi
@@ -214,7 +226,11 @@ update_repo() {
   # Check if anything actually changed
   if git diff --quiet; then
     echo "  - Already at v$VERSION"
-    git checkout - 2>/dev/null
+    if ! restore_original_ref "$ORIGINAL_REF"; then
+      REPOS_FAILED+=("$REPO:restore-failed")
+      echo ""
+      return
+    fi
     git branch -D "$FIX_BRANCH" 2>/dev/null || true
     REPOS_SKIPPED+=("$REPO:no-changes")
     echo ""
@@ -231,6 +247,14 @@ Enables correct Konflux image tagging via {{ labels.version }}." >/dev/null 2>&1
   else
     echo "  ✗ Commit failed"
     REPOS_FAILED+=("$REPO:commit-failed")
+    restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
+    echo ""
+    return
+  fi
+
+  # Restore original branch so later steps don't find the repo on a stray branch.
+  if ! restore_original_ref "$ORIGINAL_REF"; then
+    REPOS_FAILED+=("$REPO:restore-failed")
   fi
 
   echo ""
@@ -355,4 +379,6 @@ main() {
   fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

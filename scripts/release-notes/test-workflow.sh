@@ -3,6 +3,11 @@
 # Usage: ./scripts/release-notes/test-workflow.sh [VERSION]
 set -euo pipefail
 
+if [[ ${1:-} == --review-contract ]]; then
+  SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  exec "$SCRIPT_DIR/test-review-contract.sh"
+fi
+
 VERSION="${1:-0.23.1}"
 
 # Use version-namespaced temp files (same contract as add-release-notes.sh)
@@ -176,4 +181,5 @@ echo "  auto-apply.sh:  ✓ Generates valid YAML"
 echo ""
 echo "Ready for production use:"
 echo "  make add-release-notes VERSION=$VERSION"
-echo "  /add-release-notes $VERSION"
+echo "  Claude: /release-management:add-release-notes $VERSION"
+echo "  Codex:  \$release-management:add-release-notes $VERSION"

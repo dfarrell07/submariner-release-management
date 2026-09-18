@@ -113,5 +113,5 @@ commit_release_notes "$STAGE_YAML" "$COMMIT_MSG" "auto-applied"
 
 echo "Next steps:"
 echo "  1. Review auto-included issues: git show"
-echo "  2. Per-issue agent review: make review-release-notes VERSION=$VERSION"
+echo "  2. Prepare per-issue review bundles: make review-release-notes VERSION=$VERSION"
 echo "  3. Push when satisfied: git push"

@@ -1,46 +1,54 @@
 ---
 name: add-release-notes
-description: Add release notes from Jira, then per-issue agent review
+description: Add release notes from Jira, then review each non-CVE issue with the active agent
 version: 3.0.0
 argument-hint: "<version> [--stage-yaml PATH]"
 user-invocable: true
-allowed-tools: Bash, Read
+allowed-tools: Bash, Read, Write
 ---
 
-# Add Release Notes
+# Add and Review Release Notes
 
-Auto-apply ALL filtered Jira issues to stage YAML, then spawn per-issue
-agents to review each issue and remove any that don't belong.
+Collect and filter Jira issues, apply them to the component stage release, verify
+CVE fixes, then review each non-CVE issue with the active Claude or Codex agent.
 
-**Arguments:** $ARGUMENTS
+## Invocation
+
+```text
+Claude: /release-management:add-release-notes 0.24.1
+Codex:  $release-management:add-release-notes 0.24.1
+```
+
+The release version is required. `--stage-yaml PATH` optionally selects a
+specific stage release. Use exactly the values supplied by the user and do not
+infer a version or target file.
 
 ## Workflow
 
-1. **Collect** — query Jira for CVE and non-CVE issues
-2. **Filter** — exclude published issues, invalid resolutions, Z-stream date filter
-3. **Auto-apply** — include ALL filtered issues in stage YAML and commit
-4. **Verify CVEs** — check Clair reports for CVE fixes (if CVEs present)
-5. **Per-issue review** — one agent per issue verifies it belongs, removes with justification if not
+Resolve the release-management root first. If `${CLAUDE_PLUGIN_ROOT}` has been
+expanded to an absolute path, use that plugin root. Otherwise, locate the
+checkout containing this `SKILL.md`, `scripts/add-release-notes.sh`, and
+`scripts/release-notes/review.sh`. Verify both scripts are executable.
 
----
+1. Run `scripts/add-release-notes.sh` with the version and optional
+   `--stage-yaml` arguments as separate values. This performs collection,
+   filtering, auto-apply, and CVE verification using the existing workflow.
+2. Run `scripts/release-notes/review.sh prepare` with the same inputs. Record the
+   printed `REVIEW_RUN_DIR`; it is required for review and recovery. If the
+   command instead prints `REVIEW_STATUS=no-reviewable-issues`, report that
+   there are no non-CVE issues to review and stop without running apply.
+3. Read `manifest.json` and every evidence bundle listed in it. Each bundle
+   contains the review criteria and issue evidence. Review only those manifest
+   entries. CVE issues are excluded by preparation and must never receive
+   removable review decisions.
+4. For each issue, write the decision JSON at the manifest's exact `decision`
+   path. Use the issue key from the manifest, `KEEP` or `REMOVE`, and a non-empty
+   one-line reason grounded in the evidence. Default to `KEEP` when uncertain.
+5. Run `scripts/release-notes/review.sh apply REVIEW_RUN_DIR`. It validates and
+   applies decisions serially, creating one signed commit per removal. If it
+   reports failed or unreviewed issues, correct only their decision files and
+   rerun the same apply command.
 
-```bash
-set -euo pipefail
-
-REPO=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$REPO" ]; then
-  echo "❌ ERROR: Not in a git repository"
-  exit 1
-fi
-
-echo "Phases 1-4: Collect, filter, auto-apply, verify CVEs..."
-bash "$REPO/scripts/add-release-notes.sh" $ARGUMENTS
-
-echo ""
-echo "Phase 5: Per-issue agent review..."
-bash "$REPO/scripts/release-notes/review.sh" $ARGUMENTS
-
-echo ""
-echo "Done. Review removals: git log --oneline"
-echo "Push when satisfied: git push"
-```
+Do not invoke another model CLI or invent decisions for unread bundles. Do not
+push, amend unrelated commits, update Jira, or publish messages. Stop after the
+apply summary so the user can review the release notes and removal commits.

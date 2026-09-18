@@ -136,15 +136,17 @@ assert_eq "noop: fix branch removed" \
   "$(cd "$TEST_REPO" && git show-ref --verify --quiet refs/heads/fix-tekton-tasks-0.99 && echo yes || echo no)" "no"
 assert_eq "noop: restored to original ref" "$(cd "$TEST_REPO" && git rev-parse --abbrev-ref HEAD)" "work"
 
-# 3: Dirty working tree → refused, no branch created, left untouched.
+# 3: Dirty working tree → auto-stashed, updated successfully, stash restored after.
 setup_repo dirty
 printf 'dirty\n' >> "$TMPROOT/repo-dirty/.tekton/pipe.yaml"
 PATCHER_SCRIPT='printf "task: v2\n" > .tekton/pipe.yaml'
 run_update
-assert_eq "dirty: recorded FAILED"  "${REPOS_FAILED[0]:-}" "testcomp:dirty-tree"
-assert_eq "dirty: still on original ref" "$(cd "$TEST_REPO" && git rev-parse --abbrev-ref HEAD)" "work"
-assert_eq "dirty: no fix branch created" \
-  "$(cd "$TEST_REPO" && git show-ref --verify --quiet refs/heads/fix-tekton-tasks-0.99 && echo yes || echo no)" "no"
+assert_eq "dirty: succeeded (not failed)" "${#REPOS_FAILED[@]}" "0"
+assert_eq "dirty: recorded UPDATED" "${REPOS_UPDATED[0]:-}" "testcomp#fix-tekton-tasks-0.99#release-0.99"
+assert_eq "dirty: restored to original ref" "$(cd "$TEST_REPO" && git rev-parse --abbrev-ref HEAD)" "work"
+# The unstaged dirty change was stashed before the branch switch; stash popped after restore.
+assert_eq "dirty: stash popped (unstaged change back)" \
+  "$(cd "$TEST_REPO" && git diff --name-only)" ".tekton/pipe.yaml"
 
 # 4: Base branch missing → failure (needs a fetch), not a silent skip.
 setup_repo nobranch

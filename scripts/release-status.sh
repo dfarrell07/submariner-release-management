@@ -3,6 +3,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RELEASE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 # Parse arguments
 VERSION="${1:-}"
 
@@ -49,11 +52,11 @@ readonly BUNDLE_CLOCK_SKEW_SECS=300  # 5 minutes tolerance for clock skew
 
 # Prod-bundle shipped check (tag-scheme-aware; used by check_component_release_status).
 # shellcheck source=lib/prod-bundle.sh
-source "$(dirname "$0")/lib/prod-bundle.sh"
+source "$SCRIPT_DIR/lib/prod-bundle.sh"
 
 # FBC OCP scope and FBC_OCP_VERSIONS (canonical; single source of truth for OCP list).
 # shellcheck source=lib/fbc-scope.sh
-source "$(dirname "$0")/lib/fbc-scope.sh"
+source "$SCRIPT_DIR/lib/fbc-scope.sh"
 
 # Count and "4.<first>-4.<last>" display range derived from FBC_OCP_VERSIONS (sourced
 # above) so status output can't drift behind the list (token count / first+last token).
@@ -191,12 +194,12 @@ step_applies_to_stream() {
 detect_release_state() {
   # Check for component prod YAML (permanent record, has version in filename)
   local prod_yaml
-  prod_yaml=$(find "releases/$MAJOR_MINOR/prod/" -name "submariner-$FULL_VERSION_DASH-prod-*.yaml" 2>/dev/null | head -1)
+  prod_yaml=$(find "$RELEASE_ROOT/releases/$MAJOR_MINOR/prod/" -name "submariner-$FULL_VERSION_DASH-prod-*.yaml" 2>/dev/null | head -1)
   [ -n "$prod_yaml" ] && echo "complete" && return
 
   # Check for component stage YAML (release started but not complete)
   local stage_yaml
-  stage_yaml=$(find "releases/$MAJOR_MINOR/stage/" -name "submariner-$FULL_VERSION_DASH-stage-*.yaml" 2>/dev/null | head -1)
+  stage_yaml=$(find "$RELEASE_ROOT/releases/$MAJOR_MINOR/stage/" -name "submariner-$FULL_VERSION_DASH-stage-*.yaml" 2>/dev/null | head -1)
   [ -n "$stage_yaml" ] && echo "in-progress" && return
 
   echo "not-started"
@@ -215,10 +218,10 @@ detect_release_state() {
 # so we use date-matching to find FBC YAMLs created near the component release.
 get_release_ocp_scope() {
   # Thin wrapper — delegates to the canonical fbc-scope.sh implementation.
-  # Argument mapping: root=. (repo root), mm=MAJOR_MINOR, fvd=FULL_VERSION_DASH,
+  # Argument mapping: root=RELEASE_ROOT, mm=MAJOR_MINOR, fvd=FULL_VERSION_DASH,
   # env=$1, ocp_list=FBC_OCP_VERSIONS (single source of truth from fbc-scope.sh).
   local env="${1:-prod}"
-  get_fbc_ocp_scope "." "$MAJOR_MINOR" "$FULL_VERSION_DASH" "$env" "$FBC_OCP_VERSIONS"
+  get_fbc_ocp_scope "$RELEASE_ROOT" "$MAJOR_MINOR" "$FULL_VERSION_DASH" "$env" "$FBC_OCP_VERSIONS"
 }
 
 # Helper function: Extract date from component release YAML filename
@@ -230,7 +233,7 @@ get_release_ocp_scope() {
 get_component_yaml_date() {
   local env=$1
   local yaml_file
-  yaml_file=$(find "releases/$MAJOR_MINOR/$env/" -name "submariner-$FULL_VERSION_DASH-$env-*.yaml" 2>/dev/null | sort | tail -1)
+  yaml_file=$(find "$RELEASE_ROOT/releases/$MAJOR_MINOR/$env/" -name "submariner-$FULL_VERSION_DASH-$env-*.yaml" 2>/dev/null | sort | tail -1)
 
   [ -z "$yaml_file" ] && return
 
@@ -263,7 +266,7 @@ find_fbc_yaml_by_date() {
   local best_diff=999999
 
   # Search all YAMLs in directory
-  for yaml in releases/fbc/4-$ocp_version/$env/*.yaml; do
+  for yaml in "$RELEASE_ROOT"/releases/fbc/4-"$ocp_version"/"$env"/*.yaml; do
     [ ! -f "$yaml" ] && continue
 
     # Extract date from filename
@@ -1266,8 +1269,8 @@ fi
 # Find release YAMLs once (used across multiple steps and phase detection).
 # sort | tail -1 = latest attempt = the successful release, chosen deterministically
 # (find output order is unspecified); we read the snapshot/name from this file.
-STAGE_YAML=$(find "releases/$MAJOR_MINOR/stage/" -name "submariner-$FULL_VERSION_DASH-stage-*.yaml" 2>/dev/null | sort | tail -1 || true)
-PROD_YAML=$(find "releases/$MAJOR_MINOR/prod/" -name "submariner-$FULL_VERSION_DASH-prod-*.yaml" 2>/dev/null | sort | tail -1 || true)
+STAGE_YAML=$(find "$RELEASE_ROOT/releases/$MAJOR_MINOR/stage/" -name "submariner-$FULL_VERSION_DASH-stage-*.yaml" 2>/dev/null | sort | tail -1 || true)
+PROD_YAML=$(find "$RELEASE_ROOT/releases/$MAJOR_MINOR/prod/" -name "submariner-$FULL_VERSION_DASH-prod-*.yaml" 2>/dev/null | sort | tail -1 || true)
 
 # Step check results (used across multiple steps and phase detection)
 BRANCH_CHECK=""              # Step 1: Branch existence check

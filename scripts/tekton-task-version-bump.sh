@@ -153,14 +153,13 @@ find_available_branch() {
   done
 }
 
-# Restore repo to original ref; optionally delete a branch.
+# Restore repo to original ref; optionally delete a branch, and pop a stash.
 # Uses -f to discard any uncommitted changes left by a partial patcher run;
 # without -f, git checkout refuses when .tekton/ is dirty and the || true
 # swallows the error, leaving the repo stranded on the fix branch.
+# stash_ref is the SHA of the stash entry to pop (found via stash@{N} lookup).
 _restore_repo() {
-  local original_ref="$1" del_branch="${2:-}"
-  git checkout -f "$original_ref" >/dev/null 2>&1 || true
-  [ -n "$del_branch" ] && git branch -D "$del_branch" >/dev/null 2>&1 || true
+  restore_stashed_worktree "$PWD" "$@"
 }
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
@@ -218,12 +217,6 @@ update_repo() {
 
   cd "$REPO_PATH" || { REPOS_FAILED+=("$REPO:cd-failed"); echo ""; return; }
 
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "  ✗ Working tree not clean (commit/stash first)" >&2
-    REPOS_FAILED+=("$REPO:dirty-tree")
-    echo ""; return
-  fi
-
   local ORIGINAL_REF
   ORIGINAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   if [ -z "$ORIGINAL_REF" ] || [ "$ORIGINAL_REF" = "HEAD" ]; then
@@ -245,9 +238,16 @@ update_repo() {
   local FIX_BRANCH
   FIX_BRANCH=$(find_available_branch "$FIX_BRANCH_BASE" "$REPO_PATH")
 
+  local STASH_REF
+  if ! STASH_REF=$(stash_worktree "$PWD" "tekton-task-bump auto-stash"); then
+    REPOS_FAILED+=("$REPO:stash-failed")
+    return
+  fi
+
   if ! git checkout -b "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1; then
     echo "  ✗ Failed to create branch $FIX_BRANCH" >&2
     REPOS_FAILED+=("$REPO:branch-create-failed")
+    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF" || true
     echo ""; return
   fi
 
@@ -257,7 +257,7 @@ update_repo() {
   if [ ! -d .tekton ]; then
     echo "  ✗ No .tekton/ directory on $BASE_BRANCH" >&2
     REPOS_FAILED+=("$REPO:no-tekton")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
     echo ""; return
   fi
 
@@ -300,7 +300,11 @@ update_repo() {
     for yaml_file in .tekton/*.yaml; do
       [ -f "$yaml_file" ] || continue
       if grep -q "task-${task}:${current_ver}" "$yaml_file" 2>/dev/null; then
-        sed -i.bak "s|task-${task}:${current_ver}|task-${task}:${latest_ver}|g" "$yaml_file"
+        if ! sed -i.bak "s|task-${task}:${current_ver}|task-${task}:${latest_ver}|g" "$yaml_file"; then
+          REPOS_FAILED+=("$REPO:sed-failed")
+          _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
+          return
+        fi
         rm -f "${yaml_file}.bak"
       fi
     done
@@ -313,16 +317,23 @@ update_repo() {
     echo "  ✗ pipeline-patcher failed:" >&2
     printf '%s\n' "$patcher_out" | sed 's/^/      /' >&2
     REPOS_FAILED+=("$REPO:patcher-failed")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
     echo ""; return
   fi
 
   # ── Commit if changed ──────────────────────────────────────────────────────
-  git add .tekton/
+  if ! git add .tekton/; then
+    REPOS_FAILED+=("$REPO:stage-failed")
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
+    return
+  fi
   if git diff --cached --quiet; then
     echo "  - Already current (no version or SHA changes)"
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
-    REPOS_SKIPPED+=("$REPO:no-changes")
+    if _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"; then
+      REPOS_SKIPPED+=("$REPO:no-changes")
+    else
+      REPOS_FAILED+=("$REPO:restore-failed")
+    fi
     echo ""; return
   fi
 
@@ -337,11 +348,11 @@ so Konflux builds pass Enterprise Contract validation."
   if git commit -s -m "$msg" >/dev/null 2>&1; then
     echo "  ✓ Committed ($FIX_BRANCH)"
     REPOS_UPDATED+=("$REPO#$FIX_BRANCH#$BASE_BRANCH")
-    _restore_repo "$ORIGINAL_REF"
+    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF" || REPOS_FAILED+=("$REPO:restore-failed")
   else
     echo "  ✗ Commit failed" >&2
     REPOS_FAILED+=("$REPO:commit-failed")
-    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH"
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
   fi
 
   echo ""

@@ -1,17 +1,18 @@
 #!/bin/bash
-# Review a single Jira issue for release notes inclusion
-# Pre-fetches all evidence, then asks Claude to evaluate it
-# Args: ISSUE_KEY VERSION STAGE_YAML
+# Prepare an evidence bundle for one release-note issue.
+# Args: ISSUE_KEY VERSION STAGE_YAML OUTPUT_FILE DECISION_FILE
 set -euo pipefail
 
-if [[ $# -lt 3 ]]; then
-  echo "Usage: $0 ISSUE_KEY VERSION STAGE_YAML" >&2
+if [[ $# -ne 5 ]]; then
+  echo "Usage: $0 ISSUE_KEY VERSION STAGE_YAML OUTPUT_FILE DECISION_FILE" >&2
   exit 1
 fi
 
 ISSUE_KEY="$1"
 VERSION="$2"
 STAGE_YAML="$3"
+OUTPUT_FILE="$4"
+DECISION_FILE="$5"
 VERSION_MAJOR_MINOR="${VERSION%.*}"
 MINOR_VERSION="${VERSION_MAJOR_MINOR##*.}"
 ACM_VERSION="ACM 2.$((MINOR_VERSION - 7)).0"
@@ -314,7 +315,7 @@ fi
 # ============================================================================
 
 # Export variables for envsubst
-export ISSUE_KEY VERSION STAGE_YAML VERSION_MAJOR_MINOR ACM_VERSION
+export ISSUE_KEY VERSION STAGE_YAML VERSION_MAJOR_MINOR ACM_VERSION DECISION_FILE
 
 # Build the evidence block
 EVIDENCE="## Pre-fetched Evidence for ${ISSUE_KEY}
@@ -355,43 +356,19 @@ PROMPT="${PROMPT_BASE}
 ${EVIDENCE}"
 
 # ============================================================================
-# Invoke Claude to evaluate the evidence
+# Write the host-neutral evidence bundle
 # ============================================================================
 
-OUTPUT=$(claude -p "$PROMPT" \
-  --print \
-  --model sonnet \
-  --allowedTools "Bash" \
-  --dangerously-skip-permissions \
-  2>&1) || true
+OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
+[[ -d "$OUTPUT_DIR" ]] || {
+  echo "ERROR: Output directory not found: $OUTPUT_DIR" >&2
+  exit 1
+}
+[[ ! -e "$OUTPUT_FILE" ]] || {
+  echo "ERROR: Refusing to overwrite evidence bundle: $OUTPUT_FILE" >&2
+  exit 1
+}
 
-# The prompt contracts that the verdict is the LAST line beginning with KEEP or REMOVE
-# (the reasoning above it may quote either word). Select that final verdict line, then
-# branch on it — scanning every line for REMOVE would let a stray "Remove ..." in the
-# reasoning trigger a false removal even when the real verdict is KEEP.
-# Flexible matching: agent may indent or wrap the verdict in markdown (**REMOVE**).
-# `|| true`: OUTPUT (from `claude -p ... || true` above) can be empty or verdict-less;
-# grep then exits 1 and, under pipefail + set -e, would abort here — making the
-# "output unclear, keeping by default" else branch below dead code.
-VERDICT_LINE=$(echo "$OUTPUT" | grep -iE "^\*{0,2}(KEEP|REMOVE)" | tail -1 || true)
-
-if echo "$VERDICT_LINE" | grep -qiE "^\*{0,2}REMOVE"; then
-  REASON=$(echo "$VERDICT_LINE" | sed 's/^[*]*REMOVE:*[*]* *//')
-  echo "  ✗ REMOVE $ISSUE_KEY - $REASON"
-
-  # Execute removal deterministically (don't rely on agent running bash)
-  # Strip markdown formatting from reason for clean commit messages
-  CLEAN_REASON=$(echo "$REASON" | sed 's/\*//g' | sed 's/^[[:space:]]*//')
-  yq eval -i "del(.spec.data.releaseNotes.issues.fixed[] | select(.id == \"$ISSUE_KEY\"))" "$STAGE_YAML"
-  yq eval '.' "$STAGE_YAML" > /dev/null
-  git add "$STAGE_YAML"
-  git commit -s -m "Remove $ISSUE_KEY from ${VERSION} release notes
-
-${CLEAN_REASON:0:78}" || true
-
-elif echo "$VERDICT_LINE" | grep -qiE "^\*{0,2}KEEP"; then
-  REASON=$(echo "$VERDICT_LINE" | sed 's/^[*]*KEEP:*[*]* *//')
-  echo "  ✓ KEEP  $ISSUE_KEY - ${REASON:-issue passes review}"
-else
-  echo "  ? KEEP  $ISSUE_KEY - agent output unclear, keeping by default"
-fi
+TEMP_FILE=$(mktemp "$OUTPUT_DIR/.${ISSUE_KEY}.XXXXXX")
+printf '%s\n' "$PROMPT" > "$TEMP_FILE"
+mv "$TEMP_FILE" "$OUTPUT_FILE"

@@ -10,9 +10,11 @@ set -euo pipefail
 
 # Resolve script location before any cd so lib paths work from any clone location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/git-utils.sh
+source "$SCRIPT_DIR/lib/git-utils.sh"
 
 # Constants
-readonly SUBMARINER_BASE="${HOME}/go/src/submariner-io"
+readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
 readonly COMPONENT_PATTERN="^(gateway|globalnet|route-agent|nettest)$"
 readonly FILTER_PATTERN="^(submariner|shipyard|gateway|globalnet|route-agent|nettest|all)$"
 readonly COMMIT_MSG="Regenerate RPM lockfiles for %s
@@ -99,15 +101,6 @@ parse_arguments() {
   fi
 }
 
-cleanup_empty_branch() {
-  local branch="$1" branch_ref="$2" fix_branch="$3"
-
-  git show-ref --verify --quiet "refs/heads/$branch" && \
-    git checkout "$branch" >/dev/null 2>&1 || \
-    git checkout --detach "$branch_ref" >/dev/null 2>&1
-  git branch -D "$fix_branch" >/dev/null 2>&1 || true
-}
-
 update_lockfiles() {
   local scope
   case "$COMPONENT_FILTER" in
@@ -187,6 +180,20 @@ update_lockfiles() {
 
     local FIX_BRANCH="update-rpm-lockfiles-${REPO_VERSION}"
 
+    # Remember where we are so we can restore after committing.
+    local ORIGINAL_REF
+    ORIGINAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [ -z "$ORIGINAL_REF" ] || [ "$ORIGINAL_REF" = "HEAD" ]; then
+      ORIGINAL_REF="$(git rev-parse HEAD 2>/dev/null || true)"
+    fi
+
+    local initial_status
+    if ! initial_status=$(git status --porcelain --untracked-files=all) || [ -n "$initial_status" ]; then
+      echo "Cannot safely switch $REPO_PATH; inspect and commit or stash local changes first." >&2
+      REPOS_FAILED+=("$DISPLAY_NAME:dirty-tree")
+      continue
+    fi
+
     git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1 || \
       { REPOS_FAILED+=("$DISPLAY_NAME:branch-create-failed"); continue; }
 
@@ -194,6 +201,7 @@ update_lockfiles() {
       echo "❌ Failed to copy update-lockfile.sh from origin/devel"
       echo "   Run: git fetch origin devel"
       REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed")
+      restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
       continue
     }
 
@@ -234,24 +242,35 @@ update_lockfiles() {
 
     if [ $LOCKFILE_EXIT -ne 0 ]; then
       REPOS_FAILED+=("$DISPLAY_NAME:update-script-failed")
+      restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
     elif git diff --quiet $LOCKFILE_PATTERN 2>/dev/null; then
-      cleanup_empty_branch "$REPO_BRANCH" "$BRANCH_REF" "$FIX_BRANCH"
+      if ! restore_clean_ref "$ORIGINAL_REF"; then
+        REPOS_FAILED+=("$DISPLAY_NAME:restore-failed")
+        continue
+      fi
+      if [ "$FIX_BRANCH" != "$ORIGINAL_REF" ]; then
+        git branch -D "$FIX_BRANCH" 2>/dev/null || true
+      fi
       REPOS_SKIPPED+=("$DISPLAY_NAME:no-changes")
     else
       # shellcheck disable=SC2086
       git add $LOCKFILE_PATTERN || {
         REPOS_FAILED+=("$DISPLAY_NAME:stage-failed")
+        restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
         continue
       }
 
       # shellcheck disable=SC2059
       git commit -s -m "$(printf "$COMMIT_MSG" "$REPO_BRANCH")" || {
         REPOS_FAILED+=("$DISPLAY_NAME:commit-failed")
+        restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
         continue
       }
 
       echo "✓ Committed lockfile changes"
       REPOS_UPDATED+=("$DISPLAY_NAME#$REPO_NAME#$REPO_VERSION#$REPO_BRANCH")
+      # Restore original branch so later steps don't find the repo on a stray branch.
+      restore_clean_ref "$ORIGINAL_REF" || REPOS_FAILED+=("$DISPLAY_NAME:restore-failed")
     fi
   done
 
@@ -307,20 +326,23 @@ print_summary() {
       [ -n "$gh_user" ] && head_ref="${gh_user}:${fix_branch}"
       echo ""
       echo "# $display"
-      echo "cd $SUBMARINER_BASE/$repo"
-      echo "git show"
+      printf 'git -C %q show %q\n' "$SUBMARINER_BASE/$repo" "$fix_branch"
       # --force-with-lease is safe for a re-run (idempotent if the remote matches
       # our last fetch), and required if the branch was already pushed and the
       # conductor re-ran after a silent tracker write failure.
-      echo "git push --force-with-lease $fork $fix_branch"
-      # gh pr merge needs the PR number (branch name fails for fork PRs); capture from gh pr create output.
-      echo "PR_URL=\$(gh pr create --base $branch --head $head_ref --title \"Update RPM lockfiles for v${version}\" --body \"Update RPM lockfiles to resolve package CVEs.\" --assignee @me --label ready-to-test)"
-      echo "gh pr merge --auto --rebase \"\${PR_URL##*/}\""
+      # A partial retry also revisits repos with open PRs. Reuse those instead
+      # of letting gh pr create abort the entire multi-repo push script. gh pr
+      # list's --head accepts a branch, NOT owner:branch; filter the owner in jq.
+      local pr_filter push_commands
+      pr_filter="[.[] | select(.headRepositoryOwner.login == \"$gh_user\")] | .[0].url // empty"
+      printf -v push_commands '\n  cd %q\n  git push --force-with-lease %q %q\n  PR_URL=$(gh pr list --base %q --head %q --state open --json url,headRepositoryOwner --jq %q)\n  if [ -z "$PR_URL" ]; then\n    PR_URL=$(gh pr create --base %q --head %q --title %q --body %q --assignee @me --label ready-to-test)\n  fi\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
+        "$SUBMARINER_BASE/$repo" "$fork" "$fix_branch" "$branch" "$fix_branch" "$pr_filter" \
+        "$branch" "$head_ref" "Update RPM lockfiles for v${version}" \
+        "Update RPM lockfiles to resolve package CVEs."
+      printf '%s' "$push_commands"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s/%s\n  git push --force-with-lease %s %s\n  PR_URL=$(gh pr create --base %s --head %s --title "Update RPM lockfiles for v%s" --body "Update RPM lockfiles to resolve package CVEs." --assignee @me --label ready-to-test)\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
-          "$SUBMARINER_BASE" "$repo" "$fork" "$fix_branch" "$branch" "$head_ref" "$version" \
-          >> "$AUTORELEASE_PUSH_LOG"
+        printf '%s' "$push_commands" >> "$AUTORELEASE_PUSH_LOG"
       fi
     done
   fi
@@ -337,8 +359,6 @@ main() {
   TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
   # shellcheck source=/dev/null
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
-  # shellcheck source=lib/git-utils.sh
-  [ -f "$SCRIPT_DIR/lib/git-utils.sh" ] && source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
   TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
   # Only move tracker state on a full run. A filtered (single-component) run is a manual
   # partial retry: guarding in_progress the same way as completion (below) keeps it
@@ -369,4 +389,6 @@ main() {
   # wait for Konflux to rebuild, then explicitly mark complete via autorelease verifier.
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

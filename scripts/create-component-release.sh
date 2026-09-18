@@ -13,10 +13,12 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Global variables (set by parse_arguments)
 VERSION=""
 RELEASE_TYPE="stage"
-GIT_ROOT=""
+GIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRIPTS_DIR=""
 
 # Global variables (set by verify_release)
@@ -138,17 +140,7 @@ parse_arguments() {
   fi
   echo ""
 
-  # Find git repository root (allows running from anywhere in repo)
-  # `|| true`: outside a git repo `git rev-parse` exits non-zero, which under
-  # set -e would abort before the friendly "Not in a git repository" guard below
-  # (matches create-fbc-releases.sh:159).
-  GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || true
-  if [ -z "$GIT_ROOT" ]; then
-    echo "❌ ERROR: Not in a git repository"
-    exit 1
-  fi
-
-  # Set up paths relative to git root
+  # Resolve repository-owned helpers from this script, independent of caller cwd.
   SCRIPTS_DIR="$GIT_ROOT/scripts"
 
   # Verify helper scripts exist
@@ -165,7 +157,7 @@ parse_arguments() {
   echo ""
 
   # Check we are on the main branch (component release YAMLs must land on main)
-  _current_branch=$(git rev-parse --abbrev-ref HEAD)
+  _current_branch=$(git -C "$GIT_ROOT" rev-parse --abbrev-ref HEAD)
   if [ "$_current_branch" != "main" ]; then
     echo "❌ This repo is on branch '$_current_branch', not 'main'" >&2
     echo "   Fix: git checkout main && git pull" >&2
@@ -173,7 +165,7 @@ parse_arguments() {
   fi
 
   # Check git status (working tree should be clean)
-  if git diff-index --quiet HEAD -- 2>/dev/null; then
+  if git -C "$GIT_ROOT" diff-index --quiet HEAD -- 2>/dev/null; then
     :  # Working tree is clean
   else
     echo "⚠️  WARNING: Working tree has uncommitted changes"

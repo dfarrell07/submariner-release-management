@@ -15,40 +15,36 @@ Update bundle component image SHAs from Konflux snapshots.
 updates config files, regenerates bundle with make bundle, updates Dockerfile labels (version bumps),
 verifies all SHAs match, and creates a single commit.
 
-**Usage:**
+**Invocation:**
 
-```bash
-/bundle-image-update                              # Auto: latest snapshot, SHA-only
-/bundle-image-update 0.21.2                       # Version bump to 0.21.2
-/bundle-image-update --snapshot submariner-0-21-xxxxx  # Specific snapshot
+```text
+Claude: /release-management:bundle-image-update 0.21.2
+Codex:  $release-management:bundle-image-update 0.21.2
+```
+
+Additional argument forms:
+
+```text
+(none)                                      # Latest snapshot, SHA-only
+--snapshot submariner-0-21-xxxxx            # Specific snapshot
 make bundle-image-update VERSION=0.21.2
 ```
 
 **Requirements:** `~/go/src/submariner-io/submariner-operator` must exist on a release branch.
 Must be logged into Konflux cluster. Bash 4.0+.
 
-**Arguments:** $ARGUMENTS
+## Inputs and execution
 
----
+The version is optional and may be `X.Y` or `X.Y.Z`. The optional snapshot form
+is `--snapshot <name>`. Preserve the user's argument order and allow the backing
+script to perform documented auto-detection; do not invent a version or
+snapshot.
 
-```bash
-#!/bin/bash
-set -euo pipefail
+Resolve the release-management root before running the operation. If
+`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
+root. Otherwise, locate the checkout containing this `SKILL.md` and
+`scripts/bundle-image-update.sh`. Verify the script exists and is executable.
 
-# Find git repository root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -z "$GIT_ROOT" ]; then
-  echo "ERROR: Not in a git repository"
-  exit 1
-fi
-
-# Verify orchestrator script exists
-if [ ! -x "$GIT_ROOT/scripts/bundle-image-update.sh" ]; then
-  echo "ERROR: Required orchestrator script not found"
-  echo "This skill requires: scripts/bundle-image-update.sh"
-  exit 1
-fi
-
-# Delegate to orchestrator (passes all arguments)
-exec "$GIT_ROOT/scripts/bundle-image-update.sh" $ARGUMENTS
-```
+Run `scripts/bundle-image-update.sh`, passing each supplied value as a separate
+argument. Run it with no arguments when the user requests the auto-detected
+form. Do not combine arguments into a shell string or use `eval`.
