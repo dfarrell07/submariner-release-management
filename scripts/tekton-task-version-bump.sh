@@ -53,8 +53,9 @@ check_prerequisites() {
   command -v jq   &>/dev/null || missing+=("jq")
   command -v oras &>/dev/null || missing+=("oras")
   command -v yq   &>/dev/null || missing+=("yq")
+  command -v flock &>/dev/null || missing+=("flock")
   [ "${#missing[@]}" -gt 0 ] && die "Missing required tools: ${missing[*]}"
-  echo "✓ Prerequisites verified: git, curl, jq, oras, yq"
+  echo "✓ Prerequisites verified: git, curl, jq, oras, yq, flock"
 }
 
 # ── Globals ────────────────────────────────────────────────────────────────────
@@ -216,6 +217,29 @@ update_repo() {
   fi
 
   cd "$REPO_PATH" || { REPOS_FAILED+=("$REPO:cd-failed"); echo ""; return; }
+
+  # This script switches branches and edits the repository worktree. Serialize
+  # concurrent invocations for this repository so a second run cannot commit an
+  # intermediate state between the version bump and pipeline-patcher steps.
+  # The descriptor stays open until process exit; flock releases it even if the
+  # process is terminated, so no stale lock cleanup is needed.
+  local GIT_COMMON_DIR LOCK_FILE LOCK_FD
+  if ! GIT_COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    echo "  ✗ Could not locate the Git common directory" >&2
+    REPOS_FAILED+=("$REPO:git-dir-failed")
+    echo ""; return
+  fi
+  LOCK_FILE="$GIT_COMMON_DIR/tekton-task-version-bump.lock"
+  if ! exec {LOCK_FD}>"$LOCK_FILE"; then
+    echo "  ✗ Could not open task-version-bump lock" >&2
+    REPOS_FAILED+=("$REPO:lock-open-failed")
+    echo ""; return
+  fi
+  if ! flock -n "$LOCK_FD"; then
+    echo "  ✗ Another task-version bump is already updating this repository" >&2
+    REPOS_FAILED+=("$REPO:busy")
+    echo ""; return
+  fi
 
   local ORIGINAL_REF
   ORIGINAL_REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"

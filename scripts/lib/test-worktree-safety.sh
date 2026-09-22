@@ -160,6 +160,48 @@ tekton_case() (
   fi
 )
 
+# Two version-bump processes must not share branch/worktree mutations. The
+# first holds the repository lock while its fake patcher runs; the second must
+# stop before stashing, switching branches, or creating another fix branch.
+version_bump_lock_case() (
+  local repo_dir="$TEST_ROOT/tekton-task-version-bump-lock"
+  local first_log="$TEST_ROOT/tekton-task-version-bump-lock-first.log"
+  setup_repo
+
+  (
+    # shellcheck source=/dev/null
+    source "$RELEASE_SCRIPTS/tekton-task-version-bump.sh"
+    repo_path() { printf '%s\n' "$repo_dir"; }
+    VERSION=0.25.1 MAJOR_MINOR=0.25
+    PATCHER_SCRIPT='sleep 1; printf "task: v2\\n" > .tekton/pipe.yaml'
+    update_repo testcomp
+  ) >"$first_log" 2>&1 &
+  local first_pid=$!
+
+  local lock_file="$repo_dir/.git/tekton-task-version-bump.lock"
+  local attempts=0
+  while [ ! -e "$lock_file" ] && [ "$attempts" -lt 100 ]; do
+    sleep 0.02
+    attempts=$((attempts + 1))
+  done
+  [ -e "$lock_file" ] || { echo 'FAIL: first update did not acquire lock' >&2; exit 1; }
+
+  # shellcheck source=/dev/null
+  source "$RELEASE_SCRIPTS/tekton-task-version-bump.sh"
+  repo_path() { printf '%s\n' "$repo_dir"; }
+  VERSION=0.25.1 MAJOR_MINOR=0.25
+  PATCHER_SCRIPT=true
+  REPOS_UPDATED=(); REPOS_SKIPPED=(); REPOS_FAILED=()
+  update_repo testcomp >/dev/null 2>&1 || true
+  assert_eq 'concurrent version-bump reports busy' "${REPOS_FAILED[0]:-}" 'testcomp:busy'
+
+  wait "$first_pid"
+  assert_eq 'concurrent version-bump keeps one fix branch' \
+    "$(git -C "$repo_dir" branch --list 'fix-tekton-tasks-0.25*' | wc -l)" '1'
+  assert_eq 'concurrent version-bump restores original branch' \
+    "$(git -C "$repo_dir" branch --show-current)" 'original'
+)
+
 cve_case() (
   local scenario="$1" mode="${2:-prerequisites}"
   SUBMARINER_BASE="$TEST_ROOT/cve-$scenario-$mode"
@@ -334,6 +376,9 @@ for script in tekton-task-refs-update tekton-task-version-bump; do
 done
 run_logged tekton_case tekton-task-version-bump sed-fails
 echo "  ✓ tekton-task-version-bump / sed-fails"
+PASS=$((PASS + 1))
+run_logged version_bump_lock_case
+echo "  ✓ tekton-task-version-bump / concurrent lock"
 PASS=$((PASS + 1))
 for scenario in normal body-fails stash-fails stash-ref-fails post-stash-status-fails status-fails checkout-fails restore-fails pop-fails conflict; do
   run_logged cve_case "$scenario"
