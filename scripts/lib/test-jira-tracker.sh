@@ -660,7 +660,7 @@ _expected_ocp_range="${_first_ocp//-/.} through ${_last_ocp//-/.}"
 ocp_range_ok=0
 for _fbc_step in fbcCatalogUpdate fbcStageReleases fbcProdReleases; do
   _desc=$(_generate_subtask_description "$_fbc_step" "0.24.0")
-  if ! printf '%s' "$_desc" | grep -qF "$_expected_ocp_range"; then
+  if [[ "$_desc" != *"$_expected_ocp_range"* ]]; then
     echo "  ✗ OCP range missing from $_fbc_step description (want: '$_expected_ocp_range')"
     ocp_range_ok=$((ocp_range_ok + 1))
   fi
