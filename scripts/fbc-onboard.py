@@ -719,6 +719,7 @@ def validate_pipeline_execution(definition, params):
     family = {
         "init": "init",
         "clone-repository": "git-clone-oci-ta",
+        "fbc-inject-lifecycle": "fbc-inject-lifecycle-oci-ta",
         "run-opm-command": "run-opm-command-oci-ta",
         "prefetch-dependencies": "prefetch-dependencies-oci-ta",
         "build-images": "buildah-remote-oci-ta",
@@ -779,8 +780,14 @@ def validate_pipeline_execution(definition, params):
             "url": "$(params.git-url)",
             "revision": "$(params.revision)",
         },
-        "run-opm-command": {
+        "fbc-inject-lifecycle": {
             "SOURCE_ARTIFACT": "$(tasks.clone-repository.results.SOURCE_ARTIFACT)",
+            "CONTEXT": "$(params.path-context)",
+            "DOCKERFILE": "$(params.dockerfile)",
+            "BUILD_ARGS": ["$(params.build-args[*])"],
+        },
+        "run-opm-command": {
+            "SOURCE_ARTIFACT": "$(tasks.fbc-inject-lifecycle.results.SOURCE_ARTIFACT)",
             "OPM_ARGS": [],
             "OPM_OUTPUT_PATH": "",
             "IDMS_PATH": "",

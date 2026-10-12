@@ -77,18 +77,49 @@ assert_eq "explicit ref is used" \
 echo "=== fbc_tests_passed Tests ==="
 
 tests_json() { # $1=standard status $2=operator status
-  printf '[{"scenario":"submariner-fbc-standard-4-21","status":"%s"},{"scenario":"submariner-fbc-operator-4-21","status":"%s"}]' "$1" "$2"
+  jq -cn --arg standard "$1" --arg operator "$2" '
+    {metadata: {annotations: {"test.appstudio.openshift.io/status": ([
+      {scenario: "submariner-fbc-standard-4-21", status: $standard, completionTime: "2026-10-12T12:00:00Z"},
+      {scenario: "submariner-fbc-operator-4-21", status: $operator, completionTime: "2026-10-12T12:00:00Z"}
+    ] | tojson)}}, status: {conditions: [
+      {type: "AppStudioIntegrationStatus", status: "True", reason: "Finished"},
+      {type: "AppStudioTestSucceeded", status: "True", reason: "Passed"}
+    ]}}'
 }
 passes() { if printf '%s' "$1" | fbc_tests_passed 4-21; then echo pass; else echo reject; fi; }
 
 assert_eq "both TestPassed" "$(passes "$(tests_json TestPassed TestPassed)")" pass
-assert_eq "standard BuildPLRInProgress is a pass" "$(passes "$(tests_json BuildPLRInProgress TestPassed)")" pass
-assert_eq "operator BuildPLRInProgress is a pass" "$(passes "$(tests_json TestPassed BuildPLRInProgress)")" pass
+assert_eq "completed warnings accepted" "$(passes "$(tests_json TestWarning TestPassed)")" pass
+assert_eq "completed retained standard marker with aggregate pass" "$(passes "$(tests_json BuildPLRInProgress TestPassed)")" pass
+assert_eq "completed retained operator marker with aggregate pass" "$(passes "$(tests_json TestPassed BuildPLRInProgress)")" pass
 assert_eq "TestFail rejected" "$(passes "$(tests_json TestFail TestPassed)")" reject
 assert_eq "InProgress rejected" "$(passes "$(tests_json TestPassed InProgress)")" reject
 assert_eq "missing scenario rejected" \
   "$(passes '[{"scenario":"submariner-fbc-operator-4-21","status":"TestPassed"}]')" reject
 assert_eq "empty rejected" "$(passes '')" reject
+
+snapshot=$(tests_json TestPassed TestPassed)
+for mutation in \
+  'del(.status)' \
+  'del(.status.conditions[0])' \
+  'del(.status.conditions[1])' \
+  '.status.conditions[0].status = "False"' \
+  '.status.conditions[0].reason = "InProgress"' \
+  '.status.conditions[1].status = "False"' \
+  '.status.conditions += [.status.conditions[1]]' \
+  '.metadata.annotations["test.appstudio.openshift.io/status"] = "invalid"' \
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | del(.[0].completionTime) | tojson)' \
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[1].completionTime = "" | tojson)' \
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[1].completionTime = 123 | tojson)' \
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[0].scenario = .[1].scenario | tojson)' \
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[0].scenario = "unrelated" | tojson)'; do
+  assert_eq "reject $mutation" "$(passes "$(jq -c "$mutation" <<< "$snapshot")")" reject
+done
+markers=$(tests_json BuildPLRInProgress BuildPLRInProgress)
+markers=$(jq -c '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | map(del(.completionTime)) | tojson)' <<< "$markers")
+assert_eq "two unfinished markers rejected even with aggregate pass" "$(passes "$markers")" reject
+assert_eq "annotation array alone cannot prove completion" \
+  "$(passes "$(jq -r '.metadata.annotations["test.appstudio.openshift.io/status"]' <<< "$snapshot")")" reject
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

@@ -167,10 +167,25 @@ fi
 echo "$ALL_SNAPSHOTS" > "$TMPDIR/snapshots.json"
 
 # Extract data for each OCP version using jq (local filtering, no API calls)
+# Optional FBC_EXPECTED_SNAPSHOTS is a JSON map, e.g. {"4-19":"submariner-fbc-4-19-..."}.
+# It constrains selection without relaxing merged-source or push-pipeline provenance.
+# Unlabelled manual recoveries require retained independent evidence; they cannot
+# silently fall back to an older push when an exact identity is supplied.
+FBC_EXPECTED_SNAPSHOTS="${FBC_EXPECTED_SNAPSHOTS:-}"
+[ -n "$FBC_EXPECTED_SNAPSHOTS" ] || FBC_EXPECTED_SNAPSHOTS='{}'
+if ! jq -e --argjson scope "$(printf '%s\n' "${APPLICABLE_VERSIONS[@]}" | jq -R . | jq -s .)" '
+  type == "object" and all(to_entries[];
+    .key as $key | .value as $name |
+    ($scope | index($key)) != null and
+    ($name | type == "string" and startswith("submariner-fbc-" + $key + "-")))
+' <<< "$FBC_EXPECTED_SNAPSHOTS" >/dev/null; then
+  echo "ERROR: FBC_EXPECTED_SNAPSHOTS must map applicable OCP IDs to exact snapshot names" >&2
+  exit 1
+fi
+
 declare -A SNAPSHOTS
 declare -A CATALOG_IMAGES
 declare -A EVENT_TYPES
-declare -A TEST_STATUSES
 
 declare -a RELEASABLE_VERSIONS=()
 SKIPPED_SNAPSHOTS=0
@@ -178,17 +193,19 @@ SKIPPED_SNAPSHOTS=0
 for VERSION in "${APPLICABLE_VERSIONS[@]}"; do
   # Filter for this version, prefer push/incoming events (releasable), fall back to latest
   SNAPSHOT_DATA=""
-  SNAPSHOT_DATA=$(echo "$ALL_SNAPSHOTS" | jq -r \
+  EXPECTED_SNAPSHOT=$(jq -r --arg ocp "$VERSION" '.[$ocp] // ""' <<< "$FBC_EXPECTED_SNAPSHOTS")
+  SNAPSHOT_DATA=$(echo "$ALL_SNAPSHOTS" | jq -r --arg expected "$EXPECTED_SNAPSHOT" \
     ".items[] | select(.metadata.name | startswith(\"submariner-fbc-${VERSION}-\")) |
     select(.spec.application == \"submariner-fbc-${VERSION}\" and (.spec.components | length) == 1 and .spec.components[0].name == \"submariner-fbc-${VERSION}\") |
     select(\"${FBC_EXPECTED_COMMIT:-}\" == \"\" or .spec.components[0].source.git.revision == \"${FBC_EXPECTED_COMMIT:-}\") |
+    select(\$expected == \"\" or .metadata.name == \$expected) |
     select(.metadata.creationTimestamp != null) |
     {name: .metadata.name,
      revision: .spec.components[0].source.git.revision,
      source_url: .spec.components[0].source.git.url,
      pipeline: .metadata.labels[\"pac.test.appstudio.openshift.io/original-prname\"],
      event: .metadata.labels[\"pac.test.appstudio.openshift.io/event-type\"],
-     tests: .metadata.annotations[\"test.appstudio.openshift.io/status\"],
+     test_snapshot: {metadata: {annotations: .metadata.annotations}, status: .status},
      image: .spec.components[0].containerImage,
      timestamp: .metadata.creationTimestamp} |
     @json" | jq -s 'sort_by(.timestamp) |
@@ -218,15 +235,19 @@ for VERSION in "${APPLICABLE_VERSIONS[@]}"; do
     exit 1
   fi
 
+  if ! jq -c '.test_snapshot' <<< "$SNAPSHOT_DATA" | fbc_tests_passed "$VERSION"; then
+    echo "ERROR: Snapshot $VERSION tests are not finished and successful (check aggregate conditions and completed scenario results)" >&2
+    exit 1
+  fi
+
   # Parse JSON into associative arrays
   SNAPSHOTS["${VERSION}"]=$(echo "$SNAPSHOT_DATA" | jq -r '.name')
   CATALOG_IMAGES["${VERSION}"]=$(echo "$SNAPSHOT_DATA" | jq -r '.image')
-  if [[ ! "${CATALOG_IMAGES[$VERSION]}" =~ ^quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-${VERSION}@sha256:[a-f0-9]{64}$ ]]; then
+  if [[ ! "${CATALOG_IMAGES[$VERSION]}" =~ ^quay[.]io/redhat-user-workloads/submariner-tenant/submariner-fbc-${VERSION}@sha256:[a-f0-9]{64}$ ]]; then
     echo "ERROR: Snapshot $VERSION has an incorrect or unpinned catalog image" >&2
     exit 1
   fi
   EVENT_TYPES["${VERSION}"]=$(echo "$SNAPSHOT_DATA" | jq -r '.event // "unknown"')
-  TEST_STATUSES["${VERSION}"]=$(echo "$SNAPSHOT_DATA" | jq -r '.tests // "{}"')
 
   RELEASABLE_VERSIONS+=("$VERSION")
   echo "  ${VERSION}: ${SNAPSHOTS[${VERSION}]}" >&2
@@ -325,31 +346,12 @@ FAILED_DETAILS=""
 for VERSION in "${APPLICABLE_VERSIONS[@]}"; do
   SNAPSHOT="${SNAPSHOTS[${VERSION}]}"
   EVENT_TYPE="${EVENT_TYPES[${VERSION}]}"
-  TESTS_JSON="${TEST_STATUSES[${VERSION}]}"
   SNAPSHOT_BUNDLE_SHA=$(cat "$TMPDIR/extract-${VERSION}/bundle-sha.txt")
 
   # These events are releasable only with the merged-main ancestry proved above.
   if [ "$EVENT_TYPE" != "push" ] && [ "$EVENT_TYPE" != "incoming" ] && [ "$EVENT_TYPE" != "retest-all-comment" ]; then
     echo "  ${VERSION}: ✗ Event type '$EVENT_TYPE' (must be 'push', 'incoming', or 'retest-all-comment')" >&2
     FAILED_DETAILS="${FAILED_DETAILS}    ${VERSION}: Event type '$EVENT_TYPE' (not a main-branch build)\n"
-    FAILED=$((FAILED + 1))
-    continue
-  fi
-
-  # Verify tests passed
-  if [ -z "$TESTS_JSON" ] || [ "$TESTS_JSON" = "{}" ]; then
-    echo "  ${VERSION}: ✗ No test status" >&2
-    FAILED_DETAILS="${FAILED_DETAILS}    ${VERSION}: No test status\n"
-    FAILED=$((FAILED + 1))
-    continue
-  fi
-
-  # Empty, malformed, pending, skipped, and failed test results all block release.
-  # BuildPLRInProgress counts as a pass (see fbc_tests_passed), so it is not blamed here.
-  FAILED_TESTS=$(echo "$TESTS_JSON" | jq -r '.[] | select(.status != "TestPassed" and .status != "BuildPLRInProgress") | "\(.scenario): \(.status)"' 2>/dev/null) || FAILED_TESTS="Malformed test status"
-  if ! echo "$TESTS_JSON" | fbc_tests_passed "$VERSION"; then
-    echo "  ${VERSION}: ✗ Tests failed: $FAILED_TESTS" >&2
-    FAILED_DETAILS="${FAILED_DETAILS}    ${VERSION}: Tests failed: $FAILED_TESTS\n"
     FAILED=$((FAILED + 1))
     continue
   fi
