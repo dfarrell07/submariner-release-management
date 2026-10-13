@@ -2,6 +2,9 @@
 
 **When:** Y-stream (0.20 → 0.21) and Z-stream (0.20.1 → 0.20.2) releases
 
+> **Skip if `v$VERSION` already exists** on all 5 component repos. Never re-cut or move a tag. Verify with the commands under
+> "Done When" below. See `skip-completed-steps.md`.
+
 ## Process
 
 Create upstream release tags across all Submariner repos using the releases tool.

@@ -10,7 +10,11 @@ context: fork
 
 # Konflux CI Fix Workflow
 
-Diagnose and fix Konflux CI failures by updating Tekton task references to latest versions.
+Diagnose the failed run and repair its demonstrated task or configuration problem.
+
+**Repair actual CI, policy or trust failures.** Reuse completed task work only after checking the exact candidate's
+snapshot and managed release-policy requirements. Do not bump unrelated tasks proactively. See
+`.agents/workflows/skip-completed-steps.md` in the release-management repo.
 
 **Usage from a component repository:**
 

@@ -33,6 +33,15 @@ Additional argument forms:
 0.25.1 --close                   # After the release has shipped
 ```
 
+## Steps that are already done
+
+On a retarget, re-release or retry, verify `v$VERSION` on all five component repos and reuse completed source work;
+never re-cut tags. Keep downstream scan evidence tied to the exact candidate.
+Use `--dry-run`, then `--complete cveFixes` or `--complete tektonTasks` only for verified work.
+Task reuse requires completed snapshot evidence and the actual managed release-policy task/trust requirements;
+a snapshot pass alone is insufficient. Repair actual failures without proactive task churn.
+See `.agents/workflows/skip-completed-steps.md` for verification and stale-tracker handling.
+
 **Requires:** `acli jira auth login --web`, `jq`, `gh`, `oc` (logged in for verifier steps), `skopeo` (for auto-close registry probes)
 
 **Arguments:** the release version followed by any supported flags supplied by the

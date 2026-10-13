@@ -40,6 +40,10 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 **Y-stream** (0.21→0.22): New minor version. Run all steps starting from Step 1.
 **Z-stream** (0.21.1→0.21.2): Patch release. Skip to Step 4 (branch already exists).
 
+**Reuse verified completed work.** On a retarget, re-release or retry, verify all five upstream tags and the exact
+candidate's downstream scan, snapshot and managed release-policy evidence. Never re-cut tags or bump unrelated tasks.
+See `.agents/workflows/skip-completed-steps.md`.
+
 **Gates:** Setup (Y-stream) → Builds + EC → CVE triage → Release notes →
 **Stage:** Stage release → FBC update + builds + EC → FBC stage releases → QE approval →
 **Prod:** Prod release (same snapshot) → FBC prod releases
@@ -95,10 +99,10 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 | 2 | Add Konflux components, ReleasePlans, and RPAs in konflux-release-data | Y |
 | 3 | Customize bot-generated Tekton configs, set version labels | Y |
 | 3b | Update bundle SHAs from component builds, set up bundle pipeline | Y |
-| 4 | Fix Enterprise Contract violations in component and FBC repos | Y/Z |
-| 5 | Scan and fix CVEs: iterative fix→rebuild→rescan across components and libraries | Y/Z |
+| 4 | Fix actual component/FBC policy violations; reuse verified completed task work | Y/Z |
+| 5 | Fix upstream CVEs before tagging; review exact downstream scan evidence | Y/Z |
 | 5b | Bump Dockerfile version labels for the new patch version | Z |
-| 6 | Create git tags and publish images to quay.io/submariner | Y/Z |
+| 6 | Create upstream tags/images once; verify all five tags before reuse | Y/Z |
 | 7 | Update bundle CSV with final component SHAs from snapshot | Y/Z |
 | 8 | Create stage Release CR YAML (no notes yet) | Y/Z |
 | 9 | Query Jira for CVEs (automatic) and issues (user selects), build releaseNotes | Y/Z |
@@ -126,10 +130,10 @@ Submariner releases 9 container images through Konflux to Red Hat's registry. Th
 | 2 | Add overlays (app, 9 components, ReleasePlans) and RPAs in konflux-release-data. ArgoCD syncs; triggers bot PRs. |
 | 3 | Customize Tekton configs: hermetic builds (Go mods, RPM lockfiles), multi-arch, SBOM. Version labels. 8 components, 5 repos. |
 | 3b | Two parts: (1) update bundle CSV with component SHAs from snapshot, (2) set up bundle Tekton pipeline. Components must build first. |
-| 4 | Enterprise Contract validates Red Hat release policies. Fix violations in component repos (9 images) and FBC repo (7 catalogs). |
-| 5 | Grype scans Go (7 repos), clair scans images. Fix→rebuild→rescan loop. Go stdlib CVEs fixed in Shipyard (base image for others). |
+| 4 | Verify completed snapshot EC and actual managed release-policy requirements; repair violations in component/FBC repos. |
+| 5 | Grype scans upstream Go, Clair scans downstream images. Reuse verified tagged source; review exact image evidence. |
 | 5b | Bump version labels in 9 Dockerfiles across 5 repos. Bundle has 3 labels (csv-version, release, version). Rebuild triggers. |
-| 6 | Run releases repo tooling to create git tags and publish images to quay.io/submariner. Official upstream release. |
+| 6 | Run releases repo tooling to create git tags and publish images to quay.io/submariner. Never re-cut an existing tag. |
 | 7 | Update bundle CSV `relatedImages` with SHAs from latest passing Konflux snapshot. Must use registry.redhat.io URLs for EC. |
 | 8 | Create Release CR YAML: copy previous, update name/snapshot. Save to `releases/0.X/stage/`. Don't add notes yet. |
 | 9 | Query Jira: CVEs automatic, user selects other issues. RHSA/RHBA/RHEA based on content. Exclude submariner-addon. |

@@ -113,6 +113,8 @@ STEP_SCRIPT["tektonBundle"]="scripts/konflux-bundle-setup.sh"
 STEP_TITLES["cveFixes"]="CVE fixes"
 STEP_PHASE["cveFixes"]="Build Readiness"
 STEP_DEPENDENCIES["cveFixes"]=""
+# Advisory only. Reuse completed upstream source work when all five component tags exist;
+# downstream scan evidence still needs exact identities (.agents/workflows/skip-completed-steps.md).
 STALENESS_RULES["cveFixes"]="3d"
 AUTOMATION_LEVEL["cveFixes"]="review"
 STEP_SCRIPT["cveFixes"]="scripts/cve-fixes-update.sh"
@@ -451,6 +453,10 @@ _(populated by automation when PRs are created)_
 ## Status
 
 Waiting for skill to create PRs across repos on release-$major_minor branch.
+$(case "$step_key" in
+  cveFixes) printf '\nReuse completed upstream CVE work when all five component version tags exist; verify downstream scans for the exact snapshot and images.\nSee .agents/workflows/skip-completed-steps.md.' ;;
+  tektonTasks|ecFixes) printf '\nReuse tasks that satisfy snapshot and managed release policy; repair actual CI, policy or trust failures without unrelated task updates.\nSee .agents/workflows/skip-completed-steps.md.' ;;
+esac)
 DESC
       ;;
     createBranches)

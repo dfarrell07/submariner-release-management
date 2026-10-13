@@ -2,6 +2,9 @@
 
 **When:** Y-stream (0.20 → 0.21) and Z-stream (0.20.1 → 0.20.2). Components mostly handled in Step 3 for Y-stream, FBC needs checking for both.
 
+> **Reuse completed task work** when the exact candidate meets snapshot and managed release-policy requirements.
+> Repair actual policy/trust failures; do not bump unrelated tasks proactively. See `skip-completed-steps.md`.
+
 ## Process
 
 Ensure all Konflux builds pass Enterprise Contract validation before cutting releases.
@@ -27,23 +30,24 @@ Ensure all Konflux builds pass Enterprise Contract validation before cutting rel
 
 ## Done When
 
-- Component builds pass Enterprise Contract validation (requires `oc login --web https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443/`):
+Check the exact intended component snapshot and applicable FBC snapshots, not a
+newest-name lookup. Require finished aggregate integration, successful aggregate
+tests and completion timestamps/results for the configured policy scenarios.
+A retained `BuildPLRInProgress` marker alone is not a passing verdict. Preserve
+completed warning results when their aggregate verdict is successful.
 
-  ```bash
-  oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp | grep "^submariner-0" | tail -5
-  # Pick recent component snapshot, then check EC test status:
-  oc get snapshot <snapshot-name> -n submariner-tenant -o jsonpath='{.metadata.annotations.test\.appstudio\.openshift\.io/status}' | jq '.[] | select(.scenario | contains("enterprise-contract")) | {scenario, status}'
-  # Should show: "status": "TestPassed" for enterprise-contract scenario
-  ```
+```bash
+SNAPSHOT='<exact intended snapshot>'
+oc get snapshot "$SNAPSHOT" -n submariner-tenant -o json | jq '{
+  source: .spec.components, conditions: .status.conditions,
+  tests: (.metadata.annotations["test.appstudio.openshift.io/status"] | fromjson)
+}'
+```
 
-- FBC builds pass validation tests:
-
-  ```bash
-  oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp | grep "^submariner-fbc" | tail -5
-  # Pick recent FBC snapshot, then check test status:
-  oc get snapshot <snapshot-name> -n submariner-tenant -o jsonpath='{.metadata.annotations.test\.appstudio\.openshift\.io/status}' | jq '.[] | {scenario, status}'
-  # Should show: "status": "TestPassed" for standard and operator scenarios
-  ```
+Verify source/image identities and signed build tasks separately. A passing
+integration scenario does not prove the later managed release policy accepts
+the image. For FBC, follow [stage preparation](create-fbc-stage-release.md).
+Repair the actual violation; do not update unrelated task pins merely to latest.
 
 ### Retrigger Failed Push Builds
 

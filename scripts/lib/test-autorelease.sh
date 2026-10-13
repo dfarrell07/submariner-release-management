@@ -441,7 +441,14 @@ gh() { echo '[]'; }
 # 21: verify_ecFixes emits {snapshot,version} for the latest EC-passing snapshot
 _orig_oc=$(declare -f oc 2>/dev/null || echo "")
 _OC_SNAPSHOTS=''
-oc() { case "$1" in whoami) return 0 ;; get) echo "$_OC_SNAPSHOTS" ;; *) return 0 ;; esac; }
+complete_ec_fixture() {
+  jq '.items |= map(.status.conditions = [
+    {type:"AppStudioIntegrationStatus",status:"True",reason:"Finished"},
+    {type:"AppStudioTestSucceeded",status:"True",reason:"Passed"}] |
+    .metadata.annotations["test.appstudio.openshift.io/status"] |=
+      (fromjson | map(.completionTime = "2026-10-12T12:00:00Z") | tojson))'
+}
+oc() { case "$1" in whoami) return 0 ;; get) printf '%s' "$_OC_SNAPSHOTS" | complete_ec_fixture ;; *) return 0 ;; esac; }
 _OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-abc123","labels":{"pac.test.appstudio.openshift.io/event-type":"push"},"annotations":{"test.appstudio.openshift.io/status":"[{\"scenario\":\"submariner-enterprise-contract\",\"status\":\"TestPassed\"}]"}}}]}'
 ec_exit=0
 ec_out=$(verify_ecFixes "0.99.1" 2>/dev/null) || ec_exit=$?
@@ -580,6 +587,13 @@ assert_eq "22l: tracker BuildPLRInProgress records bundleShas snapshot" "$ec_out
   '{"snapshot":"submariner-0-99-BBB","version":"0.99.1","prs":null}'
 
 eval "$_orig_get_step_ec"
+
+ready_ec=$(printf '%s' "$_OC_SNAPSHOTS" | complete_ec_fixture | jq '.items[0]')
+assert_eq "completed retained EC marker accepted" "$(printf '%s' "$ready_ec" | _ec_status_from_snap)" BuildPLRInProgress
+for mutation in 'del(.status)' '.status.conditions[0].reason="InProgress"' '.status.conditions[1].status="False"' '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | map(del(.completionTime)) | tojson)'; do
+  assert_eq "unfinished EC rejected: $mutation" "$(jq "$mutation" <<< "$ready_ec" | _ec_status_from_snap)" not-finished
+done
+assert_eq "completed EC warning accepted" "$(jq '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | map(.status="TestWarning") | tojson)' <<< "$ready_ec" | _ec_status_from_snap)" TestWarning
 
 # Fix 2b: verify_ecFixes precondition cases → exit 2 (not exit 1)
 # 22j: oc not installed → exit 2 with diagnostic; stdout empty
@@ -943,17 +957,17 @@ _mock_snap_json() {
       ([{scenario:"enterprise-contract-0-21",status:$s}] | tojson)}}}'
 }
 
-assert_eq "_ec_status_from_snap: TestPassed" \
+assert_eq "_ec_status_from_snap: unfinished TestPassed rejected" \
   "$(printf '%s' "$(_mock_snap_json TestPassed)" | _ec_status_from_snap)" \
-  "TestPassed"
+  "not-finished"
 
 assert_eq "_ec_status_from_snap: TestFailed" \
   "$(printf '%s' "$(_mock_snap_json TestFailed)" | _ec_status_from_snap)" \
   "TestFailed"
 
-assert_eq "_ec_status_from_snap: BuildPLRInProgress passes through raw" \
+assert_eq "_ec_status_from_snap: unfinished BuildPLRInProgress rejected" \
   "$(printf '%s' "$(_mock_snap_json BuildPLRInProgress)" | _ec_status_from_snap)" \
-  "BuildPLRInProgress"
+  "not-finished"
 
 assert_eq "_ec_status_from_snap: missing annotation → no-ec-result" \
   "$(printf '%s' '{"metadata":{"annotations":{}}}' | _ec_status_from_snap)" \
@@ -1685,6 +1699,53 @@ assert_contains "staleness: time-rule fires when stale" \
   "$_stale_err" "stale — completed"
 assert_contains "staleness: time-rule includes --refresh suggestion" \
   "$_stale_err" "--refresh cveFixes"
+
+# Once upstreamRelease is complete the tag exists: CVE fixes are not redone, so the
+# age warning (and its --refresh suggestion) must not fire for cveFixes.
+_AUTORELEASE_QUIET=""
+declare -A step_statuses=([rpmLockfiles]=complete [versionLabels]=complete \
+  [tektonTasks]=complete [cveFixes]=complete [upstreamRelease]=complete)
+_stale_err=$(find_next_step "0.99.1" "z-stream" "FAKE-123" 2>&1 >/dev/null)
+assert_not_contains "staleness: no cveFixes age warning once upstream is tagged" \
+  "$_stale_err" "--refresh cveFixes"
+# ...but other time-rule steps keep their warning.
+step_timestamps=([rpmLockfiles]="2000-01-01T00:00:00Z")
+_stale_err=$(find_next_step "0.99.1" "z-stream" "FAKE-123" 2>&1 >/dev/null)
+assert_contains "staleness: rpmLockfiles age warning unaffected by upstream tag" \
+  "$_stale_err" "--refresh rpmLockfiles"
+step_timestamps=([cveFixes]="2000-01-01T00:00:00Z")
+declare -A step_statuses=([rpmLockfiles]=complete [versionLabels]=complete \
+  [tektonTasks]=complete [cveFixes]=complete)
+
+# The release display must not turn one tagged repository into source completion.
+check_step_5_definition=$(sed -n '/^check_step_5() {/,/^}/p' "$(dirname "${BASH_SOURCE[0]}")/../release-status.sh")
+step5_output() (
+  eval "$check_step_5_definition"
+  VERSION=0.99.1 SNAPSHOT=submariner-0-99-candidate
+  timeout() {
+    [ "$1" = 30 ] || return 2
+    [ "${STEP5_TIMEOUT:-false}" = false ] || return 124
+    shift
+    "$@"
+  }
+  git() {
+    if [[ "$*" == *"/$STEP5_MISSING"* ]] && [ -n "${STEP5_MISSING:-}" ]; then return 0; fi
+    if [ "${STEP5_UNREACHABLE:-}" = true ]; then return 1; fi
+    printf 'abc\trefs/tags/v0.99.1\n'
+  }
+  check_step_5
+)
+STEP5_MISSING="" STEP5_UNREACHABLE=false
+assert_contains "all five tags permit source reuse" "$(step5_output)" "Reuse completed upstream"
+assert_contains "tagged source still requires exact downstream evidence" "$(step5_output)" "exact snapshot submariner-0-99-candidate"
+STEP5_MISSING=lighthouse
+assert_contains "partial tag set is incomplete" "$(step5_output)" "tag set is incomplete"
+STEP5_MISSING="" STEP5_UNREACHABLE=true
+assert_contains "unreachable tag set is unknown" "$(step5_output)" "Could not verify"
+STEP5_UNREACHABLE=false STEP5_TIMEOUT=true
+assert_contains "timed-out tag set is unknown" "$(step5_output)" "Could not verify"
+assert_not_contains "timeout never permits completed source reuse" "$(step5_output)" "Reuse completed upstream"
+STEP5_TIMEOUT=false
 
 # Time-based staleness suppressed when _AUTORELEASE_QUIET=true.
 _AUTORELEASE_QUIET=true

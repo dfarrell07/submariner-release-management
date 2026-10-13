@@ -2,6 +2,11 @@
 
 **When:** Y-stream (0.20 → 0.21) and Z-stream (0.20.1 → 0.20.2), before cutting release
 
+> **Reuse completed upstream source work if `v$VERSION` exists on all five component repos** (retarget, re-release,
+retry). CVE fixes must land before the tag; after it
+> exists, source changes require a new version. Verify scan evidence for the exact downstream candidate separately. See
+`skip-completed-steps.md`.
+
 ## Process
 
 Fix CVEs in upstream source (Go mods and RPM lockfiles). Verify fixes by scanning downstream images.
@@ -14,7 +19,8 @@ Libraries only: admiral, cloud-prepare
 
 ### Go Dependencies
 
-Run CVE workflow (from each repo's CLAUDE.md on devel) on release-0.X branch for all 7 repos (including libraries) to fix Go dependency CVEs.
+Run CVE workflow (from each repo's CLAUDE.md on devel) on release-0.X branch for all 7 repos (including libraries) to
+fix Go dependency CVEs.
 
 ### RPM Dependencies
 

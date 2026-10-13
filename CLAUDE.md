@@ -45,6 +45,9 @@ Release scripts automatically update tracker subtasks as they complete.
 
 **Alternative:** @.agents/workflows/fix-ec-violations.md (manual workflow)
 
+**Reuse completed task work only with completed policy evidence for the exact candidate.** See
+@.agents/workflows/skip-completed-steps.md.
+
 ## 4b. Update RPM Lockfiles
 
 @/rpm-lockfile-update
@@ -58,6 +61,10 @@ Tekton task updates, before CVE scanning.
 
 @.agents/workflows/scan-cves.md
 
+**Reuse completed upstream work when tags exist on all five component repos.** Verify scan evidence for the exact
+downstream candidate separately. See
+@.agents/workflows/skip-completed-steps.md.
+
 ## 5b. Update Component Version Labels (Z-stream only)
 
 @/update-version-labels
@@ -67,6 +74,8 @@ Tekton task updates, before CVE scanning.
 ## 6. Cut Upstream Release
 
 @.agents/workflows/cut-upstream-release.md
+
+**Skip if `v$VERSION` already exists** on all 5 component repos; never re-cut a tag.
 
 ## 7. Update Bundle SHAs
 
@@ -165,13 +174,21 @@ Tasks not tied to normal release workflow timing.
 
 @/add-fbc-ocp-version
 
-**Alternative:** `make add-fbc-ocp-version OCP_VERSION=5.0 MIN_SUPPORTED_SUB=0.24` or @.agents/workflows/add-fbc-ocp-version.md (phased workflow)
+**Alternative:** `make add-fbc-ocp-version OCP_VERSION=5.0 MIN_SUPPORTED_SUB=0.24` or
+@.agents/workflows/add-fbc-ocp-version.md (phased workflow)
 
 ---
 
 ## Settled Decisions
 
 Decided by the maintainer. Do not re-ask or re-litigate; follow them.
+
+### Do not redo upstream work that is already done
+
+Once `v$VERSION` exists on all five component repos, reuse verified upstream CVE work and never re-cut tags on a retarget,
+re-release or retry. Downstream scan evidence still belongs to the exact candidate. Reuse completed task work only after
+checking snapshot and managed release-policy requirements, including required signed-build tasks and current trust.
+Repair actual failures; do not bump unrelated tasks proactively. See `.agents/workflows/skip-completed-steps.md`.
 
 ### Sealed team entitlement bundle stays in the public repo
 

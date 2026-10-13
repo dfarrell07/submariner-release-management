@@ -149,6 +149,12 @@ get_snapshot_test_status() {
     -o jsonpath='{.metadata.annotations.test\.appstudio\.openshift\.io/status}' 2>/dev/null || true
 }
 
+# shellcheck source=lib/integration-tests.sh
+source "$SCRIPT_DIR/lib/integration-tests.sh"
+get_snapshot_ec_status() {
+  oc get snapshot "$1" -n submariner-tenant -o json 2>/dev/null | ec_status_from_snapshot
+}
+
 # Helper function: Read the container-image version label from a snapshot
 # Args: $1=snapshot name
 # Returns: the lighthouse-agent component's image version label (e.g. "v0.22.1"),
@@ -709,9 +715,9 @@ check_step_3b() {
 
       if [ -n "$test_status" ]; then
         local ec_passed
-        ec_passed=$(echo "$test_status" | jq -r '.[] | select(.scenario | contains("enterprise-contract")) | select(.status == "TestPassed" or .status == "BuildPLRInProgress") | .status' 2>/dev/null || true)
+        ec_passed=$(get_snapshot_ec_status "$SNAPSHOT")
 
-        if [ -n "$ec_passed" ]; then
+        if [[ "$ec_passed" == TestPassed || "$ec_passed" == TestWarning || "$ec_passed" == BuildPLRInProgress ]]; then
           echo "✅ Bundle configured and passing EC"
         else
           echo "⚠️  Bundle in snapshot but EC tests failing"
@@ -739,9 +745,9 @@ check_step_4() {
 
     if [ -n "$test_status" ]; then
       local ec_failed
-      ec_failed=$(echo "$test_status" | jq -r '.[] | select(.scenario | contains("enterprise-contract")) | select(.status != "TestPassed" and .status != "BuildPLRInProgress") | "\(.scenario): \(.status)"' 2>/dev/null || true)
+      ec_failed=$(get_snapshot_ec_status "$SNAPSHOT")
 
-      if [ -z "$ec_failed" ]; then
+      if [[ "$ec_failed" == TestPassed || "$ec_failed" == TestWarning || "$ec_failed" == BuildPLRInProgress ]]; then
         echo "✅ All EC validations passed"
       else
         echo "❌ EC violations detected:"
@@ -758,14 +764,32 @@ check_step_4() {
 
 # Step 5: CVE Scanning
 check_step_5() {
+  UPSTREAM_SOURCE_TAGS_COMPLETE=false
   if [ -z "$SNAPSHOT" ]; then
     echo "⏭️  Skipped (no snapshot)"
-  else
-    echo "ℹ️  CVE scanning requires manual review"
-    echo "   - Upstream: grype scan on release-$MAJOR_MINOR (7 repos)"
-    echo "   - Downstream: Clair reports from snapshot $SNAPSHOT"
-    echo "   ⮕ Next: Run CVE scans and triage results (Step 5)"
+    return
   fi
+  local repo tag_ls tag_rc all_tagged=true tag_unknown=false
+  for repo in submariner-operator submariner lighthouse shipyard subctl; do
+    tag_rc=0
+    tag_ls=$(timeout 30 git ls-remote --tags "https://github.com/submariner-io/$repo" "refs/tags/v$VERSION" 2>/dev/null) || tag_rc=$?
+    if [ "$tag_rc" -ne 0 ]; then
+      tag_unknown=true
+    elif [ -z "$tag_ls" ]; then
+      all_tagged=false
+    fi
+  done
+  if $tag_unknown; then
+    echo "⚠️  Could not verify v$VERSION tags on all five component repositories"
+    echo "   Confirm completed upstream work before skipping it; do not move existing tags"
+  elif $all_tagged; then
+    UPSTREAM_SOURCE_TAGS_COMPLETE=true
+    echo "✅ Reuse completed upstream CVE work: v$VERSION exists on all five component repos"
+  else
+    echo "ℹ️  Upstream tag set is incomplete; review source CVE work and release completion"
+  fi
+  echo "   - Downstream: review scan evidence for the exact snapshot $SNAPSHOT"
+  echo "   - Reuse approved evidence only when its source/image identities still match"
 }
 
 # Step 5b: Version Labels
@@ -1497,9 +1521,13 @@ if [ -n "$TRACKER_KEY" ] && type get_release_summary &>/dev/null; then
   if [ -n "$TRACKER_SUMMARY" ] && [ "$TRACKER_SUMMARY" != "{}" ]; then
     # get_release_summary only ever marks rule-bearing steps "stale" (every other
     # step defaults to "fresh"), so selecting stale steps needs no key list here —
-    # this stays in sync with STALENESS_RULES automatically.
+    # this stays in sync with STALENESS_RULES automatically. Suppress only a completed
+    # upstream source step with all five tags verified; downstream evidence is still required.
     STALE_STEPS=$(printf '%s' "$TRACKER_SUMMARY" \
-      | jq -r '[.steps | to_entries[] | select(.value.freshness == "stale") | .value.title] | join(", ")' 2>/dev/null || true)
+      | jq -r --arg source_complete "${UPSTREAM_SOURCE_TAGS_COMPLETE:-false}" '[.steps | to_entries[]
+          | select(.value.freshness == "stale")
+          | select(.key != "cveFixes" or .value.status != "complete" or $source_complete != "true")
+          | .value.title] | join(", ")' 2>/dev/null || true)
     [ -n "$STALE_STEPS" ] && echo "⚠️  Stale steps: $STALE_STEPS"
 
     # Tracker-vs-reality drift: reuse TRACKER_SUMMARY (no extra Jira query);

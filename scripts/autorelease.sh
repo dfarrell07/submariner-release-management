@@ -250,6 +250,12 @@ find_next_step() {
       # knows to --refresh before proceeding.
       if [ "${_AUTORELEASE_QUIET:-}" != "true" ]; then
         local _rule="${STALENESS_RULES[$step]:-}"
+        # Once upstreamRelease is complete the tag exists, so CVE fixes are not redone
+        # (retarget/re-release/retry; see .agents/workflows/skip-completed-steps.md).
+        # A --refresh suggestion there would be wrong, so don't raise the age warning.
+        if [ "$step" = "cveFixes" ] && [ "${step_statuses[upstreamRelease]:-}" = "complete" ]; then
+          _rule=""
+        fi
         if [[ "$_rule" =~ ^[0-9]+d$ ]]; then
           local _ts="${step_timestamps[$step]:-}"
           if [ -n "$_ts" ]; then
@@ -641,24 +647,9 @@ verify_upstreamRelease() {
   jq -cn --arg tag "v$version" --arg sha "$operator_sha" '{tag:$tag,operatorSha:$sha}'
 }
 
-# Extract EC test status from a single snapshot object (stdin).
-# Returns the raw Konflux status ("TestPassed", "TestFailed",
-# "BuildPLRInProgress", ...), or "no-ec-result" / "parse-error". Callers treat
-# both "TestPassed" and "BuildPLRInProgress" as passing — the latter is a normal
-# transient status where the pipeline run record lags the annotation (e.g. the
-# EC pipelinerun was garbage-collected ~24h after a passing run), so the verdict
-# is effectively final.
-#
-# Deliberately NOT treated as passing: "TestInProgress", "Pending",
-# "SnapshotCreationInProgress" and similar. These mean the EC verdict genuinely
-# is not in yet, so a verifier returns rc=1 ("not done") and the conductor waits
-# / re-runs — the correct behaviour. Do not add them to the pass allowlist; that
-# would let ecFixes auto-advance before EC has actually finished.
-_ec_status_from_snap() {
-  jq -r '.metadata.annotations["test.appstudio.openshift.io/status"] // "[]" | fromjson |
-    [.[] | select(.scenario | contains("enterprise-contract"))][0] | .status // "no-ec-result"' \
-    2>/dev/null || echo "parse-error"
-}
+# shellcheck source=lib/integration-tests.sh
+source "$SCRIPT_DIR/lib/integration-tests.sh"
+_ec_status_from_snap() { ec_status_from_snapshot; }
 
 verify_ecFixes() {
   local version="$1"
@@ -742,11 +733,8 @@ verify_ecFixes() {
       return 1
     fi
     ec_status_t=$(printf '%s' "$snap_json" | _ec_status_from_snap)
-    # BuildPLRInProgress is a normal Konflux status: the pipeline run record is
-    # being (re)created and the annotation lags behind. It is not a failure and
-    # is treated as passing here, matching verify-component-release.sh,
-    # verify-fbc-release.sh, and release-status.sh.
-    if [ "$ec_status_t" != "TestPassed" ] && [ "$ec_status_t" != "BuildPLRInProgress" ]; then
+    # The shared reader requires finished aggregate and scenario evidence.
+    if [ "$ec_status_t" != "TestPassed" ] && [ "$ec_status_t" != "TestWarning" ] && [ "$ec_status_t" != "BuildPLRInProgress" ]; then
       local ui_url="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${target_snap}"
       echo "ecFixes: bundleShas snapshot: $target_snap (ec: $ec_status_t)" >&2
       echo "  View EC failure details: $ui_url" >&2
@@ -775,9 +763,8 @@ verify_ecFixes() {
     snap_obj_f=$(echo "$snaps" | jq --arg n "$latest_candidate" \
       '[.items[] | select(.metadata.name == $n)] | last' 2>/dev/null) || snap_obj_f="null"
     ec_status_f=$(printf '%s' "$snap_obj_f" | _ec_status_from_snap)
-    # BuildPLRInProgress is a normal Konflux status (see the note on the
-    # bundleShas branch above): treat it as passing rather than a failure.
-    if [ "$ec_status_f" != "TestPassed" ] && [ "$ec_status_f" != "BuildPLRInProgress" ]; then
+    # A retained marker is accepted only with the shared completion evidence.
+    if [ "$ec_status_f" != "TestPassed" ] && [ "$ec_status_f" != "TestWarning" ] && [ "$ec_status_f" != "BuildPLRInProgress" ]; then
       local ui_url_f="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${latest_candidate}"
       echo "ecFixes: Latest snapshot: $latest_candidate (ec: $ec_status_f)" >&2
       echo "  View EC failure details: $ui_url_f" >&2
