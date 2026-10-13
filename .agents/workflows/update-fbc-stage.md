@@ -1,45 +1,38 @@
-# Update FBC Catalog with Stage Bundle
+# Update FBC catalog with stage bundle
 
-**When:** After stage release completes (Step 10)
+**When:** After the exact component-stage release completes (Step 10).
 
-> **Automated:** `/autorelease` handles this step automatically. Follow the manual
-> steps below only if debugging or running without the conductor.
+The conductor handles this step during an authorized release run. For manual
+operation or debugging, follow the FBC repository's
+`.agents/workflows/update-catalog.md` with the approved component-stage snapshot.
+Retain its bundle/operand digests; do not implicitly select a newer snapshot.
 
-## Process
+## Done when
 
-Update catalog in FBC repo with bundle from completed stage release.
+For each applicable active OCP target, record the exact FBC source commit,
+build, snapshot and image digest. Verify completed aggregate/scenario results
+and the catalog's approved bundle/component pins using
+[stage preparation](create-fbc-stage-release.md). A newest-name lookup or a
+`BuildPLRInProgress` marker is insufficient. Generated catalogs for retired
+versions do not extend the active release scope.
 
-**Repo:** `~/konflux/submariner-operator-fbc`
+## Retry the operation that failed
 
-**Workflow:** Follow `CLAUDE.md` in FBC repo → `.agents/workflows/update-catalog.md`
+Distinguish a build failure from a snapshot integration failure and a managed
+release-policy failure. Diagnose the task logs before retrying.
 
-## Done When
-
-For each applicable active OCP version:
-
-```bash
-# 1. Check latest snapshot created after catalog update
-oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp | grep "^submariner-fbc-4-XX" | tail -1
-
-# 2. Verify both tests pass
-SNAPSHOT="submariner-fbc-4-XX-xxxxx"
-oc get snapshot $SNAPSHOT -n submariner-tenant -o jsonpath='{.metadata.annotations.test\.appstudio\.openshift\.io/status}' | jq -r '.[] | "\(.scenario): \(.status)"'
-# Both must show: TestPassed
-```
-
-Record snapshot names for all OCP versions - needed for Step 12.
-
-### Retrigger Failed Push Builds
-
-If a push build fails due to an infra flake (e.g., `PipelineValidationFailed` with all tasks passing), retrigger
-with a `/retest` comment on the HEAD commit of the target branch:
+After fixing integration credentials or configuration, rerun the exact snapshot
+scenario rather than rebuilding unchanged catalog content. Initial tests must
+have completed, with no rerun already pending:
 
 ```bash
-# Find the HEAD commit
-gh api repos/stolostron/submariner-operator-fbc/commits/main --jq '.sha'
-
-# Add /retest comment (retriggers all push pipelines for that commit)
-gh api repos/stolostron/submariner-operator-fbc/commits/<sha>/comments -f body="/retest"
+oc label snapshot "$SNAPSHOT" -n submariner-tenant \
+  test.appstudio.openshift.io/run="submariner-fbc-operator-$OCP_ID"
 ```
 
-The retested build uses the same push pipeline and produces permanent images (no expiration).
+Set `SNAPSHOT` and `OCP_ID` from the recorded candidate, then verify the new run's
+snapshot/scenario labels and completed result. See the
+[Konflux rerun procedure](https://konflux-ci.dev/docs/testing/integration/rerunning/).
+A build retrigger creates a new image/snapshot and needs fresh verification;
+a missing policy-required task needs the fresh-build repair described in stage
+preparation. Do not retry a release of the same rejected image.

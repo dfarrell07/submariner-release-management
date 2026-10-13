@@ -1,39 +1,30 @@
-# Apply FBC Releases
+# Apply FBC releases
 
-**Used by:** Step 13 (stage), Step 18 (prod)
+**Used by:** Step 13 (stage), Step 18 (prod).
 
-## Process
-
-Apply all FBC YAMLs to cluster (one per OCP version: 4-16 through 4-22).
-
-**Repo:** `~/konflux/submariner-release-management`
-
-## Apply Releases
-
-Agent provides user with commands for each OCP version:
+Apply only the reviewed YAMLs for the requested Submariner version, environment
+and applicable active OCP scope. Use explicit filenames, including the full
+Submariner version and attempt sequence; do not apply every historical YAML or
+assume a fixed catalog count.
 
 ```bash
-# For stage (Step 13):
-make test-remote FILE=releases/fbc/4-XX/stage/submariner-fbc-4-XX-stage-YYYYMMDD-01.yaml
-make apply FILE=releases/fbc/4-XX/stage/submariner-fbc-4-XX-stage-YYYYMMDD-01.yaml
-make watch NAME=submariner-fbc-4-XX-stage-YYYYMMDD-01
-
-# For prod (Step 18):
-make test-remote FILE=releases/fbc/4-XX/prod/submariner-fbc-4-XX-prod-YYYYMMDD-01.yaml
-make apply FILE=releases/fbc/4-XX/prod/submariner-fbc-4-XX-prod-YYYYMMDD-01.yaml
-make watch NAME=submariner-fbc-4-XX-prod-YYYYMMDD-01
+FILE=releases/fbc/4-19/stage/submariner-fbc-4-19-0-23-4-stage-YYYYMMDD-02.yaml
+make test-remote FILE="$FILE"
+make apply FILE="$FILE"
+NAME=$(yq -r '.metadata.name' "$FILE")
+make watch NAME="$NAME"
 ```
 
-Replace `4-XX` with OCP version and `YYYYMMDD` with date from create step.
+Replace the example with the exact reviewed file. Confirm its snapshot is the
+verified candidate and its ReleasePlan/admission matches the requested environment.
+Apply requires explicit authorization; stage authorization does not authorize
+production. For production, use the exact QE-approved stage snapshot and follow
+[production preparation](create-fbc-prod-release.md).
 
-## Done When
+## Done when
 
-All FBC releases running and completed successfully.
-
-```bash
-# Verify all releases on cluster
-oc get releases -n submariner-tenant | grep -E "fbc.*(stage|prod)" | sort
-
-# Verify files in repo (expect: 7 at Step 13 stage, 14 at Step 18 after prod added)
-git ls-tree -r --name-only origin/main releases/fbc/ | grep -E "(stage|prod)" | wc -l
-```
+Each intended Release reports `Released=True/Succeeded`, its artifact matches
+the verified snapshot, and the published digest is accessible. Follow
+[exact Release checks](check-fbc-releases.md) and [QE handoff](share-with-qe.md).
+A running Release or a passing build is not completed publication. Investigate
+failures before creating a distinct retry; retain each attempt's evidence.
