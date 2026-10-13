@@ -39,7 +39,7 @@ assert_eq "component release resolves its checkout" \
 assert_eq "FBC release resolves its checkout" \
   "$(resolved_root "$RELEASE_ROOT/scripts/create-fbc-releases.sh" GIT_ROOT)" "$RELEASE_ROOT"
 assert_eq "FBC URL lookup resolves its checkout" \
-  "$(resolved_root "$RELEASE_ROOT/scripts/get-fbc-urls.sh" GIT_ROOT)" "$RELEASE_ROOT"
+  "$(resolved_root "$RELEASE_ROOT/scripts/get-fbc-urls.sh" SCRIPT_DIR)" "$RELEASE_ROOT/scripts"
 
 status_help=$(cd "$UNRELATED_DIR" && "$RELEASE_ROOT/scripts/release-status.sh" help)
 if [[ "$status_help" == *"Usage: scripts/release-status.sh <version>"* ]]; then

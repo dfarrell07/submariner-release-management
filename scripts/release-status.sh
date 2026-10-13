@@ -1060,16 +1060,14 @@ check_fbc_catalog_live() {
         | select(.metadata.labels["pac.test.appstudio.openshift.io/original-prname"] == ($app + "-on-push"))
         | select(.metadata.labels["pac.test.appstudio.openshift.io/event-type"] as $e
             | $e == "push" or $e == "incoming" or $e == "retest-all-comment")]
-      | sort_by(.metadata.creationTimestamp) | last // empty
-      | {name: .metadata.name, revision: (.spec.components[0].source.git.revision // ""),
-         tests: (.metadata.annotations["test.appstudio.openshift.io/status"] // "")}' <<< "$all_snapshots" 2>/dev/null || true)
+      | sort_by(.metadata.creationTimestamp) | last // empty' <<< "$all_snapshots" 2>/dev/null || true)
     if [ -z "$snap" ]; then
       no_snapshot="$no_snapshot"$'\n'"   - OCP ${ocp//-/.}"
       continue
     fi
-    name=$(jq -r '.name' <<< "$snap")
-    revision=$(jq -r '.revision' <<< "$snap")
-    tests=$(jq -r '.tests' <<< "$snap")
+    name=$(jq -r '.metadata.name' <<< "$snap")
+    revision=$(jq -r '.spec.components[0].source.git.revision // ""' <<< "$snap")
+    tests=$(jq -r '.metadata.annotations["test.appstudio.openshift.io/status"] // ""' <<< "$snap")
 
     if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
       not_passing="$not_passing"$'\n'"   - OCP ${ocp//-/.}: snapshot $name has no valid source revision"
@@ -1086,13 +1084,13 @@ check_fbc_catalog_live() {
       continue
     fi
 
-    if ! printf '%s' "$tests" | fbc_tests_passed "$ocp"; then
+    if ! printf '%s' "$snap" | fbc_tests_passed "$ocp"; then
       if [ -z "$tests" ]; then
         reason="no test status yet"
       else
-        reason=$(printf '%s' "$tests" | jq -r '[.[] | select(.status != "TestPassed" and .status != "BuildPLRInProgress")
+        reason=$(printf '%s' "$tests" | jq -r '[.[] | select(.status != "TestPassed" and .status != "TestWarning" and .status != "BuildPLRInProgress")
           | "\(.scenario | sub("submariner-fbc-"; "")): \(.status)"] | join(", ")' 2>/dev/null || true)
-        [ -n "$reason" ] || reason="incomplete test results"
+        [ -n "$reason" ] || reason="tests are not finished and successful (check aggregate conditions and completed scenario results)"
       fi
       not_passing="$not_passing"$'\n'"   - OCP ${ocp//-/.}: $reason"
     fi

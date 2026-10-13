@@ -1,14 +1,25 @@
 #!/bin/bash
-# Both configured scenarios must have passed; no empty/pending pass. BuildPLRInProgress
-# counts as a pass: on push snapshots the `standard` scenario never leaves it, and it is
-# not a failure (same rule as verify-component-release.sh).
+# Read a complete Snapshot from stdin. Require finished aggregate conditions and
+# completed results for both configured scenarios. Retained BuildPLRInProgress
+# markers are only usable with completion evidence and a successful aggregate verdict.
 fbc_tests_passed() {
   local version="$1"
   jq -e --arg standard "submariner-fbc-standard-$version" --arg operator "submariner-fbc-operator-$version" '
-    type == "array" and length >= 2 and
-    all(.[]; .status == "TestPassed" or .status == "BuildPLRInProgress") and
-    ([.[].scenario] | length == (unique | length)) and
-    any(.[]; .scenario == $standard) and any(.[]; .scenario == $operator)
+    def nonempty_string: type == "string" and length > 0;
+    def condition($kind; $reason):
+      [.status.conditions[]? | select(.type == $kind)] |
+      length == 1 and .[0].status == "True" and .[0].reason == $reason;
+    type == "object" and
+    condition("AppStudioIntegrationStatus"; "Finished") and
+    condition("AppStudioTestSucceeded"; "Passed") and
+    (.metadata.annotations["test.appstudio.openshift.io/status"] | fromjson |
+      type == "array" and length >= 2 and
+      all(.[];
+        (.scenario | nonempty_string) and
+        (.completionTime | nonempty_string) and
+        (.status == "TestPassed" or .status == "TestWarning" or .status == "BuildPLRInProgress")) and
+      ([.[].scenario] | length == (unique | length)) and
+      any(.[]; .scenario == $standard) and any(.[]; .scenario == $operator))
   ' >/dev/null 2>&1
 }
 

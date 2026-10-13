@@ -193,7 +193,11 @@ class Onboarding(unittest.TestCase):
     def test_snapshot_results_fail_closed(self):
         command = f'source "{ROOT}/scripts/lib/fbc-snapshot.sh"; fbc_tests_passed 5-0'
         passing = [
-            {"scenario": f"submariner-fbc-{kind}-5-0", "status": "TestPassed"}
+            {
+                "scenario": f"submariner-fbc-{kind}-5-0",
+                "status": "TestPassed",
+                "completionTime": "2026-10-12T12:00:00Z",
+            }
             for kind in ("standard", "operator")
         ]
         cases = [
@@ -202,15 +206,36 @@ class Onboarding(unittest.TestCase):
             ({}, 1),
             (passing[:1], 1),
             (passing + passing, 1),
-            # BuildPLRInProgress is a pass: push snapshots never move `standard` past it.
+            # Retained markers require completion and aggregate success evidence.
             ([dict(passing[0], status="BuildPLRInProgress"), passing[1]], 0),
             ([passing[0], dict(passing[1], status="BuildPLRInProgress")], 0),
         ]
         for status in ("InProgress", "TestSkipped", "TestFailed"):
             cases.append(([passing[0], dict(passing[1], status=status)], 1))
         for data, expected in cases:
+            snapshot = {
+                "metadata": {
+                    "annotations": {
+                        "test.appstudio.openshift.io/status": json.dumps(data)
+                    }
+                },
+                "status": {
+                    "conditions": [
+                        {
+                            "type": "AppStudioIntegrationStatus",
+                            "status": "True",
+                            "reason": "Finished",
+                        },
+                        {
+                            "type": "AppStudioTestSucceeded",
+                            "status": "True",
+                            "reason": "Passed",
+                        },
+                    ]
+                },
+            }
             result = subprocess.run(
-                ["bash", "-c", command], input=json.dumps(data), text=True
+                ["bash", "-c", command], input=json.dumps(snapshot), text=True
             )
             self.assertEqual(result.returncode, expected, data)
         self.assertNotEqual(
@@ -256,6 +281,143 @@ echo '{"items":[]}'
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(expected, result.stderr)
+
+    def test_stage_urls_require_exact_completed_publication(self):
+        digest = 'b' * 64
+        image = 'quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-4-19@sha256:' + 'a' * 64
+        release = {
+            'metadata': {'name': 'submariner-fbc-4-19-0-23-4-stage-20261012-02',
+                         'creationTimestamp': '2026-10-12T19:00:00Z'},
+            'spec': {'releasePlan': 'submariner-fbc-release-plan-stage-4-19',
+                     'snapshot': 'submariner-fbc-4-19-replacement'},
+            'status': {'conditions': [{'type': 'Released', 'status': 'True', 'reason': 'Succeeded'}],
+                       'artifacts': {'components': [{'ocp_version': 'v4.19', 'fbc_fragment': image,
+                                                     'target_index': '', 'target_index_with_timestamp': ''}]}}}
+        snapshot = {'metadata': {'name': release['spec']['snapshot']},
+                    'spec': {'application': 'submariner-fbc-4-19',
+                             'components': [{'name': 'submariner-fbc-4-19', 'containerImage': image}]}}
+        snapshot['status'] = {'conditions': [
+            {'type': 'AppStudioIntegrationStatus', 'status': 'True', 'reason': 'Finished'},
+            {'type': 'AppStudioTestSucceeded', 'status': 'True', 'reason': 'Passed'}]}
+        snapshot['metadata']['annotations'] = {'test.appstudio.openshift.io/status': json.dumps([
+            {'scenario': 'submariner-fbc-standard-4-19', 'status': 'BuildPLRInProgress', 'completionTime': '2026-10-12T18:00:00Z'},
+            {'scenario': 'submariner-fbc-operator-4-19', 'status': 'TestPassed', 'completionTime': '2026-10-12T18:00:00Z'}])}
+        bundle = {'name': 'submariner.v0.23.4', 'image': 'quay.io/example/bundle@sha256:' + digest}
+        command = f'''source "{ROOT}/scripts/get-fbc-urls.sh"
+VERSION=0.23.4; RAW_URL=true; OCP_FILTER=4-19
+fbc_catalog_bundle_digest() {{ echo '{digest}'; }}
+oc() {{
+  if [ "$1 $2" = 'get releases' ]; then cat "$FIXTURE/releases.json"
+  elif [ "$1 $2" = 'get snapshot' ]; then cat "$FIXTURE/snapshot.json"
+  elif [ "$1 $2" = 'image extract' ]; then
+    [ "${{EXTRACT_FAIL:-no}}" = no ] || return 1
+    cp "$FIXTURE/bundle.yaml" "$TMPDIR/extract-4-19/bundle-v0.23.4.yaml"
+  else return 1; fi
+}}
+get_urls
+'''
+        def run(r=release, s=snapshot, b=bundle, extra=''):
+            (self.root / 'releases.json').write_text(json.dumps({'items': [r]}))
+            (self.root / 'snapshot.json').write_text(json.dumps(s))
+            (self.root / 'bundle.yaml').write_text(yaml.safe_dump(b))
+            return subprocess.run(['bash', '-c', command.replace('get_urls\n', extra + '\nget_urls\n')],
+                                  env=dict(os.environ, FIXTURE=str(self.root)),
+                                  capture_output=True, text=True)
+        good = run()
+        self.assertEqual(good.returncode, 0, good.stderr)
+        self.assertEqual(good.stdout.strip(), image)
+        wrong_host = image.replace('quay.io/', 'quayXio/')
+        wrong_release = json.loads(json.dumps(release))
+        wrong_snapshot = json.loads(json.dumps(snapshot))
+        wrong_release['status']['artifacts']['components'][0]['fbc_fragment'] = wrong_host
+        wrong_snapshot['spec']['components'][0]['containerImage'] = wrong_host
+        result = run(r=wrong_release, s=wrong_snapshot)
+        self.assertNotEqual(result.returncode, 0, 'non-Quay registry accepted')
+        self.assertEqual(result.stdout, '')
+        # A newer failed attempt must not replace the exact completed stage publication.
+        mutations = [
+            ('pending', ['status', 'conditions', 0, 'status'], 'False'),
+            ('wrong reason', ['status', 'conditions', 0, 'reason'], 'Running'),
+            ('prod name', ['metadata', 'name'], 'submariner-fbc-4-19-0-23-4-prod-20261012-02'),
+            ('other version', ['metadata', 'name'], 'submariner-fbc-4-19-0-23-3-stage-20261012-02'),
+            ('other plan', ['spec', 'releasePlan'], 'submariner-fbc-release-plan-prod-4-19'),
+            ('other OCP', ['status', 'artifacts', 'components', 0, 'ocp_version'], 'v4.20'),
+            ('prod target', ['status', 'artifacts', 'components', 0, 'target_index'], 'production'),
+            ('mutable tag', ['status', 'artifacts', 'components', 0, 'fbc_fragment'], image.split('@')[0] + ':latest'),
+        ]
+        for label, keys, value in mutations:
+            with self.subTest(label=label):
+                bad = json.loads(json.dumps(release)); cursor = bad
+                for key in keys[:-1]: cursor = cursor[key]
+                cursor[keys[-1]] = value
+                result = run(r=bad)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(result.stdout, '')
+        for label, s, b, extra in [
+            ('image mismatch', dict(snapshot, spec=dict(snapshot['spec'], components=[{'name': 'submariner-fbc-4-19', 'containerImage': image + 'bad'}])), bundle, ''),
+            ('missing completed tests', dict(snapshot, status={}), bundle, ''),
+            ('wrong CSV', snapshot, dict(bundle, name='submariner.v0.23.3'), ''),
+            ('wrong digest', snapshot, dict(bundle, image='quay.io/example/bundle@sha256:' + 'c' * 64), ''),
+            ('extraction failed', snapshot, bundle, 'EXTRACT_FAIL=yes'),
+            ('partial scope', snapshot, bundle, "OCP_FILTER=''; ALL_OCP_VERSIONS=(4-19 4-20)"),
+        ]:
+            with self.subTest(label=label):
+                result = run(s=s, b=b, extra=extra)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+
+    def test_fbc_verifier_requires_literal_catalog_registry(self):
+        script = (ROOT / 'scripts/verify-fbc-release.sh').read_text()
+        guard = script[script.index('  if [[ ! "${CATALOG_IMAGES'):script.index('  EVENT_TYPES["${VERSION}"]')]
+        command = 'VERSION=4-19; declare -A CATALOG_IMAGES; CATALOG_IMAGES[4-19]="$CATALOG"\n' + guard
+        for host, expected in [('quay.io', 0), ('quayXio', 1)]:
+            with self.subTest(host=host):
+                image = host + '/redhat-user-workloads/submariner-tenant/submariner-fbc-4-19@sha256:' + 'a' * 64
+                result = subprocess.run(['bash', '-c', command], capture_output=True, text=True,
+                                        env=dict(os.environ, CATALOG=image))
+                self.assertEqual(result.returncode, expected, result.stderr)
+                self.assertEqual(result.stdout, '')
+
+    def test_exact_snapshot_override_never_falls_back_to_old_push(self):
+        script = (ROOT / 'scripts/verify-fbc-release.sh').read_text()
+        selection = script[script.index('# Optional FBC_EXPECTED_SNAPSHOTS'):script.index('  FBC_REVISION=$(echo')]
+        command = '''APPLICABLE_VERSIONS=(4-19)
+ALL_SNAPSHOTS=$(cat "$FIXTURE")
+''' + selection + '''  printf '%s\\n' "$SNAPSHOT_DATA"
+  break
+done
+'''
+        def snapshot(name, event, timestamp):
+            return {'metadata': {'name': name, 'creationTimestamp': timestamp,
+                                 'labels': {'pac.test.appstudio.openshift.io/event-type': event}},
+                    'spec': {'application': 'submariner-fbc-4-19', 'components': [{'name': 'submariner-fbc-4-19'}]}}
+        old = 'submariner-fbc-4-19-old'; replacement = 'submariner-fbc-4-19-replacement'
+        (self.root / 'snapshots.json').write_text(json.dumps({'items': [snapshot(old, 'push', '2026-10-01'),
+                                                                       snapshot(replacement, 'manual', '2026-10-12')]}))
+        for override, expected in [({}, old), ({'4-19': replacement}, replacement)]:
+            result = subprocess.run(['bash', '-c', command], capture_output=True, text=True,
+                                    env=dict(os.environ, FIXTURE=str(self.root / 'snapshots.json'),
+                                             FBC_EXPECTED_SNAPSHOTS=json.dumps(override)))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['name'], expected)
+        # Exact selection still executes the real push-provenance gate. A manual
+        # replacement must fail there rather than pass via the older push.
+        guarded = script[script.index('# Optional FBC_EXPECTED_SNAPSHOTS'):script.index('  if [[ ! "$FBC_REVISION"')]
+        result = subprocess.run(['bash', '-c', 'APPLICABLE_VERSIONS=(4-19); ALL_SNAPSHOTS=$(cat "$FIXTURE")\n' + guarded + 'break; done'],
+                                capture_output=True, text=True,
+                                env=dict(os.environ, FIXTURE=str(self.root / 'snapshots.json'),
+                                         FBC_EXPECTED_SNAPSHOTS=json.dumps({'4-19': replacement})))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('not the push pipeline', result.stderr)
+        self.assertEqual(result.stdout, '')
+        for override in ['invalid', '[]', '{"4-20":"submariner-fbc-4-20-x"}',
+                         '{"4-19":null}', '{"4-19":"submariner-fbc-4-20-x"}',
+                         '{"4-19":"submariner-fbc-4-19-missing"}']:
+            result = subprocess.run(['bash', '-c', command], capture_output=True, text=True,
+                                    env=dict(os.environ, FIXTURE=str(self.root / 'snapshots.json'),
+                                             FBC_EXPECTED_SNAPSHOTS=override))
+            self.assertNotEqual(result.returncode, 0, override)
+            self.assertEqual(result.stdout, '')
 
     def test_prod_reuses_exact_stage_snapshot_for_five(self):
         # Execute production's actual selection function without commits or network.

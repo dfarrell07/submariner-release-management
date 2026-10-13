@@ -92,10 +92,36 @@ tasks:
     workspaces:
       - name: basic-auth
         workspace: git-auth
-  - name: run-opm-command
+  - name: fbc-inject-lifecycle
     params:
       - name: SOURCE_ARTIFACT
         value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
+      - name: ociStorage
+        value: $(params.output-image).lifecycle
+      - name: ociArtifactExpiresAfter
+        value: $(params.image-expires-after)
+      - name: CONTEXT
+        value: $(params.path-context)
+      - name: DOCKERFILE
+        value: $(params.dockerfile)
+      - name: BUILD_ARGS
+        value:
+          - $(params.build-args[*])
+    runAfter:
+      - clone-repository
+    taskRef:
+      params:
+        - name: name
+          value: fbc-inject-lifecycle-oci-ta
+        - name: bundle
+          value: quay.io/konflux-ci/tekton-catalog/task-fbc-inject-lifecycle-oci-ta:0.1@sha256:a80834195fca3c8f53cfb4d74dcad2118ea351ab6cfac631cc21494098f2158f
+        - name: kind
+          value: task
+      resolver: bundles
+  - name: run-opm-command
+    params:
+      - name: SOURCE_ARTIFACT
+        value: $(tasks.fbc-inject-lifecycle.results.SOURCE_ARTIFACT)
       - name: ociStorage
         value: $(params.output-image).opm
       - name: ociArtifactExpiresAfter
@@ -107,7 +133,7 @@ tasks:
       - name: IDMS_PATH
         value: ''
     runAfter:
-      - clone-repository
+      - fbc-inject-lifecycle
     taskRef:
       params:
         - name: name

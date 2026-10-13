@@ -90,6 +90,23 @@ class PipelineExecution(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.validate()
 
+    def test_required_lifecycle_task_and_forwarding(self):
+        self.validate()
+        for mode in ("missing", "opm-bypass", "wrong-source", "skipped"):
+            with self.subTest(mode=mode):
+                self.pair["push"] = pipeline("push")
+                tasks = self.pair["push"]["spec"]["pipelineSpec"]["tasks"]
+                lifecycle = next(t for t in tasks if t["name"] == "fbc-inject-lifecycle")
+                if mode == "missing":
+                    tasks.remove(lifecycle)
+                elif mode == "skipped":
+                    lifecycle["when"] = [{"input": "true", "operator": "in", "values": ["false"]}]
+                else:
+                    target = lifecycle if mode == "wrong-source" else next(t for t in tasks if t["name"] == "run-opm-command")
+                    next(p for p in target["params"] if p["name"] == "SOURCE_ARTIFACT")["value"] = "$(tasks.init.results.SOURCE_ARTIFACT)"
+                with self.assertRaises(ValueError):
+                    self.validate()
+
     def test_base_override_is_reusable_and_failed_pair_leaves_no_files(self):
         self.validate()
         override = (
