@@ -1,6 +1,6 @@
 ---
 name: get-fbc-urls
-description: Get FBC catalog URLs for QE sharing (Release CRs, snapshots, or prod index)
+description: Get verified stage catalog URLs for QE or inspect the prod index
 version: 2.0.0
 argument-hint: "<version> [--ocp 4.XX] [--raw-url] [--prod-index]"
 user-invocable: true
@@ -9,9 +9,16 @@ allowed-tools: Bash
 
 # Get FBC URLs
 
-Gets FBC catalog URLs for sharing with QE. Default mode extracts quay.io catalog URLs from Release CRs
-on the cluster, falling back to snapshot lookup from local YAML files if Release CRs are garbage-collected.
-Prod-index mode checks the Red Hat operator index at registry.redhat.io.
+Gets catalog URLs for QE. Default mode reads successful stage Release records;
+prod-index mode checks the Red Hat operator index. Older checkouts can fall back
+to snapshot lookup when Release records disappear; that does not prove publication.
+
+Confirm that output names the approved stage artifacts for the requested version.
+Verify exact Release/plan/snapshot/artifact identities using
+[the QE handoff workflow](../../.agents/workflows/share-with-qe.md). A snapshot
+fallback in older checkouts cannot certify publication; raw output hides its label.
+Non-raw mode also updates the QE Jira subtask when a tracker exists; use it only
+when that external write is authorized. `--raw-url` avoids that update.
 
 ```text
 Claude: /release-management:get-fbc-urls 0.24.0
@@ -29,7 +36,7 @@ make get-fbc-urls VERSION=0.24.0        # Via make target
 make get-fbc-urls VERSION=0.24.0 PROD_INDEX=true
 ```
 
-**Requirements:** `oc login` (default mode), `skopeo` (prod-index mode)
+**Requirements:** `oc login`, `jq` and `yq` (stage mode); `skopeo` (prod-index mode)
 
 ## Inputs and execution
 
