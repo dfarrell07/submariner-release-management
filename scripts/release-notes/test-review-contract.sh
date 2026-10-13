@@ -219,8 +219,8 @@ assert_eq 'second valid removal applied' "$(issue_count "$stage" ACM-600)" 0
 assert_eq 'one commit per removal' \
   "$(git -C "$repo" log --format=%s --grep='^Remove ACM-' | wc -l)" 2
 assert_eq 'CVE remains after all decisions' "$(issue_count "$stage" ACM-100)" 1
-if git -C "$repo" log -2 --format=%B | grep -q \
-  '^Signed-off-by: Release Review Test <test@example.invalid>$'; then
+if [ "$(git -C "$repo" log -2 --format=%B |
+  grep -c '^Signed-off-by: Release Review Test <test@example.invalid>$')" -eq 2 ]; then
   pass 'removal commits are signed off'
 else
   fail 'removal commits are signed off'
