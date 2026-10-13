@@ -13,6 +13,11 @@ scripts.
 
 ## Current status
 
+Rechecked October 7: `make test-skills` passes 19 checks while retaining the five known debt entries below.
+The Jira story payload now names the delivered shared discovery/compatibility contract;
+resolving that narrower story does not close this full plan.
+See [current work](current-work.md#release-tooling-and-jira-payloads) for the other open release-tooling PRs.
+
 Phases 1 through 4 are complete. The compatibility contract, shared discovery,
 portable delegates, caller-independent repository paths, namespaced Claude
 examples, and public invocation documentation are implemented and covered by

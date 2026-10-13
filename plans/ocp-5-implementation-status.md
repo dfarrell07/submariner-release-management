@@ -1,5 +1,11 @@
 # OCP 5 FBC implementation status
 
+October 7 navigation: the dated preparation and validation records below are historical.
+Use [current work](current-work.md) and the [consolidated rollout plan](ocp-5-0-fbc-rollout.md)
+for current PR/configuration state and execution order. Catalog/tooling #76/#81 are merged;
+pipeline #82 remains open with a missing build-account failure.
+The original "nothing pushed" and "no catalog/PR" statements describe September 24, not current reality.
+
 Updated 2026-09-24. **The reusable skill and real OCP 5.0 local preparation are
 complete**, including the catalog, tenant, admissions and build pipelines. The user
 authorized provisional existing inputs: minimum stream **0.24**, default channel
