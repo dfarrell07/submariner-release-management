@@ -34,41 +34,34 @@ This updates lockfiles in submariner (3 components) and shipyard (1 component) r
 
 ### Addon Go Toolchain
 
-Fix Go toolchain CVEs by updating the builder in each used addon Dockerfile (`Dockerfile.konflux` for
-Konflux and ordinary `Dockerfile` for OpenShift CI). Confirm the selected branch and Dockerfile in the
-actual Component/PaC, CI and applicable ART source/`from`/`streams.yml` configuration. ART may override
-the source Dockerfile's builder and runtime; branch copies and appstudio branches may not be active sources.
-
 **Repo:** <https://github.com/stolostron/submariner-addon>
 **Local:** `~/go/src/stolostron/submariner-addon`
+
+Identify the affected build paths: Konflux uses `Dockerfile.konflux`, OpenShift CI uses ordinary
+`Dockerfile`, and ART may override source, builder and runtime through its image/stream configuration.
+Confirm the selected source before editing.
 
 ```bash
 skopeo list-tags docker://registry.redhat.io/openshift/golang-builder
 ```
 
 Use the floating `golang-builder-v<Go-minor>-rhel<major>` family documented in
-[ACM-45149](https://redhat.atlassian.net/browse/ACM-45149). The repository requires internal registry
-entitlement; verify pulls through the actual OpenShift image-build and Konflux remote-build credential
-paths. Local registry access does not establish CI access; change credentials only for a demonstrated gap.
+[ACM-45149](https://redhat.atlassian.net/browse/ACM-45149). Select a compiler satisfying the compiled
+modules and required security fixes while preserving the build path's compiler lineage, OS/CPU and
+crypto requirements. Preserve runtime bases, CGO/strict-FIPS settings and hermetic prefetch/build flags.
+Explicit `-mod=mod` overrides the builder's `GOFLAGS=-mod=vendor` default.
 
-Select the Go minor/patch against every module actually compiled and the required security fixes.
-Preserve the required compiler lineage, OS/CPU baseline, runtime base and crypto contract for each build path,
-using resolved metadata and build evidence. Preserve existing CGO/strict-FIPS flags and
-PQC runtime choices where present. Keep prefetch and offline build behavior aligned with the build;
-the ART image's `GOFLAGS=-mod=vendor` does not override an explicit `-mod=mod` build flag.
+Verify internal registry entitlement in the actual OpenShift build or Konflux remote worker. Run the ordinary **images**
+check for changed ordinary Dockerfiles and the required Konflux checks for changed Konflux paths;
+source/unit tests alone do not exercise those image builds. Use normal review/merge gates and verify
+merged-source push results for the required platforms against the output index's child digests.
 
-Record source SHA, resolved builder/runtime digests, pipeline/task revisions, effective compiler/
-`GOTOOLCHAIN` and the built binary's
-`go version -m` data, inspecting the extracted binary with tooling outside the runtime image.
-[Go can select/download another toolchain](https://go.dev/doc/toolchain), so
-image labels and module floors alone do not establish the artifact compiler or crypto implementation.
-Use the ordinary **images** check as well as relevant source tests for pre-merge validation. After normal
-review/merge, verify the actual consumer's push-build source and required platform results against the
-published output index and child digests. A successful x86_64 PR build does not qualify a four-platform
-push image. Run startup/deployment checks against those output digests; a `--version` smoke check covers
-executable loading, while streams requiring FIPS also need their deployment/crypto checks in a FIPS-enabled
-environment. Keep qualification gaps explicit when that environment is unavailable. Retain receipts with
-the addon change and its CVE or migration tracker; hold release use until required qualification passes.
+Keep source SHA, resolved builder/runtime digests, pipeline/task revisions and effective compiler evidence
+with the change. [Go can select another toolchain](https://go.dev/doc/toolchain); inspect `GOTOOLCHAIN`
+and the extracted binary's `go version -m` output. Apply existing runtime/FIPS checks to changed paths:
+`--version` checks executable loading. Run required deployment/crypto checks against the output digests,
+using a FIPS-enabled environment where required. Record unavailable checks and hold release use until
+required qualification passes. Keep receipts with the relevant CVE or migration tracker.
 
 ## Done When
 

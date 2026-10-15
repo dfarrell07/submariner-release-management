@@ -29,22 +29,19 @@ For [0.22.2 — ACM-45070](https://redhat.atlassian.net/browse/ACM-45070), prese
 
 ## Builder guidance
 
-[ART migration — ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) still owns the consumer migration. The parent's statement that migration is complete refers to ART publishing the replacements; current addon Dockerfiles still use Brew. October 15 checks found no Dockerfile changes in the 13 open addon PRs. [Toolchain guidance](../.agents/workflows/scan-cves.md#addon-go-toolchain) now uses the ART registry; implementation and qualification belong in the addon repository.
+[ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) owns the addon consumer migration. Implement it in the addon repository using the [toolchain workflow](../.agents/workflows/scan-cves.md#addon-go-toolchain). Prepare an isolated main-branch pilot replacing the two Brew builder references, then backport to retained consumers after its image checks pass. Confirm deployed source selection and CI pull access for qualification; missing live access need not block draft preparation.
 
-[Release-data at bc743a1e](https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/bc743a1e127c1722636d1fb332025b5bd3df9df6/tenants-config/auto-generated/cluster/stone-prd-rh01/tenants/crt-redhat-acm-tenant) selects `release-2.11`, `release-2.13`–`release-2.17`, `release-5.0` and `main` (for both ACM 5.1/5.2), using `Dockerfile.konflux`. ACM 2.12 was removed; [addon #2826](https://github.com/stolostron/submariner-addon/pull/2826) still proposes pipeline cleanup. Prow still configures ordinary `Dockerfile` builds for 2.11–2.17, 5.0, 5.1 and main. Confirm retained support before choosing backports; separate appstudio branches, 2.10, 4.23 and 5.2 copies are not automatically active sources. Live ACM-tenant reads failed authentication/access checks: preparation can use these source records, while deployed selection and CI pull access remain qualification prerequisites.
+Source decisions checked October 15:
 
-Assess each build path separately. October 15 ART configs for [ACM 2.15](https://github.com/openshift-eng/ocp-build-data/blob/acm-2.15/images/submariner-addon.yml), [2.16](https://github.com/openshift-eng/ocp-build-data/blob/acm-2.16/images/submariner-addon.yml) and [2.17](https://github.com/openshift-eng/ocp-build-data/blob/acm-2.17/images/submariner-addon.yml) select a private source mirror and override the builder through `rhel-9-golang`; their [streams.yml](https://github.com/openshift-eng/ocp-build-data/blob/acm-2.16/streams.yml) already selects ART Go 1.26/RHEL9. Preserve those overrides and obtain source-mirror/build receipts before claiming ART consumption is qualified. The private-mirror read returned 404, leaving equivalence unverified. Direct Prow/Konflux Dockerfile consumers still need their own disposition.
+* [Konflux configuration](https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/bc743a1e127c1722636d1fb332025b5bd3df9df6/tenants-config/auto-generated/cluster/stone-prd-rh01/tenants/crt-redhat-acm-tenant) selects 2.11, 2.13–2.17, 5.0 and main for both ACM 5.1/5.2. ACM 2.12's Konflux component is retired; Prow still configures ordinary image builds for 2.11–2.17, 5.0, 5.1 and main. Confirm retained support before choosing backports or editing branch copies.
+* ART's ACM 2.15–2.17 configuration selects a private source mirror and [overrides the builder](https://github.com/openshift-eng/ocp-build-data/blob/acm-2.16/images/submariner-addon.yml) with [ART Go 1.26/RHEL9](https://github.com/openshift-eng/ocp-build-data/blob/acm-2.16/streams.yml). Preserve those overrides; the table below applies to direct Dockerfile consumers.
 
-Choose a floating tag under `registry.redhat.io/openshift/golang-builder` after confirming the used Dockerfile's current family. October 15 index/config reads support these candidates, not completed build qualification:
+Candidate tags under `registry.redhat.io/openshift/golang-builder`, subject to the workflow's checks:
 
-| Direct Dockerfile consumer's current Brew builder | Candidate ART tag |
+| Current Brew builder | Matching ART family |
 | --- | --- |
 | Pinned Go 1.24.6 / RHEL9 (2.11/2.12) | `golang-builder-v1.24-rhel9` |
-| `v1.25`, which declares RHEL8 (2.13–2.17) | `golang-builder-v1.25-rhel8` |
+| `v1.25` / RHEL8 (2.13–2.17) | `golang-builder-v1.25-rhel8` |
 | `v1.26` / RHEL9 (main/5.x) | `golang-builder-v1.26-rhel9` |
 
-Prepare an isolated main-branch pilot changing only the two Brew builder references, with qualification gaps recorded. After its image checks pass, prepare backports only for retained consumers, preserving their own compiler/OS contracts; leave the 2.14 ordinary CI builder alone. Preserve 2.15/2.16's CGO/strict-FIPS flags and 5.0's PQC runtime base. The RHEL9 Go 1.25 candidate adds `GOAMD64=v2`; choosing it would combine registry migration with an OS/CPU change. Keep runtime strings unchanged and record their resolved digests, since floating inputs can still move.
-
-Use the workflow's qualification checks, then the addon's normal review/merge process and merged-source push builds. Match required platform results to the output index's child digests; a one-platform PR pass cannot establish that coverage. Hold rollout on failed qualification. Before closing ACM-45318, retain merged PRs, qualified build/runtime receipts and an accepted migrated, unaffected or retired disposition for each retained build source.
-
-The other ticket-listed repositories still use UBI Go Toolset in all 36 inspected 0.19–0.24 component Dockerfiles; fresh devel and 0.19–0.24 source searches found no direct Brew consumer. Retain their no-change evidence in Jira, checking deployed overrides/external inputs before closure. The deadline alone does not require replacing UBI builders.
+Preserve 2.15/2.16's CGO/strict-FIPS flags and 5.0's PQC runtime base. RHEL9 Go 1.25 also adds `GOAMD64=v2`, so it is a separate OS/CPU change. The 2.14 ordinary CI builder and the other ticket repositories' inspected UBI Go Toolset paths are unaffected. Qualify changed paths under existing requirements and record merged changes/build evidence in Jira.
