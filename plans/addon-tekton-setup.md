@@ -2,13 +2,13 @@
 
 # Addon Tekton setup: deferred implementation proposal
 
-Checked October 7, 2026. No `tektonAddon` step or backing setup script exists in the current release graph.
+Source/related work checked October 15, 2026. No `tektonAddon` step or backing setup script exists in the current release graph.
 The [original design](https://github.com/stolostron/submariner-release-management/blob/96e1d91bdb4e3082e21036d60ba0805f38d1f931/plans/addon-tekton-setup.md) remains in Git. Its old Submariner-to-ACM arithmetic and copy/edit walkthrough are unsuitable as a current 5.x execution recipe.
 
 The ACM-integrated addon has a separate artifact/release path from independently released Submariner components.
 Confirm current ownership and whether an additional setup command is needed before adding conductor wiring.
 Existing builder migration, PQC runtime, OLMv1 work and ART consumption retain their own Jira scope in the [assigned-work queue](jira-update-queue.md).
-Addon task-ref PR #2792 targets an older ACM stream and does not implement this proposal.
+Addon task-ref PR #2792 targets `appstudio-submariner-addon-acm-214` at `4943dbed`. Its owning-tenant build/policy evidence and branch-support decision remain open; it does not implement this proposal. ACM-25779 separately leaves build-catalog migration pending the receiving team's ownership decision. Resolve those inputs before choosing predecessor pipelines or adding conductor scope.
 
 If the setup is approved, prepare one reviewable helper with these inputs and boundaries:
 

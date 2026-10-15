@@ -54,11 +54,22 @@ EC task-bump return codes are 0 for committed updates, 1 for failure/remaining a
 | --- | --- | --- |
 | QE installation of the staged 0.23.4 catalogs | Use the [verified handoff](../releases/fbc/qe-0.23.4-stage-20261012.md) for all six applicable targets | Select the intended channel/CSV and approved stage mirrors; installation/QE remains separate from successful publication |
 | Retarget and parent artifacts | Reconcile ACM-44527/ACM-45070 observations before designing an explicit retarget operation | Preserve version/snapshot identity, invalidate only affected evidence, refresh parent artifacts and read back tracker state |
-| Prod URL conversion, existing ACM-39732 | Reconcile fork candidate `3cabf0e` in an isolated worktree | Actual OCP scope and QE-approved snapshot/index evidence; conversion distinct from selecting a new bundle; original/untracked work preserved. See [candidate review](current-work.md#unpublished-tooling-and-stale-roadmap-entries) |
+| Prod URL conversion, existing ACM-39732 | Review the existing candidate and verifier together; see [handoff](#production-url-conversion) | Standalone script/skill and conductor wiring, exact released-bundle conversion, preserved content/worktrees and verified merged output |
 | Skill execution portability | Finish konflux-ci-fix normalization and installed-host matrix in [compatibility plan](claude-codex-skill-compatibility.md) | Five overlapping known debt entries removed and meaningful Claude/Codex execution evidence, beyond discovery tests |
 | Addon setup proposal | Resolve current ART/addon ownership and supported branch/version inputs before using [addon proposal](addon-tekton-setup.md) | No `tektonAddon` exists today; do not blindly derive ACM 5.x from the old arithmetic mapping |
 
 These are existing scopes; completed implementation designs and unselected retrospective story splits are not prerequisites.
+
+## Production URL conversion
+
+Fork candidate `3cabf0e1f7526d3ef554571ffbb0a95db33bf013` adds `scripts/update-fbc-prod-urls.sh`, conductor wiring and tests. No PR was returned for that head; it has no standalone skill, which ACM-39732 explicitly requires. Reconcile against main in an isolated worktree before proposing it.
+
+* Select actual applicable OCP scope, successful production/index evidence and the QE-approved stage identity. The draft's preflight only warns on missing tracker snapshot data; it never verifies successful Releases. One OCP Release cannot establish completion for every target. Preserve unrelated/untracked work; move tracker writes after validated prerequisites.
+* Convert the already released bundle without selecting a newer component snapshot. FBC main's `update-bundle.sh` selects/verifies a snapshot, runs a catalog scenario and audits **all** temporary bundle URLs. Its audit treats non-timeout registry errors as unreleased; distinguish authentication/network failures from genuine absence before reusing it. Compare final template/catalog contents and digests, including unrelated entries.
+* Correct `verify_fbcProdUrls` before relying on it at the conductor boundary. It reads local template text, uses a version regex with unescaped dots and a registry substring, and does not check merge/publication. Isolated calls on current source return success for `submariner.v0x23y4` requested as 0.23.4 and for `example.invalid/registry.redhat.io/bundle:unpublished`. Parse exact unique bundle identity and image registry/repository/digest; verify the intended merged template and required release/index evidence separately.
+* Supply the standalone shared skill/delegate and update discovery/compatibility inventories when it is added. Reconcile the old workflow's optional/deferred wording with the conductor's required final completion step; retain the review boundary.
+
+Before wiring, prove wrong/duplicate versions, misleading registries, unmerged local changes, partial OCP publication and failed reads cannot complete the step. Cover stable candidate selection, isolated dirty/untracked work, failure recovery and a repeated no-op. Run `test-autorelease`, relevant scope/publication/worktree/skill checks and `make test`; inspect the actual generated diff before any external action.
 
 ## Source risks requiring a focused follow-up
 
@@ -71,7 +82,7 @@ These source observations identify review questions, not authorization for an im
   Distinguish an unavailable source from a genuinely absent tracker; explicit supplied versions must retain their existing behavior.
 * **Stage snapshot identity.** Both production generators choose stage YAML with lexical `sort | tail -1`.
   Multiple historical or redo files can select the wrong candidate. Resolve actual applied/QE-approved identity or reject ambiguity;
-  stage/prod must reference the same approved snapshot for every target.
+  stage/prod must reference the same approved snapshot for every target. Both generators deliberately treat missing/unreadable QE sign-off as advisory and can still generate/commit YAML; validate approval and exact identity at the human apply gate. Generated files and their console wording are not QE evidence.
 * **Review redo and partial recovery.** `print_review_stop` supplies review/pending-action guidance but does not expose a distinct redo path.
   `--refresh` may leave duplicate generated YAMLs and does not necessarily invalidate a decorating step's producer.
   In-progress scripted steps without a verifier can rerun; preserve untracked/partial output and avoid creating duplicate releases or PRs.

@@ -18,6 +18,10 @@ The [retained earlier rollout](https://github.com/stolostron/submariner-release-
 | Trust | Current PR/Jira text says policy uses trusted task version rules. Acceptable-bundle digest expiry alone is not proof of a release deadline; verify the policy actually resolved by the selected build/release, including deny rules |
 | Scope | Main still defaults to OCP 4.16–4.22. Activate 5.0 only after its accepted delivery/publication gates |
 
+## Next review and execution order
+
+First agree the pre-GA contract across #119/#120: where installation occurs, which push/PR scenario outcomes are required before stage, and what exact evidence QE returns. Preserve rejection of completed TestFail and test that PR/skipped-install success cannot stand in for installation. Review source generation/MR equivalence in parallel, then reconcile #119's one overlapping rollout-document conflict with this cleanup. Local tests of #120 qualify the helper changes; tenant merge/reconciliation and actual #82 builds remain later gates. Do not run the stage procedure while its readiness contract is contradictory.
+
 ## 1. Refresh and reconcile configuration
 
 Review the existing MR against current release-data main and current CODEOWNERS. Its tenant resources provision the build account through Component reconciliation; admission entries serve later release matching. Confirm generated Application, Component, image repository, both ITS objects and stage/prod matching rather than relying only on the service account's presence. Follow that repository's validation and review requirements.

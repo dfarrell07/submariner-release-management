@@ -23,12 +23,13 @@ verify the exact base before attributing these findings to this repair or treati
 
 ## Completion sequence
 
-1. Formatting is fixed. Reconcile current scan findings with the existing remediation: [subctl #1946](https://github.com/submariner-io/subctl/pull/1946) is open with passing returned technical checks; Shipyard #2656 has merged. Refresh affected branches rather than bypassing the scan.
+1. Devel formatting is fixed. Reconcile current scan findings with [subctl #1946](https://github.com/submariner-io/subctl/pull/1946), open at `48762ade` with passing technical checks; Shipyard #2656 has merged. #1946 still has an open standard-library review: its x/net fix does not qualify the Dapper compiler or rebuilt binaries. Resolve builder remediation/artifact evidence separately without raising the module language floor to conceal that distinction. Refresh affected branches rather than bypassing the scan.
 2. Review [Shipyard #2654](https://github.com/submariner-io/shipyard/pull/2654) at `557bb9977cd4e2dcb9f8526620423faa20c4c1fb`, then verify publication and use of the updated Dapper runtime.
    Its passing/skipped checks do not publish the unmerged consumer dependency.
 3. Verify baseline isolation, the exact built CLI version/checksum, selected operator/component images, completed rollouts, connectivity and service discovery in both consumer variants.
    Record the new consumer head and all required hosted results; a passing deployment cannot substitute for the upgrade stage.
 4. Existing release-0.22 backports [Shipyard #2657](https://github.com/submariner-io/shipyard/pull/2657) (`0cdc2a19`) and [subctl #1947](https://github.com/submariner-io/subctl/pull/1947) (`0934c8d4`) remain draft with failing hosted checks. Complete applicable maintained-stream backports and their branch-specific evidence before closing [issue #2635](https://github.com/submariner-io/shipyard/issues/2635).
+   Their current descriptions separately identify unchanged Go lint findings and x/net/toolchain scan constraints: the maintenance base declares Go 1.25, while the proposed fixed x/net requires 1.26. Agree maintained scope and a qualified branch-specific remediation before merging; do not fold an unreviewed toolchain jump or ignore into this CI backport. Merge Shipyard source before publishing its runtime, then qualify the consumer; runtime publication is not a circular precondition for merging Shipyard itself.
    Keep the FIND-006 download-integrity disposition separate; this upgrade repair does not ship those closed-unmerged drafts.
 
 Review, publication and hosted reruns remain external handoffs. This plan diagnoses and sequences them; it does not authorize those actions.

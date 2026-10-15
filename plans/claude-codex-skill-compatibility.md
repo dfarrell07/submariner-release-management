@@ -92,7 +92,8 @@ Run focused checks during implementation, then `make test` once the change is co
 
 ## Completion criteria
 
-All 18 shared skills retain their documented interfaces and discoverability. Deterministic operations live in tested scripts;
+All 18 currently shared skills retain their documented interfaces and discoverability. Any separately approved new skill, including
+ACM-39732's missing delegate, must update the inventory and both-host matrix when added. Deterministic operations live in tested scripts;
 active-host judgment stays in the skill. The konflux-ci-fix debt ratchet is empty, full tests pass and the installed-host matrix
 establishes execution rather than discovery alone. Preserve existing workflow coverage and external-action boundaries.
 
