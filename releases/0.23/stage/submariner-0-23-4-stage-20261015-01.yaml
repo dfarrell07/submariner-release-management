@@ -1,0 +1,166 @@
+# Stage RHSA rehearsal using the production candidate snapshot and notes.
+# Prepared for review; not applied. Production review gates remain open.
+# CVE-2026-66780 remains pending Product Security review.
+---
+apiVersion: appstudio.redhat.com/v1alpha1
+kind: Release
+metadata:
+  name: submariner-0-23-4-stage-20261015-01
+  namespace: submariner-tenant
+  labels:
+    release.appstudio.openshift.io/author: 'dfarrell07'
+spec:
+  releasePlan: submariner-release-plan-stage-0-23
+  snapshot: submariner-0-23-20260930-064533-000
+  data:
+    releaseNotes:
+      type: RHSA
+      issues:
+        fixed:
+          - id: ACM-34110
+            source: issues.redhat.com
+          - id: ACM-34588
+            source: issues.redhat.com
+          - id: ACM-28591
+            source: issues.redhat.com
+          - id: ACM-34578
+            source: issues.redhat.com
+          - id: ACM-40464
+            source: issues.redhat.com
+          - id: ACM-38424
+            source: issues.redhat.com
+          - id: ACM-38427
+            source: issues.redhat.com
+          - id: ACM-38429
+            source: issues.redhat.com
+          - id: ACM-38430
+            source: issues.redhat.com
+          - id: ACM-38431
+            source: issues.redhat.com
+          - id: ACM-38434
+            source: issues.redhat.com
+          - id: ACM-38439
+            source: issues.redhat.com
+          - id: ACM-38467
+            source: issues.redhat.com
+          - id: ACM-38468
+            source: issues.redhat.com
+          - id: ACM-38469
+            source: issues.redhat.com
+          - id: ACM-38472
+            source: issues.redhat.com
+          - id: ACM-38475
+            source: issues.redhat.com
+          - id: ACM-38477
+            source: issues.redhat.com
+          - id: ACM-38479
+            source: issues.redhat.com
+          - id: ACM-38516
+            source: issues.redhat.com
+          - id: ACM-38518
+            source: issues.redhat.com
+          - id: ACM-38525
+            source: issues.redhat.com
+          - id: ACM-38526
+            source: issues.redhat.com
+          - id: ACM-38532
+            source: issues.redhat.com
+          - id: ACM-38539
+            source: issues.redhat.com
+          - id: ACM-38541
+            source: issues.redhat.com
+          - id: ACM-38545
+            source: issues.redhat.com
+          - id: ACM-38761
+            source: issues.redhat.com
+          - id: ACM-47362
+            source: issues.redhat.com
+          - id: ACM-38306
+            source: issues.redhat.com
+          - id: ACM-38318
+            source: issues.redhat.com
+          - id: ACM-38331
+            source: issues.redhat.com
+          - id: ACM-38336
+            source: issues.redhat.com
+          - id: ACM-38758
+            source: issues.redhat.com
+          - id: ACM-38358
+            source: issues.redhat.com
+          - id: ACM-38363
+            source: issues.redhat.com
+          - id: ACM-38651
+            source: issues.redhat.com
+          - id: ACM-38317
+            source: issues.redhat.com
+          - id: ACM-38329
+            source: issues.redhat.com
+          - id: ACM-38354
+            source: issues.redhat.com
+          - id: ACM-38433
+            source: issues.redhat.com
+          - id: ACM-38489
+            source: issues.redhat.com
+      cves:
+        - key: CVE-2026-32936
+          component: lighthouse-coredns-0-23
+        - key: CVE-2026-35579
+          component: lighthouse-coredns-0-23
+        - key: CVE-2026-66785
+          component: lighthouse-agent-0-23
+        - key: CVE-2026-66785
+          component: lighthouse-coredns-0-23
+        - key: CVE-2026-66785
+          component: subctl-0-23
+        - key: CVE-2026-66785
+          component: submariner-gateway-0-23
+        - key: CVE-2026-66785
+          component: submariner-globalnet-0-23
+        - key: CVE-2026-66785
+          component: submariner-operator-0-23
+        - key: CVE-2026-66785
+          component: submariner-route-agent-0-23
+        - key: CVE-2026-66786
+          component: lighthouse-agent-0-23
+        - key: CVE-2026-66786
+          component: lighthouse-coredns-0-23
+        - key: CVE-2026-66786
+          component: subctl-0-23
+        - key: CVE-2026-66786
+          component: submariner-gateway-0-23
+        - key: CVE-2026-66786
+          component: submariner-globalnet-0-23
+        - key: CVE-2026-66786
+          component: submariner-operator-0-23
+        - key: CVE-2026-66786
+          component: submariner-route-agent-0-23
+        - key: CVE-2026-66787
+          component: lighthouse-agent-0-23
+        - key: CVE-2026-66787
+          component: lighthouse-coredns-0-23
+        - key: CVE-2026-66787
+          component: subctl-0-23
+        - key: CVE-2026-66787
+          component: submariner-operator-0-23
+        - key: CVE-2026-66788
+          component: lighthouse-agent-0-23
+        - key: CVE-2026-66788
+          component: lighthouse-coredns-0-23
+        - key: CVE-2026-66788
+          component: subctl-0-23
+        - key: CVE-2026-66788
+          component: submariner-operator-0-23
+        - key: CVE-2026-63209
+          component: lighthouse-coredns-0-23
+        - key: CVE-2026-66781
+          component: subctl-0-23
+        - key: CVE-2026-66781
+          component: submariner-operator-0-23
+        - key: CVE-2026-66782
+          component: subctl-0-23
+        - key: CVE-2026-66782
+          component: submariner-operator-0-23
+        - key: CVE-2026-66783
+          component: subctl-0-23
+        - key: CVE-2026-66783
+          component: submariner-operator-0-23
