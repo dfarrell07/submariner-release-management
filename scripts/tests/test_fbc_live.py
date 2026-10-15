@@ -22,7 +22,11 @@ class LiveEvidence(unittest.TestCase):
         self.args = SimpleNamespace(ocp="5-0", expected_commit=self.commit)
         self.repo = f"quay.io/redhat-user-workloads/submariner-tenant/{self.app}"
         self.tests = [
-            {"scenario": f"submariner-fbc-{kind}-5-0", "status": "TestPassed"}
+            {
+                "scenario": f"submariner-fbc-{kind}-5-0",
+                "status": "TestPassed",
+                "completionTime": "2026-09-24T00:10:00Z",
+            }
             for kind in ("standard", "operator")
         ]
         self.snapshot = {
@@ -53,6 +57,20 @@ class LiveEvidence(unittest.TestCase):
                         },
                     }
                 ],
+            },
+            "status": {
+                "conditions": [
+                    {
+                        "type": "AppStudioIntegrationStatus",
+                        "status": "True",
+                        "reason": "Finished",
+                    },
+                    {
+                        "type": "AppStudioTestSucceeded",
+                        "status": "True",
+                        "reason": "Passed",
+                    },
+                ]
             },
         }
         self.resources = {
@@ -175,6 +193,13 @@ class LiveEvidence(unittest.TestCase):
         self.assertFalse(result["build_ready"])
         self.assertIn("wrong catalog content", result["errors"][0])
 
+    def test_completed_retained_marker_is_accepted(self):
+        # The tenant's standard scenario keeps BuildPLRInProgress after passing.
+        self.snapshot["metadata"]["annotations"]["test.appstudio.openshift.io/status"] = (
+            json.dumps([dict(self.tests[0], status="BuildPLRInProgress"), self.tests[1]])
+        )
+        self.assertTrue(self.verify()["build_ready"])
+
     def test_unmerged_commit_is_never_ready(self):
         self.require_merged_commit.side_effect = ValueError("not on main")
         self.assertFalse(self.verify()["build_ready"])
@@ -214,12 +239,26 @@ class LiveEvidence(unittest.TestCase):
                 {
                     "test.appstudio.openshift.io/status": json.dumps(
                         [
-                            dict(self.tests[0], status="BuildPLRInProgress"),
+                            {
+                                key: value
+                                for key, value in self.tests[0].items()
+                                if key != "completionTime"
+                            }
+                            | {"status": "BuildPLRInProgress"},
                             self.tests[1],
                         ]
                     )
                 }
             ),
+            lambda: self.snapshot["metadata"]["annotations"].update(
+                {
+                    "test.appstudio.openshift.io/status": json.dumps(
+                        [dict(self.tests[0], status="TestFail"), self.tests[1]]
+                    )
+                }
+            ),
+            lambda: self.snapshot["status"]["conditions"][1].update(reason="Failed"),
+            lambda: self.snapshot.pop("status"),
             lambda: self.build["metadata"]["annotations"].update(
                 {"build.appstudio.redhat.com/target_branch": "other"}
             ),

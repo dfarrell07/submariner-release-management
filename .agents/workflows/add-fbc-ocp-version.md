@@ -24,6 +24,16 @@ digest and provisional status in the change description. Reuse real catalog
 inputs and complete preparation and image testing. This does not establish
 product compatibility or require changing the bundle's compatibility metadata.
 
+To resolve the stream, compare with the ACM release that ships it (Submariner
+0.N pairs with ACM 2.(N-7); ACM 5.0 follows 2.17). ART's FBC targets are
+`OCP_TARGET_VERSIONS` in `group.yml` on the `acm-<X.Y>` branch of
+[ocp-build-data](https://github.com/openshift-eng/ocp-build-data), and that
+ACM branch's submariner-addon `defaultCatalogChannel` is the channel it subscribes
+to. Include a stream only where its ACM release targets the OCP version, and keep
+that channel present. Check the production index too, for example
+`registry.redhat.io/redhat/redhat-operator-index:v5.0`: ACM packages there and
+missing `submariner` show a gap for the addon.
+
 The plan reports the local base commits and explicitly does not claim remote
 freshness. Fetch both repositories before preparation. A failed fetch blocks
 claims of freshness; cached bases can still support a clearly identified draft.
@@ -162,6 +172,10 @@ After deployment, run the read-only live checks with the expected merged SHA:
 
 This checks live resource relationships, actual matched RPA contracts, build-account
 ownership and secret bindings, completed snapshot tests, and merged-main ancestry.
+Completed tests use the same rule as `fbc_tests_passed`: finished passing aggregate
+conditions and a completion time for every scenario. The tenant's standard scenario
+retains `BuildPLRInProgress` after passing, so that marker counts only with this
+completion evidence.
 It links the original push build to its snapshot and image, checks effective build
 arguments and all four base annotations, then extracts each platform's catalog and
 compares every file with the pinned merged source and template/cutoff contract.
@@ -186,8 +200,13 @@ For remote readiness, record distinct evidence:
   does not establish OCP 5 support. Record QE evidence separately.
 
 For the 0.3 install path, confirm access to its configured OpenShift CI cluster
-profile (the upstream default is `aws-konflux-prod`) before provisioning. Inspect
-the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
+profile (the upstream default is `aws-konflux-prod`) before provisioning.
+The upstream pipeline requests the OCP `stable` channel for the fragment's
+version, which gets its first release (x.y.0) on GA day. Check
+`https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-5.0&arch=multi`.
+While it has no nodes, provisioning fails: rerun the scenario after GA. If a
+release is needed sooner, point the ITS at a temporary pipeline copy that
+requests `candidate`, and remove it at GA. Inspect the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
 `pick-cluster-params`, `provision-cluster` and `deploy-operator`: the selected bundle
 digest/channel must be the approved one and `deploy-operator` must have executed
 successfully. Use the provisioned cluster's `oc get clusterversion version -o json`

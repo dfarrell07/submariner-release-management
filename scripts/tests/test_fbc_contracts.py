@@ -163,20 +163,39 @@ class ConfigurationContracts(unittest.TestCase):
                     mod.sequence_item(result, ["resources"], "new"), result
                 )
 
+    def test_add_resource_orders_after_previous_and_is_repeatable(self):
+        path = self.root / "kustomization.yaml"
+        for text in (
+            "resources:\n  - a/4-22-overlay\n  - rpa.yaml\n",
+            "resources:\n  - rpa.yaml\n  - a/4-22-overlay",
+        ):
+            with self.subTest(text=text):
+                path.write_text(text)
+                mod.add_resource(path, "a/5-0-overlay", after="a/4-22-overlay")
+                result = path.read_text()
+                resources = yaml.safe_load(result)["resources"]
+                self.assertEqual(
+                    resources.index("a/5-0-overlay"),
+                    resources.index("a/4-22-overlay") + 1,
+                )
+                self.assertEqual(len(resources), 3)
+                mod.add_resource(path, "a/5-0-overlay", after="a/4-22-overlay")
+                self.assertEqual(path.read_text(), result)
+
     def test_alias_cannot_modify_an_unrelated_sequence(self):
         text = "unrelated: &shared [old]\nresources: *shared\n"
         with self.assertRaises(ValueError):
             mod.sequence_item(text, ["resources"], "new")
 
     def test_ocp5_rejects_the_legacy_install_path_and_wrong_secret_key(self):
-        for legacy in (True, False):
+        for mode in ("legacy", "wrong_key", "missing_kind", "wrong_kind"):
             docs = copy.deepcopy(self.objects)
             its = next(
                 doc
                 for doc in docs
                 if doc["metadata"]["name"] == "submariner-fbc-operator-5-0"
             )
-            if legacy:
+            if mode == "legacy":
                 next(
                     item
                     for item in its["spec"]["resolverRef"]["params"]
@@ -184,16 +203,78 @@ class ConfigurationContracts(unittest.TestCase):
                 )[
                     "value"
                 ] = "pipelines/deploy-fbc-operator/0.1/deploy-fbc-operator.yaml"
-            else:
+            elif mode == "wrong_key":
                 next(
                     item
                     for item in its["spec"]["params"]
                     if item["name"] == "CREDENTIALS_SECRET_KEY"
                 )["value"] = "oci-storage-dockerconfigjson"
+            elif mode == "missing_kind":
+                its["spec"]["resolverRef"].pop("resourceKind", None)
+            elif mode == "wrong_kind":
+                its["spec"]["resolverRef"]["resourceKind"] = "pipeline"
             with self.assertRaisesRegex(ValueError, "OCP 5"):
                 mod.validate_tenant_objects(
                     {(doc["kind"], doc["metadata"]["name"]): doc for doc in docs}, "5-0"
                 )
+
+    def test_ocp5_patch_from_a_4x_overlay_adds_every_required_change(self):
+        # Shapes copied from the release-data base ITS and 4-22 overlay patch.
+        base = {
+            "metadata": {"labels": {"test.appstudio.openshift.io/optional": "false"}},
+            "spec": {
+                "params": [
+                    {"name": "PACKAGE_NAME", "value": "submariner"},
+                    {"name": "CHANNEL_NAME", "value": "stable"},
+                    {"name": "OCI_REF", "value": "<replace-me>"},
+                    {"name": "CREDENTIALS_SECRET_NAME", "value": "<replace-me>"},
+                ],
+                "resolverRef": {
+                    "params": [
+                        {"name": "url", "value": "https://example.invalid/catalog.git"},
+                        {"name": "revision", "value": "main"},
+                        {
+                            "name": "pathInRepo",
+                            "value": "pipelines/deploy-fbc-operator/0.1/deploy-fbc-operator.yaml",
+                        },
+                    ],
+                    "resolver": "git",
+                },
+            },
+        }
+        previous = (
+            "---\n- op: replace\n  path: /spec/application\n"
+            "  value: submariner-fbc-5-0\n"
+        )
+        text = mod.operator_its_patch(previous, base, "5-0")
+        ops = yaml.safe_load(text)
+        self.assertIn(
+            {
+                "op": "add",
+                "path": "/spec/params/-",
+                "value": {"name": "CREDENTIALS_SECRET_KEY", "value": ".dockerconfigjson"},
+            },
+            ops,
+        )
+        paths = {op["path"]: op for op in ops}
+        self.assertEqual(paths["/spec/resolverRef/resourceKind"]["value"], "pipelinerun")
+        self.assertEqual(
+            paths["/metadata/labels/test.appstudio.openshift.io~1optional"]["value"],
+            "true",
+        )
+        self.assertEqual(paths["/spec/resolverRef/params/2/value"]["value"], mod.OPERATOR_ITS_5)
+        self.assertEqual(mod.operator_its_patch(text, base, "5-0"), text)
+        base["spec"]["resolverRef"]["resourceKind"] = "pipeline"
+        text = mod.operator_its_patch(previous, base, "5-0")
+        self.assertIn(
+            {
+                "op": "replace",
+                "path": "/spec/resolverRef/resourceKind",
+                "value": "pipelinerun",
+            },
+            yaml.safe_load(text),
+        )
+        self.assertEqual(mod.operator_its_patch(text, base, "5-0"), text)
 
     def test_base_override_must_work_with_the_deployed_release_version_filter(self):
         mod.validate_base_reference("registry.example/approved/base:v5.0", "5-0")

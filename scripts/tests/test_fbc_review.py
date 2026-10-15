@@ -96,6 +96,25 @@ class PipelineContract(unittest.TestCase):
         )
         self.validate()
 
+    def test_upstream_build_image_index_params_are_accepted(self):
+        # build-image-index 0.4 declares neither COMMIT_SHA nor IMAGE_EXPIRES_AFTER;
+        # upstream fbc-builder and stolostron common-fbc omit both.
+        for data in self.pair.values():
+            task = next(
+                task
+                for task in data["spec"]["pipelineSpec"]["tasks"]
+                if task["name"] == "build-image-index"
+            )
+            task["params"] = [
+                param
+                for param in task["params"]
+                if param["name"] not in ("COMMIT_SHA", "IMAGE_EXPIRES_AFTER")
+            ]
+        self.validate()
+        task["params"] = [p for p in task["params"] if p["name"] != "IMAGES"]
+        with self.assertRaisesRegex(ValueError, "build-image-index"):
+            self.validate()
+
     def test_conflicting_build_args_rejected(self):
         for argument in ("INPUT_DIR=catalog-4-22", "OPM_IMAGE=wrong:v4.22"):
             with self.subTest(argument=argument):

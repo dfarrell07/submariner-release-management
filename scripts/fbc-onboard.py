@@ -241,8 +241,23 @@ def sequence_item(text, keys, item):
     return candidate
 
 
-def add_resource(path, resource):
+def add_resource(path, resource, after=None):
     before = path.read_text()
+    current = yaml.safe_load(before) or {}
+    if resource in (current.get("resources") or []):
+        return
+    match = after and re.search(
+        rf"^([ \t]*)- {re.escape(after)}[ \t]*(#.*)?$", before, re.MULTILINE
+    )
+    if match:
+        end_line = match.end()
+        candidate = (
+            before[:end_line] + f"\n{match.group(1)}- {resource}" + before[end_line:]
+        )
+        expected = yaml.safe_load(candidate)
+        if expected and resource in expected.get("resources", []):
+            atomic_text(path, candidate)
+            return
     candidate = sequence_item(before, ["resources"], resource)
     if candidate != before:
         atomic_text(path, candidate)
@@ -298,9 +313,26 @@ def operator_its_patch(text, base, version):
                 ]
             )
 
+    def field(path, current, value):
+        # current is None when the base omits the field.
+        if current == value:
+            return
+        op = "add" if current is None else "replace"
+        expected = {"op": op, "path": path, "value": value}
+        existing = [op for op in patches if op.get("path") == path]
+        if existing:
+            require(existing == [expected], f"Conflicting ITS patch: {path}")
+        else:
+            additions.append(expected)
+
     parameter(["spec", "params"], "CHANNEL_NAME", "")
     if int(version.split("-")[0]) >= 5:
         parameter(["spec", "resolverRef", "params"], "pathInRepo", OPERATOR_ITS_5)
+        field(
+            "/spec/resolverRef/resourceKind",
+            base["spec"].get("resolverRef", {}).get("resourceKind"),
+            "pipelinerun",
+        )
         key = {"name": "CREDENTIALS_SECRET_KEY", "value": ".dockerconfigjson"}
         if any(item.get("name") == key["name"] for item in base["spec"]["params"]):
             parameter(["spec", "params"], key["name"], key["value"])
@@ -316,6 +348,13 @@ def operator_its_patch(text, base, version):
                 require(existing == [expected], "Conflicting ITS credential-key patch")
             else:
                 additions.append(expected)
+        field(
+            "/metadata/labels/test.appstudio.openshift.io~1optional",
+            base.get("metadata", {}).get("labels", {}).get(
+                "test.appstudio.openshift.io/optional"
+            ),
+            "true",
+        )
     if additions:
         text = (text.rstrip() + "\n" if patches else "---\n") + yaml.safe_dump(
             additions, sort_keys=False
@@ -362,6 +401,7 @@ def prepare_tenant(root, version, previous, kustomize=None):
         add_resource(
             stage / registration,
             f"overlay/application-submariner-fbc/{version}-overlay",
+            after=f"overlay/application-submariner-fbc/{previous}-overlay",
         )
         changed = stage / "changed-tenants"
         changed.write_text("cluster/kflux-prd-rh02/tenants/submariner-tenant\n")
@@ -486,10 +526,15 @@ def validate_tenant_objects(objects, version):
         )
     for scenario in ("standard", "operator"):
         its = objects["IntegrationTestScenario", f"submariner-fbc-{scenario}-{version}"]
+        expected_optional = (
+            "true"
+            if (scenario == "operator" and int(version.split("-")[0]) >= 5)
+            else "false"
+        )
         require(
             its["metadata"]["labels"].get("test.appstudio.openshift.io/optional")
-            == "false",
-            f"Optional {scenario} scenario",
+            == expected_optional,
+            f"Wrong {scenario} scenario optional label (expected {expected_optional})",
         )
         require(
             [context["name"] for context in its["spec"]["contexts"]]
@@ -559,6 +604,10 @@ def validate_tenant_objects(objects, version):
         require(
             refs["pathInRepo"] == OPERATOR_ITS_5,
             "OCP 5+ requires the reviewed 0.3 install pipeline wrapper",
+        )
+        require(
+            operator["spec"]["resolverRef"].get("resourceKind") == "pipelinerun",
+            "OCP 5+ ITS must set resolverRef resourceKind to pipelinerun",
         )
         require(
             params.get("CREDENTIALS_SECRET_KEY") == ".dockerconfigjson",
@@ -811,7 +860,6 @@ def validate_pipeline_execution(definition, params):
             "IMAGE": "$(params.output-image)",
             "IMAGES": ["$(tasks.build-images.results.IMAGE_REF[*])"],
             "ALWAYS_BUILD_INDEX": "$(params.build-image-index)",
-            "IMAGE_EXPIRES_AFTER": "$(params.image-expires-after)",
         },
     }
     for name in (
@@ -1330,6 +1378,33 @@ def verify_catalog_images(image, manifests, expected, contract):
     return checked
 
 
+def snapshot_tests_complete(snapshot, tests):
+    """Match fbc_tests_passed: retained BuildPLRInProgress markers need completion evidence."""
+
+    def condition(kind, reason):
+        matches = [
+            c
+            for c in snapshot.get("status", {}).get("conditions", [])
+            if c.get("type") == kind
+        ]
+        return (
+            len(matches) == 1
+            and matches[0].get("status") == "True"
+            and matches[0].get("reason") == reason
+        )
+
+    return (
+        condition("AppStudioIntegrationStatus", "Finished")
+        and condition("AppStudioTestSucceeded", "Passed")
+        and all(
+            isinstance(test.get("completionTime"), str)
+            and test["completionTime"]
+            and test.get("status") in ("TestPassed", "TestWarning", "BuildPLRInProgress")
+            for test in tests
+        )
+    )
+
+
 def verify_live(args, base_image):
     """Keep configuration, build/content, and actual runtime evidence separate."""
     require(
@@ -1505,7 +1580,7 @@ def verify_live(args, base_image):
         require(
             required.issubset(names)
             and len(names) == len(set(names))
-            and all(test["status"] == "TestPassed" for test in tests),
+            and snapshot_tests_complete(snapshot, tests),
             "Required snapshot tests are missing or incomplete",
         )
         build = get(
