@@ -4,10 +4,22 @@
 
 Ownership checked October 15, 2026 against Jira's assigned-to-current-user query. Jira owns assignment, priority, status and acceptance. These plans retain Daniel's implementation decisions specific to this repository.
 
-| Work | Plan and canonical tracking |
-| --- | --- |
-| Tracker reconciliation, conductor and production URL conversion | [Implementation handoff](autorelease-step-automation.md); ACM-39730, ACM-39731 and ACM-39732 |
-| OCP onboarding and the unresolved pre-GA release gate | [OCP 5 handoff](ocp-5-0-fbc-rollout.md); ACM-48092, ACM-48200 and OPGM-364. The [onboarding workflow](../.agents/workflows/add-fbc-ocp-version.md) owns procedures |
+## Suggested work order
+
+Order and activity checked October 15, 2026. This is a recommendation based on deadlines and release dependencies; refresh Jira and existing PRs before starting. Ticket activity alone does not establish implementation progress. Promote a tooling fix if it blocks an active release.
+
+| Order | Work | Observed activity and next action |
+| --- | --- | --- |
+| 1 | [ART migration — ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) | Due October 15; Jira New. Inventory posted October 8, migration unconfirmed. Finish addon migration/qualification and the [local guidance edit](#builder-guidance) |
+| 2 | Nettest — [ACM-48176](https://redhat.atlassian.net/browse/ACM-48176), [ACM-48194](https://redhat.atlassian.net/browse/ACM-48194) | Both New, updated October 15; logs added to ACM-48176. Confirm tested images and whether reports share a cause; implementation progress unconfirmed |
+| 3 | [0.23.4 — ACM-44527](https://redhat.atlassian.net/browse/ACM-44527) | In Progress; October 12 stage evidence reconciled October 13. Follow up on nettest disposition and QE, then production prerequisites |
+| 4 | [OCP 5 pre-GA gate](ocp-5-0-fbc-rollout.md#decision-before-stage) | Existing draft #119/#120 commits October 15. Resolve required scenario evidence and installation timing before stage |
+| 5 | [OCP onboarding/catalog delivery](ocp-5-0-fbc-rollout.md#existing-changes-to-reuse) — ACM-48092/ACM-48200 | In Progress; #119/#120 and FBC #82 already underway. Continue existing changes and tenant MR !23786, then the canonical rollout after the gate decision |
+| 6 | [Lifecycle publication — OPGM-364](https://redhat.atlassian.net/browse/OPGM-364) | In Progress; shares active FBC #82 prerequisites. Release existing data and record publication proof; catalog delivery alone does not complete this |
+| 7 | [0.22.2 — ACM-45070](https://redhat.atlassian.net/browse/ACM-45070) | In Progress; last Jira update October 4. Recover candidate/operand evidence using the [existing investigation](#existing-release-work) |
+| 8 | [Production URL conversion](autorelease-step-automation.md#production-url-conversion) — ACM-39732 | Jira New; existing fork implementation. Reconcile that candidate, complete skill/wiring and exact publication verification |
+| 9 | [Tracker reconciliation](autorelease-step-automation.md#tracker-reconciliation) — ACM-39730 | In Progress; related #114/#118 merged October 13. Retarget automation and parent Key Artifacts refresh remain |
+| 10 | [Conductor follow-ups](autorelease-step-automation.md#tracker-reconciliation) — ACM-39731 | In Progress; related #114/#117 merged October 13. Review remaining write/retry, discovery and snapshot-selection boundaries within that work |
 
 ## Existing release work
 

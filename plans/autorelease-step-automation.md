@@ -4,6 +4,8 @@
 
 Daniel's existing work is tracked in [ACM-39730 — Jira release tracking](https://redhat.atlassian.net/browse/ACM-39730), [ACM-39731 — autorelease](https://redhat.atlassian.net/browse/ACM-39731) and [ACM-39732 — production URL conversion](https://redhat.atlassian.net/browse/ACM-39732). Ownership was checked October 15, 2026. [Issue #64](https://github.com/stolostron/submariner-release-management/issues/64) retains the original conductor design. Jira owns acceptance and progress; this handoff preserves implementation details absent from those trackers.
 
+Follow the [work order](current-work.md#suggested-work-order): resume the existing production-URL candidate before broader tracker/conductor follow-ups unless one blocks an active release. Related [#114](https://github.com/stolostron/submariner-release-management/pull/114), [#117](https://github.com/stolostron/submariner-release-management/pull/117) and [#118](https://github.com/stolostron/submariner-release-management/pull/118) merged October 13; the remaining follow-ups below are still open.
+
 ## Tracker reconciliation
 
 ACM-39730/39731 already record delivered tracking and orchestration. Their remaining retarget/parent-artifact follow-up needs an explicit intended version and candidate, preserving unaffected evidence and refreshing the parent's Key Artifacts after reconciliation. Use the [release-specific evidence](current-work.md#existing-release-work) before designing or running a retarget operation.

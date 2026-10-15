@@ -14,4 +14,6 @@ Reconcile where installation happens and which scenario evidence is required bef
 
 Reuse tenant/admission MR !23786 and [FBC pipelines #82](https://github.com/stolostron/submariner-operator-fbc/pull/82). Review generation, approvals, builds and reconciliation through those existing repositories and the canonical workflow; their mutable heads and check results belong with the changes.
 
+Activity checked October 15: #119, #120 and FBC #82 are open drafts with commits that day. Continue those changes in [work order](current-work.md#suggested-work-order), resolving the gate before stage. [FBC #86](https://github.com/stolostron/submariner-operator-fbc/pull/86) also has an October 15 commit for required lifecycle injection on 4.x; reuse that separate change where applicable. GitLab MR state was not refreshed in this activity check; verify it before acting.
+
 OPGM-364 requires release of existing lifecycle data and published v5.0 membership or its permitted team IIB/catalog proof, without new OCP 5 compatibility statements. Keep that acceptance distinct from ACM-48200's installation, production-index and default-scope criteria. Follow the canonical workflow once the gate decision is resolved.
