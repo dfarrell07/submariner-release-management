@@ -10,7 +10,7 @@ Order and activity checked October 15, 2026. This is a recommendation based on d
 
 | Order | Work | Observed activity and next action |
 | --- | --- | --- |
-| 1 | [ART migration — ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) | Due October 15; Jira New. Inventory posted October 8, migration unconfirmed. Finish addon migration/qualification and the [local guidance edit](#builder-guidance) |
+| 1 | [ART migration — ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) | Due October 15; Jira New. Brew consumers verified October 15; no open addon PR changes their Dockerfiles. Confirm live CI sources/access, then migrate and qualify the addon using the [handoff](#builder-guidance) |
 | 2 | Nettest — [ACM-48176](https://redhat.atlassian.net/browse/ACM-48176), [ACM-48194](https://redhat.atlassian.net/browse/ACM-48194) | Both New, updated October 15; logs added to ACM-48176. Confirm tested images and whether reports share a cause; implementation progress unconfirmed |
 | 3 | [0.23.4 — ACM-44527](https://redhat.atlassian.net/browse/ACM-44527) | In Progress; October 12 stage evidence reconciled October 13. Follow up on nettest disposition and QE, then production prerequisites |
 | 4 | [OCP 5 pre-GA gate](ocp-5-0-fbc-rollout.md#decision-before-stage) | Existing draft #119/#120 commits October 15. Resolve required scenario evidence and installation timing before stage |
@@ -29,4 +29,18 @@ For [0.22.2 — ACM-45070](https://redhat.atlassian.net/browse/ACM-45070), prese
 
 ## Builder guidance
 
-[ART migration — ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) owns the addon migration and recorded inventory. Its local follow-up is to update [addon toolchain guidance](../.agents/workflows/scan-cves.md#addon-go-toolchain) with the accepted ART builder while preserving the actual Go/OS family. Dockerfile changes and image qualification belong in the addon repository.
+[ART migration — ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) still owns the consumer migration. The parent's statement that migration is complete refers to ART publishing the replacements; current addon Dockerfiles still use Brew. October 15 checks found no Dockerfile changes in the 13 open addon PRs. [Toolchain guidance](../.agents/workflows/scan-cves.md#addon-go-toolchain) now uses the ART registry; implementation and qualification belong in the addon repository.
+
+First confirm deployed source selection and pull access. [Release-data at bc743a1e](https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/bc743a1e127c1722636d1fb332025b5bd3df9df6/tenants-config/auto-generated/cluster/stone-prd-rh01/tenants/crt-redhat-acm-tenant) selects `release-2.11`, `release-2.13`–`release-2.17`, `release-5.0` and `main` (for both ACM 5.1/5.2), using `Dockerfile.konflux`. ACM 2.12 was removed; [addon #2826](https://github.com/stolostron/submariner-addon/pull/2826) still proposes pipeline cleanup. Prow still configures ordinary `Dockerfile` builds for 2.11–2.17, 5.0, 5.1 and main. Confirm retained support before choosing backports; separate appstudio branches, 2.10, 4.23 and 5.2 copies are not automatically active sources. Live ACM-tenant reads failed authentication/access checks, so Git configuration does not establish deployment.
+
+Choose a floating tag under `registry.redhat.io/openshift/golang-builder` after confirming the used Dockerfile's current family. October 15 index/config reads support these candidates, not completed build qualification:
+
+| Current Brew builder | Candidate ART tag |
+| --- | --- |
+| Pinned Go 1.24.6 / RHEL9 (2.11/2.12) | `golang-builder-v1.24-rhel9` |
+| `v1.25`, which declares RHEL8 (2.13–2.17) | `golang-builder-v1.25-rhel8` |
+| `v1.26` / RHEL9 (main/5.x) | `golang-builder-v1.26-rhel9` |
+
+Prepare isolated addon changes using the workflow's qualification checks. Replace Brew references in both **used** Dockerfiles; leave the 2.14 ordinary CI builder alone. Preserve 2.15/2.16's CGO/strict-FIPS flags and 5.0's PQC runtime base. The RHEL9 Go 1.25 candidate adds `GOAMD64=v2`; choosing it would combine registry migration with an OS/CPU change.
+
+The other ticket-listed repositories still use UBI Go Toolset in all 36 inspected 0.19–0.24 component Dockerfiles; fresh devel and 0.19–0.24 source searches found no direct Brew consumer. Retain their no-change evidence in Jira, checking deployed overrides/external inputs before closure. The deadline alone does not require replacing UBI builders.

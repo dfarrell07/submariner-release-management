@@ -34,15 +34,37 @@ This updates lockfiles in submariner (3 components) and shipyard (1 component) r
 
 ### Addon Go Toolchain
 
-Fix Go toolchain CVEs by updating `Dockerfile.konflux` builder image.
+Fix Go toolchain CVEs by updating the builder in each used addon Dockerfile (`Dockerfile.konflux` for
+Konflux and ordinary `Dockerfile` for OpenShift CI). Confirm the selected branch and Dockerfile in the
+actual Component/PaC and CI configuration; branch copies and appstudio branches may not be active sources.
 
 **Repo:** <https://github.com/stolostron/submariner-addon>
 **Local:** `~/go/src/stolostron/submariner-addon`
 
 ```bash
-skopeo list-tags docker://brew.registry.redhat.io/rh-osbs/openshift-golang-builder | \
-  jq -r '.Tags[] | select(contains("el9"))' | sort -Vr | head -10
+skopeo list-tags docker://registry.redhat.io/openshift/golang-builder
 ```
+
+Use the floating `golang-builder-v<Go-minor>-rhel<major>` family documented in
+[ACM-45149](https://redhat.atlassian.net/browse/ACM-45149). The repository requires internal registry
+entitlement; verify pulls through the actual OpenShift image-build and Konflux remote-build credential
+paths. Local registry access does not establish CI access; change credentials only for a demonstrated gap.
+
+Select the Go minor/patch against every module actually compiled and the required security fixes.
+Preserve the existing builder OS/CPU family, runtime base and crypto settings: Brew `v1.25` declares
+RHEL8, while its RHEL9 replacement also adds `GOAMD64=v2`. Preserve existing CGO/strict-FIPS flags and
+PQC runtime choices where present. Keep prefetch and offline build behavior aligned with the build;
+the ART image's `GOFLAGS=-mod=vendor` does not override an explicit `-mod=mod` build flag.
+
+Record resolved builder digests, the effective compiler/`GOTOOLCHAIN` and the built binary's
+`go version -m` data, inspecting the extracted binary with tooling outside the runtime image.
+[Go can select/download another toolchain](https://go.dev/doc/toolchain), so
+image labels and module floors alone do not establish the artifact compiler or crypto implementation.
+Require the ordinary **images** check as well as relevant source tests, Konflux builds on all required
+platforms, and runtime checks against the resulting image digests, including existing FIPS requirements.
+Exercise existing deployment and crypto checks in a FIPS-enabled environment for streams requiring it.
+A successful x86_64 PR build does not qualify the four-platform push image. Retain these receipts with
+the addon change and [ACM-45318](https://redhat.atlassian.net/browse/ACM-45318).
 
 ## Done When
 
