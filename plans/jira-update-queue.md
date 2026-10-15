@@ -1,129 +1,48 @@
 <!-- markdownlint-disable MD013 -->
 
-# Assigned Jira work: update queue
+# Assigned Jira work: current dispositions
 
-Verified October 8, 2026. This queue accounts for all 76 active assigned non-Vulnerability issues; private security follow-up remains separate.
+Reconciled October 15, 2026. Paginated inventory: **706 assigned issues, 77 active**; membership/status categories were unchanged at the 14:48 UTC refresh. Field reads covered 24 assigned issues updated since October 8 and five related targets. This is a recent-change reconciliation, not a semantic audit of the whole backlog. Restricted follow-up stays private.
 
-Next review: **Submariner description edits 4 → 3 → 5**, then optional 1/2. Ten comments and the Kubernetes description are complete; [verified ids](agentic-sdlc-jira-updates.md#a5-execution-order). The 0.22.2 candidate note remains on hold; EVPN is last. Re-read each approved target and omit completed deltas.
-
-[Current work](current-work.md) owns engineering evidence; the [epic plan](agentic-sdlc-jira-updates.md) owns creation and field procedures; [portfolio payloads](agentic-sdlc-jira-updates-payloads/portfolio-comments.md) contain exact existing-issue drafts.
+The [October 8 queue](https://github.com/stolostron/submariner-release-management/blob/f071c65c288e2bf1b2fd8f2470e70d819ad2031a/plans/jira-update-queue.md) and [verification log](agentic-sdlc-jira-updates-verification.md) retain the earlier 703-issue inventory and 76 active general-issue dispositions. Those populations and approval groups are historical. The old payloads must not be replayed as a current batch.
 
 ## Approval order
 
-Table rows set approval priority; group identifiers stay fixed. Use this order for the remaining Jira work. Start with small comments supported by established records, then handle mutable release evidence, description changes, new tracking and acceptance reviews. Each group is a separate approval chunk; approval of one does not authorize the others. The four earlier ACM comments, groups 1 and 2, both comments in group 4, the recovery-map comment in group 5 and the Kubernetes epic description in group 6 remain completed.
+**No Jira write batch is selected.** Refresh only a useful missing delta when it is selected; preserve native ADF, acceptance, ownership, existing links and completed receipts. Any later external write needs explicit authorization.
 
-| Group | Work | Targets, in order | Why here / boundary |
-| --- | --- | --- | --- |
-| 1 (complete) | CI research correction | CORENET-7171 | Posted and verified comment 18824859; parent comment remains deferred |
-| 2 (complete) | CVE contributions | ACM-39740 → ACM-39739 | Posted and verified comments 18831845 and 18831852; both remain New; parent rollup deferred |
-| 4 (complete) | Deadline and requested status | OPGM-364 → ACM-45318 | Posted and verified lifecycle comment 18829498 and builder planning comment 18839276. The builder remains New; migration/source/CI/runtime qualification remains engineering work |
-| 5 (partial) | Release evidence | Release Submariner 0.22.2 (ACM-45070), on hold | Recovery-map comment 18830594 posted on Release Submariner 0.23.4 (ACM-44527). Confirm candidate relevance before proposing its comment for posting; no selection or step transitions |
-| 6 (partial) | Independent epic descriptions | Submariner Sustenance Automation (ACM-39728) edits 4 → 3 → 5; optional metrics cleanup 1/2 | Create agents to automate the bump description applied and verified, changelog 92306194. Submariner edits need separate approval; preserve unaffected ADF. Qualification remains required |
-| 7 | Scope and conditional corrections | ACM-25779; ACM-37426; optional ACM-39732 | Owner decisions gate descriptions; fork-only progress is optional. Older CVE scope remains deferred |
-| 8 | New tracking, by epic | ACM stories S4 → S2 → S3 → S1 → S5; CORENET stories K1–K5 separately | Approve splits/fields and any In Progress transitions; complete project field/comment canaries before further creations; omit duplicate epic summaries. Terminal transitions wait for group 9 |
-| 9 | Acceptance and closure reviews | ACM-34592; ACM-34593; ACM-40644; any proposed finished-story transitions | Original criteria, attribution, artifact/QE proof and workflow required; no automatic closure |
-| 3 (deferred) | EVPN planning handoff | CORENET-7615 | Last at maintainer request; another planning PR iteration is WIP and CI PRs will start soon. Refresh the draft when reprioritized |
+The Submariner description contains edits 1/2 and the main release/ownership corrections from 3/4. Edit 5's additional Release tooling and Glasswing sections are absent; adding them remains a scope decision, not an approved write. OCP onboarding already has ACM-48092. The other S/K splits remain unselected; do not create retrospective or duplicate stories to exhaust the old sequence.
 
-Exact existing-issue drafts follow the same grouping in [portfolio-comments.md](agentic-sdlc-jira-updates-payloads/portfolio-comments.md). The [epic plan](agentic-sdlc-jira-updates.md) owns creation/field procedures; the [verification record](agentic-sdlc-jira-updates-verification.md) owns the dated evidence. Refresh only the targets and prerequisites of the approved group before writing; omit facts already present and verify restricted visibility/text/links afterward.
+## Engineering priorities and remaining decisions
 
-FBC recovery, the four private CVE cases and October 15 builder work retain their engineering priority and can proceed alongside this comment queue. Deferred, terminal and other-owned work below remains outside the posting sequence.
+| Work | Current tracking and next action |
+| --- | --- |
+| [ART Go builders — ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) | New; October 15 deadline. The existing planning comment records remaining migration and qualification. Confirm active sources and execute/verify the [builder migration](art-builder-migration.md); completion remains unverified. |
+| [0.23.4 — ACM-44527](https://redhat.atlassian.net/browse/ACM-44527) | In Progress. Catalog ACM-44537 and stage ACM-44538 are Resolved, with exact completed STEP_DATA on the parent. Use the [existing stage handoff](../releases/fbc/qe-0.23.4-stage-20261012.md) for actual QE installation/testing, then production when approved. Do not repeat stage recovery. |
+| [Nettest failures — ACM-48176](https://redhat.atlassian.net/browse/ACM-48176) | New; reports 14 service-discovery failures. Inspect attached logs and reconcile exact tested artifacts: description says 0.23.4 while Affects Version says 0.23.2. Attachment bytes remain unread; diagnosis and release impact are unknown. |
+| [FBC production — ACM-44541](https://redhat.atlassian.net/browse/ACM-44541) | New. Today's description already says applicable 0.23.4 catalogs are currently OCP 4.16–4.21. Keep production pending; no duplicate range correction or stage-to-production inference. |
+| [OCP onboarding — ACM-48092](https://redhat.atlassian.net/browse/ACM-48092) | In Progress; reuse this story instead of S1. Its comment records the tenant/admission MR. Draft [FBC #82](https://github.com/stolostron/submariner-operator-fbc/pull/82), [runbook #119](https://github.com/stolostron/submariner-release-management/pull/119) and [automation #120](https://github.com/stolostron/submariner-release-management/pull/120) remain open. #82's Konflux check fails. Complete configuration, platform builds and real OCP 5 installation against the story's existing criteria. |
+| [Lifecycle publication — OPGM-364](https://redhat.atlassian.net/browse/OPGM-364) | In Progress; preserve its separate lifecycle-only scope, allowed IIB/catalog proof and prohibition on new OpenShift 5 compatibility statements. OCP onboarding is not its acceptance gate. No fresh lifecycle publication proof was inspected. |
+| [0.22.2 — ACM-45070](https://redhat.atlassian.net/browse/ACM-45070) | In Progress; parent artifacts remain placeholders. ACM-45075 records six merged PRs and an earlier EC-success claim. Recover existing exact-candidate evidence or owner reconciliation before correcting tracking or recommending another run. The old candidate comment stays held; dry-run children remain separate. |
+| [Release automation — ACM-39730 / ACM-39731](https://redhat.atlassian.net/browse/ACM-39731) | In Progress. Existing October 13 comments already record merged #114/#117/#118. Parent artifact/retarget automation remains a follow-up; no duplicate merge comment. |
+| [Knowledge transfer — ACM-39736](https://redhat.atlassian.net/browse/ACM-39736) | New. Updated workflows and handoff are already recorded; multiple team members completing full releases and recording gaps remain the original acceptance. |
+| [CVE contributions — ACM-39738/39739/39740](https://redhat.atlassian.net/browse/ACM-39738) | New. Shipyard [#2582](https://github.com/submariner-io/shipyard/pull/2582) merged October 14 and is already recorded on ACM-39729/39739. The go-fix-cves ai-helpers contribution remains unfinished; the generalized agent also requires ai-helpers merge and non-Submariner product validation. |
+| [Kubernetes plugin — CORENET-7155](https://redhat.atlassian.net/browse/CORENET-7155) | In Progress; description applied, no epic children returned. [#617](https://github.com/openshift-eng/ai-helpers/pull/617) remains draft at `1a33dafe`. Qualification, measured evaluations and upstream merge remain existing criteria; K1–K5 are not a required retrospective split. |
+| [EGA planning — CORENET-7615](https://redhat.atlassian.net/browse/CORENET-7615) | In Progress; description already points to draft [#14](https://github.com/openshift/evpn-gateway-appliance/pull/14). Obtain review and owner/date records for existing decisions and acceptance conflicts; retire the old deferred-comment proposal. Product CI/runtime work remains separate. |
+| [EGA lint — CORENET-7664](https://redhat.atlassian.net/browse/CORENET-7664) | In Progress; today's description already replaces closed-unmerged #11 with draft [#15](https://github.com/openshift/evpn-gateway-appliance/pull/15). Reconcile its combined tool/consumer proposal with the preserved earlier-tool-PR requirement and qualify all original checks; no duplicate description edit. |
+| [Upstream triage — ACM-39734](https://redhat.atlassian.net/browse/ACM-39734) | New. The new personal backlog audit skill is read-only and stops at review. It does not deliver this story's continuous incoming GitHub classification/labeling and scrub automation. No completion or retrospective story is proposed. |
+| [FBC production URL conversion — ACM-39732](https://redhat.atlassian.net/browse/ACM-39732) | New. The [existing fork candidate and reconciliation requirements](current-work.md#unpublished-tooling-and-stale-roadmap-entries) remain dated implementation leads, not delivered automation. Reconcile current source and actual production scope before implementation/review. |
 
-## Coverage
+## Already reconciled; omit from pending writes
 
-The unrestricted, paginated `assignee = currentUser()` search returned **703 unique issues across nine projects**:
-80 active, 623 terminal. Of these, 483 are Vulnerability issues: four active and 479 terminal.
-The latest non-Vulnerability refresh read 228 full documents: all 220 other assigned issues plus eight related targets. The four active private vulnerabilities were inspected in the earlier comprehensive sweep.
-The pre-posting refresh found assigned keys/statuses, inspected scope fields and complete target comment histories unchanged.
-The tables below account for **all 76 active non-Vulnerability issues**. Terminal issues default to no update.
-The September 13 onward non-Vulnerability update search returned 118 issues, including 53 terminal ones;
-an `updated` timestamp alone does not establish new engineering work.
+* ACM-39728 remains In Progress with updated release evidence, ownership-transfer wording and count cleanup. Its October 13 comment already records merged planning PR #111. Eleven direct children now include ACM-48092; the older ten-child table is historical.
+* ACM-34592, ACM-34593 and the 0.24.1 release ACM-40644 are Resolved; CORENET-7171 research is Closed. Remove their old closure-review actions. These are native status observations, not a new independent delivery audit or closure of implementation children.
+* ACM-37426 now targets ACM 5.1 in both title and description; ACM-25779 now describes Submariner pipeline migration with its ownership dependency. Their old description-correction proposals are obsolete. Both remain New.
+* The production catalog range and EGA lint PR-reference corrections applied today are present in the fresh native descriptions. Historical provisional drafts are not pending operations.
 
-Private vulnerability keys, issue contents, personal research exports and teammate identities remain outside this public repository.
-Full views of the four active vulnerabilities were re-read privately. Per-image/version applicability, fix and closure evidence remain in their existing private workflow.
-Neither the historical 259 closures nor a merged tooling PR authorizes closing them. The other 479 need no new bulk comment or transition.
+Other active scopes retain existing tracking: MCN implementation (CORENET-7078–7087, CORENET-7089 and CORENET-7173–7199), PQC readiness (ACM-41119), older CVE scope (ACM-26999), and release-tracker children. Their detailed dispositions and assigned/context distinctions remain in the linked historical queue; they were not semantically re-audited here.
 
-## Submariner automation and contribution issues — 10
+## Personal Jira triage skill
 
-| Issue | Proposed update | Completion/status boundary |
-| --- | --- | --- |
-| ACM-39728 | Apply reviewed description edits independently; defer a duplicate child-tracking summary | Keep In Progress; preserve original ADF and verify each approved edit |
-| ACM-39729 | Posted comment 18820449: September remediation, merged CVE-agent work, open CVE-fix work and initial teammate adoption | Do not equate tooling merges or issue counts with complete remediation |
-| ACM-39730 | Posted comment 18820431: Activity Type fix and observed retarget/artifact gaps | Parent artifact refresh/retarget automation remains a follow-up |
-| ACM-39731 | Posted comment 18820423: merged hardening, open #114 and initial teammate adoption | #114 is pending, not shipped |
-| ACM-39732 | Record the existing fork-only URL-conversion candidate if useful | New; source/scope reconciliation before a review PR; no additional story |
-| ACM-39734 | Defer | No new triage implementation evidence found; avoid an empty progress post |
-| ACM-39736 | Posted comment 18820438: initial teammate adoption and shared setup prerequisites | New; multiple team members must each complete a release, with the maintainer not driving; document gaps and feed them into improvements |
-| ACM-39738 | Defer a duplicate child-progress rollup; settle the broader contribution inventory | New; original acceptance covers all generally relevant skills. Reconcile that inventory; neither two CVE children nor an open plugin PR establishes parent completion |
-| ACM-39739 | Posted comment 18831852: implemented project config, registries and Claude/Codex review in open shipyard#2582 | New, unchanged; unconfigured Shipyard builder fallback and ai-helpers merge remain |
-| ACM-39740 | Posted comment 18831845: source #35 merge and agent/triage configuration gaps | New; per-product configuration, ai-helpers merge and validation on another product’s CVE issues remain. Initial team adoption does not satisfy these criteria |
+[claude-skills #37](https://github.com/dfarrell07/claude-skills/pull/37) merged October 15. Its `personal-jira-triage` helper collects evidence and checks saved packets; it has no writer. Use it for a newly selected personal backlog audit, with exact scope, native evidence and minimal necessary deltas, rather than replaying these archived payloads.
 
-The first four posted existing-story updates and optional URL-conversion draft are recorded in
-[comments-existing.md](agentic-sdlc-jira-updates-payloads/submariner-sustenance/comments-existing.md).
-The two contribution-child comments are posted and verified independently of S-story creation; no parent rollup is proposed. Keep ACM-39733 with its existing owner;
-ACM-39735 is unassigned and ACM-39737 belongs to another owner. No status or comment is proposed for those three here.
-
-## Releases — 17
-
-| Assigned issues | Proposed treatment | Evidence needed before changing status |
-| --- | --- | --- |
-| ACM-40644 | Closure review; all 15 children terminal, parent In Progress | Exact production bundle is verified. Seven 4.16–4.22 index probes timed out and historical Release CRs are NotFound; recover catalog/QE proof and compare all 159 comments before closeout. Neither failure proves absence |
-| ACM-44527; ACM-44537, ACM-44538, ACM-44540, ACM-44541, ACM-44542 | Recovery-map comment 18830594 posted; change individual steps only as recovery progresses | Catalog In Progress; stage/prod/URL steps New. Six exact FBC snapshot/scenario associations are recovered, all aggregate Failed; use the recovery map and verify credentials/content before reruns |
-| ACM-45070; ACM-45075, ACM-45077, ACM-45078, ACM-45079, ACM-45080, ACM-45081, ACM-45083, ACM-45084, ACM-45085 | Reconcile candidate source/operand identity before accepting EC/bundle and filling parent artifacts | Unselected nine-component candidate passes integration with warnings and contains a 0.22.2 bundle. Seven embedded operand digests differ from snapshot operands; registry/content identity remains unverified. EC/bundle stay In Progress; stage onward New |
-
-QE subtasks retain their existing owners and are dependencies, not assigned work in these totals.
-ACM-45087/45088 are two extra test subtasks under the 0.22.2 parent; their disposition is separate from release completion.
-Do not use broad closeout to resolve them as release deliverables. A tracker close command can change Jira and needs explicit write authorization.
-
-## Deadline, lifecycle and older open work — 8
-
-| Issue | Proposed update | Gate or reason to defer |
-| --- | --- | --- |
-| ACM-45318 | Posted planning comment 18839276; retain October 15 deadline | Use [builder inventory](art-builder-migration.md): 137 canonical refs across nine repos. Confirm all active build sources; cached 5.1/5.2 builds select main, matching their filters. Migrate both used Brew Dockerfiles while preserving OS family; current Go 1.25 has a matching RHEL8 ART candidate. Verify both CI pull paths and image checks, output-binary compiler settings and required FIPS runtime behavior. Bind platform evidence to published child digests; update Brew-selecting CVE guidance, retain addon propagation and record each repo/source disposition. Source tests alone do not qualify the output image; UBI Go Toolset alone does not establish ART consumption |
-| ACM-41119 | Defer completion; reconcile image coverage with builder work | Addon 5.0 PQC base selection is partial source evidence; main/5.1 differ and shipped-image policy remains unverified |
-| ACM-37426 | Coordinated title/description timeline correction using the prepared draft after owner confirmation | Description says ACM 5.0; July comment says 5.1. Prototype manifests exist, with incomplete least-privilege RBAC; preserve that preparation without claiming implementation |
-| OPGM-364 | Status answer posted and verified as comment 18829498; add only a missing new delta | Lifecycle injection and publication are existing scope. It explicitly forbids adding OCP 5 compatibility statements; a valid catalog/IIB proof is an allowed alternative to public-index membership |
-| ACM-25779 | Replace the stale console-specific description with the actual Submariner pipeline scope | Existing May comment already explains ownership-dependent deferral. Do not repost it or treat inline pipelines as an unrecorded failure |
-| ACM-26999 | Defer another progress comment; reconcile older CVE scope with ACM-39729/39739/39740 | The May comment already records production tooling and remaining contribution. Closure/supersession needs a scope decision |
-| ACM-34592 | Closure review with existing five PRs | All five directly read PRs merged May 28. Parent ACM-34591 is Closed and the comment asks for closure; review issue criteria and current transition/resolution before resolving |
-| ACM-34593 | Closure review of the original build failure | October 2 route-agent push build succeeds at 82adbacd; retained snapshot exists, while its EC scenario fails. Confirm the original DNF/RPM criteria and fix attribution before resolving; EC failure is a separate investigation |
-
-ACM-45508 is a related addon-consumption task owned by another person, not an assigned issue.
-Link it from S1 where useful; it does not prove FBC runtime compatibility. OPGM-364 also predates S1:
-reconcile/link its lifecycle scope instead of creating another publication story.
-
-## Kubernetes and MCN/EVPN work — 41
-
-| Assigned issues | Proposed update | Gate or reason to defer |
-| --- | --- | --- |
-| CORENET-7155 | Description applied and verified, changelog 92306194; K-story creation remains pending; defer duplicate summary | In Progress, no children. Records original design credit and reported working coverage; qualification, measurement and upstream merge criteria remain |
-| CORENET-7086 | Defer a parent comment until a concrete implementation or ownership decision | To Do; task membership is already visible. Header/API coverage and GHA/Prow scope remain implementation questions |
-| CORENET-7171 | Posted comment 18824859: May task creation and post-merge AI scope | In Progress, unchanged. Review the original research/rationale deliverable; implementation tracking does not establish research acceptance |
-| CORENET-7173–7199 | Defer individual comments; retain one disposition per existing subtask | All 27 To Do. Existing descriptions cover lint, security, test, coverage, context and AI workflows. Require repository change and meaningful CI evidence for each criterion before any completion claim |
-| CORENET-7078, CORENET-7079, CORENET-7080, CORENET-7081, CORENET-7082, CORENET-7083, CORENET-7084, CORENET-7085, CORENET-7087, CORENET-7089 | Defer until repository/build/registry/CI ownership and prerequisites are agreed | All ten To Do under existing MCN scope; source bootstrap, Prow/cloud E2E, image publishing and release automation are distinct deliverables |
-| CORENET-7615 | Group 3 deferred to the end: another planning PR iteration is WIP; CI PRs will start soon (maintainer report). Refresh the handoff before review | To Do / no comments. Discussion records the FRR/exporter choice and transit-VIF resolution, but the published decision index remains unreconciled. Record existing outcomes with owners/dates and reconcile open #6’s host-FRR proposal with the recorded image choice; complete release-gate/responsibility review or requested changes. Pending decisions need not all be settled. Imports and CI remain separate |
-
-Do not duplicate the 27 CI subtasks from the May research drafts or post the same research list on each one.
-Do not close CORENET-7171 solely because the subtasks exist. Do not reuse EVPN or plugin qualification as MCN implementation evidence.
-CORENET-7085 and CORENET-7089 have empty descriptions: scope test reuse and release/versioning after repository ownership is agreed.
-The parent also requires license-header verification and API compatibility. The linked proposal already recommends goheader, crdify and go-apidiff; reconcile explicit implementation coverage within existing tracking. CORENET-7195's dependency-license scanning and CORENET-7174's API conventions do not establish those criteria. The proposed GHA/Prow split needs alignment with CORENET-7083's presubmit/postsubmit/periodic jobs and CORENET-7087's Prow image builds.
-
-## Recent work and terminal issues
-
-The author-wide GitHub sweep returned 23 PRs updated since September 30 and 16 currently open PRs, plus five recently updated issues.
-Direct reads distinguish merge/closure, current heads, review state and checks. These populations overlap and are not additive.
-The important active work is already mapped above or in [current work](current-work.md): release recovery, OCP 5 #82,
-conductor #114, CVE #2582, upgrade #2654/#1944, helper pod #2618, addon #2792 and plugin #617.
-Open release-management #111 is this planning work, not a shipped automation deliverable.
-
-Older threat-model PR #186 and six personal documentation PRs also remain open. The corresponding assigned threat-model issues are terminal;
-no new assigned-issue completion/update is inferred from these stale PRs. Review their remaining purpose separately before any closure action.
-The terminal assigned history across ACM, CORENET and seven other projects needs no retrospective progress spam or reopening.
-Resolved recent release steps stay as evidence on their parents; routine timestamp changes do not justify reposting the inventory.
-
-## Apply a reviewed update
-
-Re-read the target's description, complete comments, PR field, parent and available transitions; preserve the original rich text.
-Post only a missing delivery, blocker/evidence, correction or answer to an explicit request. Keep audit instructions and repeated criteria in this plan; omit duplicate rollups. Set comment visibility `Red Hat Employee` at creation and verify it on read-back.
-Descriptions/PR fields need ADF or a converting client. Read back each write and record its issue/comment id before continuing.
-Status reviews are separate from comments and require acceptance evidence, resolution metadata and any project points/sprint requirements. Live metadata confirms required resolution on terminal transitions; the existing closure candidates remain reviews, not approved transitions. CORENET Original story points/PR fields need post-create edits; see the epic plan.
-No branch push, PR update, Jira write, cluster change or release is authorized by this planning document.
+Evidence and collection limits are in the [verification log](agentic-sdlc-jira-updates-verification.md#tracking-and-checkout-reconciliation-october-15); raw captures remain private.

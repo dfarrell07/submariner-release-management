@@ -2,7 +2,7 @@
 
 # New child stories for ACM-39728 (exact payloads)
 
-Nothing here has been created in Jira. Field values were read from siblings and verified against complete ACM Story create metadata on 2026-10-07.
+Historical October 8 tracking proposals. October 15 confirms S1's scope is now tracked by ACM-48092; do not create a duplicate. Other splits are unselected, not a requirement to create retrospective stories. Consult the [current queue](../../jira-update-queue.md). Field values below retain their October 7 metadata cutoff.
 Text blocks are Markdown for a converting client/UI; direct Jira Cloud REST writes need ADF. Verify create-field and transition metadata before writing.
 
 * Project `ACM`, issue type `Story` (id `10009`), `parent` `ACM-39728`, component id `33720` (Multicluster Networking[ext]). Current metadata allows `parent` and legacy Epic Link; use one verified membership path. Reporter is required with a default; verify the approved reporter on read-back.

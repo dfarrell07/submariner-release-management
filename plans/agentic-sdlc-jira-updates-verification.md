@@ -2,7 +2,7 @@
 
 # Jira planning verification
 
-Dated audit log, October 6–8, 2026. Each section records state at its own cutoff; earlier empty-description, PR-head and cluster observations are historical. [Current work](current-work.md) owns engineering state, the [queue](jira-update-queue.md) owns dispositions, and the [epic plan](agentic-sdlc-jira-updates.md#a5-execution-order) owns execution and completed-write ids.
+Dated audit log, October 6–15, 2026. Each section records state at its own cutoff; earlier empty-description, PR-head and cluster observations are historical. [Current work](current-work.md) owns engineering state, the [queue](jira-update-queue.md) owns dispositions, and the [historical epic plan](agentic-sdlc-jira-updates.md#a5-execution-order) retains October 8 payloads and completed-write ids.
 
 Private raw exports, prepared requests and pre-edit copies stay outside this public checkout. This review authorizes no external writes.
 
@@ -589,3 +589,17 @@ The five operational historical-design links now use retained commit `96e1d91b`;
 | `e2a38ecd` | [d01a14fd](https://github.com/stolostron/submariner-release-management/blob/d01a14fdea6315c69fd46c3a435b4ab79a675e60/plans/current-work.md) | October 8 candidate evidence |
 | `d094bf36` | [886ec4d8](https://github.com/stolostron/submariner-release-management/tree/886ec4d81ebe1d0eddeaa45d257467b8b1daed56/plans/agentic-sdlc-jira-updates-payloads/submariner-sustenance/) | PR inventories |
 | `ecb3f1be` | [3dd46260](https://github.com/stolostron/submariner-release-management/blob/3dd4626065d2f1036606e20692ef7784288c28ce/plans/ocp-5-0-fbc-rollout.md) | OCP 5 rollout gates |
+
+## Tracking and checkout reconciliation October 15
+
+PR #111 merged October 13 at `f071c65c`; its review cleanup is already on main. The older dirty files were preserved privately and in a named stash before starting this follow-up from main. No historical payload code block is changed.
+
+October 15 native reads covered 24 assigned issues updated since October 8 and five related targets. Complete paginated inventory returned 706 assigned issues, 77 active; a 14:48 UTC refresh confirmed unchanged membership/status categories. Parent searches returned eleven direct children for ACM-39728, including ACM-48092, and none for CORENET-7155. The current queue records recent deltas; unchanged scopes remain in its linked historical queue. This is not a new full-backlog semantic audit.
+
+The Submariner description contains edits 1/2 and the main corrections from 3/4, with newer release evidence and different wording. Edit 5's proposed Release tooling and Glasswing sections are absent and remain an unselected scope decision. Catalog/stage children ACM-44537/44538 are Resolved; parent comments `18908421`/`18908425` record completion, while handoff `18905729` leaves actual QE installation and production pending. The production-range and EGA lint-reference corrections applied earlier today are present; omit duplicate writes.
+
+Fresh target fields support the queue's completed statuses and corrected scopes. For ACM-40644 only its native Resolved status is reported: embedded comments are partial (100 of 159), so no new closure/acceptance audit is claimed. Nettest attachment bytes, current GitLab tenant merge and live-cluster outcomes were not inspected. Shipyard #2582 merged October 14; its prerequisite completion is already commented on ACM-39729/39739. Open draft/check observations in the queue retain their source cutoff; source publication does not establish installation or acceptance.
+
+The personal Jira triage skill merged in claude-skills #37 on October 15. It collects/checks evidence without writing and does not deliver ACM-39734's continuous upstream classification. The initial helper inventory read timed out; a separate paginated read succeeded. Native Jira `/myself` account-id evidence and two registered temporary worktrees were unavailable. No new Jira draft batch or independent-review coverage is claimed; raw captures and checks remain private.
+
+Validation: the skill's 135 tests and the saved packet check pass (`audited_drafts=[]`). Relative links resolve and payload code blocks remain byte-identical. Full repository `make test` passed on retry after one entitlement-probe assertion failed initially; the unchanged focused rerun passed all 127 checks. No entitlement code/test change, Jira write, cluster mutation or release is included.

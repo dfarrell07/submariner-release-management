@@ -2,7 +2,7 @@
 
 # Epic description edits: Submariner Sustenance Automation
 
-Target: ACM-39728. All five edits remain pending. The October 8 full ADF/history/metadata read confirms all seven old paragraphs and the insertion heading match exactly once. Review in order **4 → 3 → 5**, then optional 1/2; no new story keys are needed.
+Target: ACM-39728. Historical October 8 proposals. The October 15 live read confirms edits 1/2 and the main corrections from edits 3/4 are present, with different wording and newer release evidence. Edit 5's Release tooling and Glasswing sections are absent; whether to add them remains an unselected scope decision. These blocks are not current requests. Consult the [current queue](../../jira-update-queue.md) rather than replaying them.
 
 Each edit is independent. Use visible text and ADF structure; Markdown markers below are presentation. Before each approved write, save and recheck the live ADF, then rebuild the request preserving unrelated nodes and earlier edits. Stop on drift; restore only while the live field equals that edit's result, preserving later changes. Issue history is not an automatic restore operation. Follow the [shared write rules](../../agentic-sdlc-jira-updates.md).
 

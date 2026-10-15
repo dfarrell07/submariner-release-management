@@ -2,7 +2,7 @@
 
 # Additional existing-issue updates
 
-The [queue](../jira-update-queue.md#approval-order) owns approval order; the [completed-write table](../agentic-sdlc-jira-updates.md#a5-execution-order) records all verified ids. Posted blocks below are fixed records. Other drafts require separate approval and fresh target/evidence checks; they propose no transitions. Set `Red Hat Employee` visibility at comment creation. S/K story creation is separate.
+Historical October 8 payloads. The [current queue](../jira-update-queue.md#approval-order) supersedes the old grouping and pending-action labels. The [completed-write table](../agentic-sdlc-jira-updates.md#a5-execution-order) records October 8 ids; later writes are reconciled in the queue. Posted blocks below are fixed records. Other drafts are not current requests: check live tracking for a useful missing delta before seeking approval. Set `Red Hat Employee` visibility at comment creation.
 
 ## Group 1 — CI research handoff
 

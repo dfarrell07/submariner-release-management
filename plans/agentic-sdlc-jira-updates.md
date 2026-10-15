@@ -1,12 +1,12 @@
 <!-- markdownlint-disable MD013 -->
 
-# Plan: bring the agentic-SDLC Jira epics up to date
+# Historical plan: agentic-SDLC Jira epic updates
 
 **Release priority:** [the six 0.23.4 FBC stage candidates are recovered](fbc-failure-recovery.md); actual QE installation is next. Independent deadline work and planning can proceed with their own evidence and approvals.
 
-Next review: [Submariner epic edits 4 → 3 → 5](agentic-sdlc-jira-updates-payloads/submariner-sustenance/epic-description-edits.md), then optional 1/2. Ten comments and the Kubernetes epic description are verified complete; [A5](#a5-execution-order) records their ids. New stories remain uncreated. The 0.22.2 candidate note is on hold; EVPN is deferred to the end.
+October 15 reconciliation: the [current queue](jira-update-queue.md) supersedes this plan's proposed approval and creation sequence. The live Submariner description contains edits 1/2 and the main corrections from edits 3/4; edit 5's additional deliverable sections are absent and unselected. OCP onboarding is tracked by ACM-48092; do not create S1 again. The other S/K story splits remain historical proposals, not a requirement to create retrospective stories. No new Jira write batch is selected.
 
-Verified October 8, 2026. The [queue](jira-update-queue.md#approval-order) owns approval order, [current work](current-work.md) owns engineering state, and the [verification log](agentic-sdlc-jira-updates-verification.md) retains dated evidence. Refresh each approved action before writing. Historical counts and earlier cluster/registry observations retain their cutoffs.
+The remaining sections retain their October 8, 2026 cutoff, including then-pending actions and metadata. [Current work](current-work.md) owns engineering handoffs, and the [verification log](agentic-sdlc-jira-updates-verification.md) retains dated evidence. Completed payloads and ids are fixed records. Any useful new delta needs fresh target evidence and its own authorization.
 
 The two epic updates are independent:
 
@@ -134,7 +134,7 @@ Completed writes, reverified October 8. These are fixed records; do not repost o
 | ACM-44527 | 0.23.4 recovery map | 18830594 |
 | CORENET-7155 | Epic description | 92306194 |
 
-The [grouped queue](jira-update-queue.md#approval-order) controls remaining approvals. Next are Submariner description edits 4 → 3 → 5, then optional 1/2; no new story keys are needed. The 0.22.2 note remains on hold and EVPN remains deferred. Scope corrections, new tracking and acceptance reviews are separate groups.
+The [current queue](jira-update-queue.md#approval-order) supersedes the historical sequence below. Do not replay the epic edits or create S1: edits 1/2 and the main corrections from 3/4 are present, edit 5 is unselected, and ACM-48092 tracks onboarding. Fixed October 8 receipts above do not enumerate later writes.
 
 After story split and fields are approved, create S4 → S2 → S3 → S1 → S5. CORENET creation is separate. No duplicate epic summary is proposed.
 

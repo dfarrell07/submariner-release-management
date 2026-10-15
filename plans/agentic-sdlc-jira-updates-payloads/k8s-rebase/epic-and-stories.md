@@ -2,7 +2,7 @@
 
 # Exact payloads: epic description and five child stories for CORENET-7155
 
-The epic description is applied; K1–K5 and their comments remain uncreated. Verified October 8, 2026. Posted text below is fixed. Pending text needs a converting client or valid ADF, current metadata and explicit approval.
+Historical October 8 proposals. October 15 confirms the epic description remains applied and the epic has no children; K1–K5 are an unselected tracking split. Do not create retrospective stories automatically. Posted text below is fixed; any newly selected useful tracking needs current evidence, metadata and explicit approval. See the [current queue](../../jira-update-queue.md).
 
 CORENET Story conventions:
 

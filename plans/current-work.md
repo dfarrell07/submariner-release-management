@@ -2,11 +2,11 @@
 
 # Current work and planning handoffs
 
-Jira planning reverified October 8, 2026: all 703 assigned keys/statuses, 234 non-Vulnerability/related full views and 88 complete comment/changelog histories. The [queue](jira-update-queue.md) covers all 76 active non-Vulnerability issues; private security follow-up stays separate. Cluster, registry, source and runtime observations below retain their own cutoffs.
+Jira tracking reconciled October 15, 2026. The [current queue](jira-update-queue.md) records recent changes and remaining work; its assigned inventory contains 706 issues, 77 active. The sections below retain October 8–13 engineering evidence and are not a current approval sequence.
 
-Next review is [Submariner description edits 4 → 3 → 5](agentic-sdlc-jira-updates-payloads/submariner-sustenance/epic-description-edits.md), then optional 1/2. Ten comments and the Kubernetes description are complete; [verified ids](agentic-sdlc-jira-updates.md#a5-execution-order). The 0.22.2 note remains on hold and EVPN is deferred. QE validation of the completed FBC stage candidates, private CVE triage and the October 15 builder deadline retain engineering priority.
+Prioritize the October 15 builder deadline and 0.23.4 QE/nettest investigation; keep private CVE work in its specialist workflow. The epic's count cleanup and main release/ownership corrections are present, but the proposed additional deliverable sections are absent. OCP onboarding is already tracked by ACM-48092. Consult the queue before selecting any new Jira delta; do not replay the old payloads or create duplicate stories.
 
-[PR #111](https://github.com/stolostron/submariner-release-management/pull/111) publishes this planning work. The October 12 history repair added sign-offs to all 60 same-author commits while preserving their file tree; the published DCO check passes. The October 8 review edits are retained here as dated records, with current release evidence kept separate. The [verification log](agentic-sdlc-jira-updates-verification.md) retains dated audits and receipts.
+[PR #111](https://github.com/stolostron/submariner-release-management/pull/111) merged October 13 after DCO repair and incorporates the retained local review cleanup. The [verification log](agentic-sdlc-jira-updates-verification.md#tracking-and-checkout-reconciliation-october-15) records this follow-up's scope and evidence limits.
 
 ## October 12 FBC recovery update
 
