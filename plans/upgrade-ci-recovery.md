@@ -2,16 +2,14 @@
 
 # Upgrade CI repair: diagnosed failures and review handoff
 
-Read October 7, 2026 from the published jobs for draft [subctl #1944](https://github.com/submariner-io/subctl/pull/1944),
-head `9a7cec7d82d341d7159b512bce564c2f040c2f73`. This extends the [current work map](current-work.md).
-No consumer source, workflow, dependency or hosted run was changed. The PR's reported local kind tests were not repeated.
+Refreshed October 15, 2026. Draft [subctl #1944](https://github.com/submariner-io/subctl/pull/1944) remains at `f6a97c7a`; its formatting fix is already present. Dependency/runtime and hosted upgrade checks still fail. The [current work map](current-work.md) routes related work; no local kind or hosted rerun was performed by this audit.
 
-## Distinct failing checks
+## Historical failure diagnosis (October 7)
 
 | Check | Published evidence | Required action |
 | --- | --- | --- |
 | [Dependencies](https://github.com/submariner-io/subctl/actions/runs/37503764685/job/112407092769) | Reports one unmerged PR; the consumer explicitly depends on Shipyard #2654 | Review/merge the dependency and verify its updated Dapper image is published; preserve dependency enforcement |
-| [Go](https://github.com/submariner-io/subctl/actions/runs/37503764672/job/112407090322) | `cmd/subctl/upgrade_test.go:135:1` fails `gofumpt`; this is a formatting check, not a reported compile error | Correct formatting and run the configured lint before the next consumer head is proposed |
+| [Go](https://github.com/submariner-io/subctl/actions/runs/37503764672/job/112407090322) | `cmd/subctl/upgrade_test.go:135:1` fails `gofumpt`; this is a formatting check, not a reported compile error | Fixed in the current head; do not repeat this as pending work |
 | [Upgrade command](https://github.com/submariner-io/subctl/actions/runs/37503764579/job/112407090491) and [Globalnet/Lighthouse](https://github.com/submariner-io/subctl/actions/runs/37503764579/job/112407089939) | The failed step runs `make deploy-latest` followed by `test -x output/released-subctl/bin/subctl`. Both logs complete deployment/connectivity and then exit 1 before the later upgrade stage | Confirm the isolated baseline executable exists after deployment in the published runtime. This matches the deliberate old-runtime guard; it does not establish that the later upgrade passes |
 | [Vulnerability scanning](https://github.com/submariner-io/subctl/actions/runs/37503764672/job/112407090444) | Grype scans module metadata and fails the high-severity threshold for gRPC and x/crypto findings | Compare against the exact base and existing remediation work, then validate the agreed dependency fixes separately. Runtime publication will not resolve this scan by itself |
 
@@ -25,12 +23,12 @@ verify the exact base before attributing these findings to this repair or treati
 
 ## Completion sequence
 
-1. Prepare the formatting fix and reconcile scan findings with existing CVE work now; these do not require the Shipyard runtime to become available.
+1. Formatting is fixed. Reconcile current scan findings with the existing remediation: [subctl #1946](https://github.com/submariner-io/subctl/pull/1946) is open with passing returned technical checks; Shipyard #2656 has merged. Refresh affected branches rather than bypassing the scan.
 2. Review [Shipyard #2654](https://github.com/submariner-io/shipyard/pull/2654) at `557bb9977cd4e2dcb9f8526620423faa20c4c1fb`, then verify publication and use of the updated Dapper runtime.
    Its passing/skipped checks do not publish the unmerged consumer dependency.
 3. Verify baseline isolation, the exact built CLI version/checksum, selected operator/component images, completed rollouts, connectivity and service discovery in both consumer variants.
    Record the new consumer head and all required hosted results; a passing deployment cannot substitute for the upgrade stage.
-4. Complete applicable maintained-stream backports and their branch-specific evidence before closing [issue #2635](https://github.com/submariner-io/shipyard/issues/2635).
+4. Existing release-0.22 backports [Shipyard #2657](https://github.com/submariner-io/shipyard/pull/2657) (`0cdc2a19`) and [subctl #1947](https://github.com/submariner-io/subctl/pull/1947) (`0934c8d4`) remain draft with failing hosted checks. Complete applicable maintained-stream backports and their branch-specific evidence before closing [issue #2635](https://github.com/submariner-io/shipyard/issues/2635).
    Keep the FIND-006 download-integrity disposition separate; this upgrade repair does not ship those closed-unmerged drafts.
 
 Review, publication and hosted reruns remain external handoffs. This plan diagnoses and sequences them; it does not authorize those actions.

@@ -4,7 +4,7 @@
 
 **Release priority:** [the six 0.23.4 FBC stage candidates are recovered](fbc-failure-recovery.md); actual QE installation is next. Independent deadline work and planning can proceed with their own evidence and approvals.
 
-October 15 reconciliation: the [current queue](jira-update-queue.md) supersedes this plan's proposed approval and creation sequence. The live Submariner description contains edits 1/2 and the main corrections from edits 3/4; edit 5's additional deliverable sections are absent and unselected. OCP onboarding is tracked by ACM-48092; do not create S1 again. The other S/K story splits remain historical proposals, not a requirement to create retrospective stories. No new Jira write batch is selected.
+October 15 reconciliation: the [current queue](jira-update-queue.md) supersedes this plan's proposed approval and creation sequence. The live Submariner description contains edits 1/2 and the main corrections from edits 3/4; edit 5's additional deliverable sections are absent and unselected. Onboarding automation is tracked by ACM-48092 and catalog delivery by ACM-48200; do not create S1 again. The other S/K story splits remain historical proposals, not a requirement to create retrospective stories. Any new proposed delta is in the current queue, not this historical sequence.
 
 The remaining sections retain their October 8, 2026 cutoff, including then-pending actions and metadata. [Current work](current-work.md) owns engineering handoffs, and the [verification log](agentic-sdlc-jira-updates-verification.md) retains dated evidence. Completed payloads and ids are fixed records. Any useful new delta needs fresh target evidence and its own authorization.
 
