@@ -12,7 +12,7 @@ The [retained earlier rollout](https://github.com/stolostron/submariner-release-
 | --- | --- |
 | Catalog | FBC #81 merged. Provisional 0.24 catalog contains 0.24.0/0.24.1, channel stable-0.24. Jira/PRs now record ACM 2.17 alignment; packaging does not establish OCP 5 runtime acceptance |
 | Pipelines | [FBC #82](https://github.com/stolostron/submariner-operator-fbc/pull/82) is draft at `cc76c0dd`; Actions/DCO pass, Konflux fails at missing build account. Its description now links the actual tenant MR and removes the non-expiring-pin claim |
-| Configuration | Existing tenant/admission MR !23786 remains at `1ffa5b06` with an 18-file delta. Latest main `f1613839` merges with it without Git conflicts; regeneration, approvals/CI and live reconciliation remain unverified. Reuse this MR |
+| Configuration | At the source refresh, MR !23786 is rebased to `c956e286` directly on main `c6096b89`. Its 18 changed paths have identical file blobs to the prior MR head; all fifteen new 5.0 paths remain absent from main. Regeneration, approvals/CI and live reconciliation remain unverified. Reuse this MR |
 | Live state | Earlier October 15 reads found no 5-0 Application, Component or build account. A later read returned Unauthorized; no new absence/reconciliation claim follows from it |
 | Registry | The October 12 recovery restored access for the existing 4.x scenarios. Preserve the established binding; the old secret-link command is not pending work without current evidence |
 | Trust | Current PR/Jira text says policy uses trusted task version rules. Acceptable-bundle digest expiry alone is not proof of a release deadline; verify the policy actually resolved by the selected build/release, including deny rules |
