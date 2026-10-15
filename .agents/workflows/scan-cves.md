@@ -56,8 +56,8 @@ check for changed ordinary Dockerfiles and the required Konflux checks for chang
 source/unit tests alone do not exercise those image builds. Use normal review/merge gates and verify
 merged-source push results for the required platforms against the output index's child digests.
 
-Keep source SHA, resolved builder/runtime digests, pipeline/task revisions and effective compiler evidence
-with the change. [Go can select another toolchain](https://go.dev/doc/toolchain); inspect `GOTOOLCHAIN`
+Reuse CI/artifact records for source SHA, builder/runtime/output digests and pipeline/task revisions.
+[Go can select another toolchain](https://go.dev/doc/toolchain); verify the compiler using `GOTOOLCHAIN`
 and the extracted binary's `go version -m` output. Apply existing runtime/FIPS checks to changed paths:
 `--version` checks executable loading. Run required deployment/crypto checks against the output digests,
 using a FIPS-enabled environment where required. Record unavailable checks and hold release use until

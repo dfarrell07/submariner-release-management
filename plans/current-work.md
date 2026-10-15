@@ -29,11 +29,11 @@ For [0.22.2 — ACM-45070](https://redhat.atlassian.net/browse/ACM-45070), prese
 
 ## Builder guidance
 
-[ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) owns the addon consumer migration. Implement it in the addon repository using the [toolchain workflow](../.agents/workflows/scan-cves.md#addon-go-toolchain). Prepare an isolated main-branch pilot replacing the two Brew builder references, then backport to retained consumers after its image checks pass. Confirm deployed source selection and CI pull access for qualification; missing live access need not block draft preparation.
+[ACM-45318](https://redhat.atlassian.net/browse/ACM-45318) owns the addon consumer migration. Next: prepare an addon PR against main replacing the Brew builder `FROM` in `Dockerfile` and `Dockerfile.konflux`. Use the [addon builder checks](../.agents/workflows/scan-cves.md#addon-go-toolchain) and normal repository review; backport only to supported consumers after the image checks pass.
 
 Source decisions checked October 15:
 
-* [Konflux configuration](https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/bc743a1e127c1722636d1fb332025b5bd3df9df6/tenants-config/auto-generated/cluster/stone-prd-rh01/tenants/crt-redhat-acm-tenant) selects 2.11, 2.13–2.17, 5.0 and main for both ACM 5.1/5.2. ACM 2.12's Konflux component is retired; Prow still configures ordinary image builds for 2.11–2.17, 5.0, 5.1 and main. Confirm retained support before choosing backports or editing branch copies.
+* [Konflux configuration](https://gitlab.cee.redhat.com/releng/konflux-release-data/-/tree/bc743a1e127c1722636d1fb332025b5bd3df9df6/tenants-config/auto-generated/cluster/stone-prd-rh01/tenants/crt-redhat-acm-tenant) selects 2.11, 2.13–2.17, 5.0 and main for both ACM 5.1/5.2. ACM 2.12's Konflux component is retired; Prow additionally configures 2.12 and 5.1 branch builds. Confirm active sources before backporting.
 * ART's ACM 2.15–2.17 configuration selects a private source mirror and [overrides the builder](https://github.com/openshift-eng/ocp-build-data/blob/acm-2.16/images/submariner-addon.yml) with [ART Go 1.26/RHEL9](https://github.com/openshift-eng/ocp-build-data/blob/acm-2.16/streams.yml). Preserve those overrides; the table below applies to direct Dockerfile consumers.
 
 Candidate tags under `registry.redhat.io/openshift/golang-builder`, subject to the workflow's checks:
@@ -44,4 +44,4 @@ Candidate tags under `registry.redhat.io/openshift/golang-builder`, subject to t
 | `v1.25` / RHEL8 (2.13–2.17) | `golang-builder-v1.25-rhel8` |
 | `v1.26` / RHEL9 (main/5.x) | `golang-builder-v1.26-rhel9` |
 
-Preserve 2.15/2.16's CGO/strict-FIPS flags and 5.0's PQC runtime base. RHEL9 Go 1.25 also adds `GOAMD64=v2`, so it is a separate OS/CPU change. The 2.14 ordinary CI builder and the other ticket repositories' inspected UBI Go Toolset paths are unaffected. Qualify changed paths under existing requirements and record merged changes/build evidence in Jira.
+Preserve runtime bases and existing flags, including CGO/strict-FIPS on 2.15/2.16 and the PQC base on 5.0. Leave the 2.14 ordinary CI builder and inspected UBI Go Toolset paths unchanged. RHEL9 Go 1.25 adds `GOAMD64=v2` and needs a separate OS/CPU decision.
