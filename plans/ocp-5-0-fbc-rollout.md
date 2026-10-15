@@ -2,7 +2,7 @@
 
 # OCP 5.0 FBC rollout plan
 
-Tracking refreshed October 15, 2026: [ACM-48200](https://redhat.atlassian.net/browse/ACM-48200) owns catalog delivery; [ACM-48092](https://redhat.atlassian.net/browse/ACM-48092) owns reusable onboarding automation. Both are assigned to the maintainer and In Progress. The [canonical workflow](../.agents/workflows/add-fbc-ocp-version.md) owns reusable commands; [PR #119](https://github.com/stolostron/submariner-release-management/pull/119) proposes a phased runbook. Review it with [#120](https://github.com/stolostron/submariner-release-management/pull/120); neither is merged.
+Tracking refreshed October 15, 2026: [ACM-48200](https://redhat.atlassian.net/browse/ACM-48200) owns catalog delivery; [ACM-48092](https://redhat.atlassian.net/browse/ACM-48092) owns reusable onboarding automation. Both are assigned to the maintainer and In Progress. The [canonical workflow](../.agents/workflows/add-fbc-ocp-version.md) owns reusable commands; [PR #119](https://github.com/stolostron/submariner-release-management/pull/119) proposes a phased runbook. Review it with [#120](https://github.com/stolostron/submariner-release-management/pull/120); neither is merged. #119 edits this same plan; reconcile its runbook against the gate correction below before merging. The four superseded preparation documents are retired here as in #119.
 
 The [retained earlier rollout](https://github.com/stolostron/submariner-release-management/blob/3dd4626065d2f1036606e20692ef7784288c28ce/plans/ocp-5-0-fbc-rollout.md) preserves source-level investigation and dated task/index observations. Its DNS failures, missing registry binding, task-pin deadlines and proposed story creation are not a current execution queue.
 
@@ -12,7 +12,7 @@ The [retained earlier rollout](https://github.com/stolostron/submariner-release-
 | --- | --- |
 | Catalog | FBC #81 merged. Provisional 0.24 catalog contains 0.24.0/0.24.1, channel stable-0.24. Jira/PRs now record ACM 2.17 alignment; packaging does not establish OCP 5 runtime acceptance |
 | Pipelines | [FBC #82](https://github.com/stolostron/submariner-operator-fbc/pull/82) is draft at `cc76c0dd`; Actions/DCO pass, Konflux fails at missing build account. Its description now links the actual tenant MR and removes the non-expiring-pin claim |
-| Configuration | Existing tenant/admission MR !23786, source head `1ffa5b06`, has 18 changed files. October 15 source access worked; MR approvals/CI were not independently read. Do not recreate the old separate local drafts |
+| Configuration | Existing tenant/admission MR !23786 remains at `1ffa5b06` with an 18-file delta. Latest main `f1613839` merges with it without Git conflicts; regeneration, approvals/CI and live reconciliation remain unverified. Reuse this MR |
 | Live state | Earlier October 15 reads found no 5-0 Application, Component or build account. A later read returned Unauthorized; no new absence/reconciliation claim follows from it |
 | Registry | The October 12 recovery restored access for the existing 4.x scenarios. Preserve the established binding; the old secret-link command is not pending work without current evidence |
 | Trust | Current PR/Jira text says policy uses trusted task version rules. Acceptable-bundle digest expiry alone is not proof of a release deadline; verify the policy actually resolved by the selected build/release, including deny rules |

@@ -2,14 +2,14 @@
 
 # Current work and planning handoffs
 
-Refreshed October 15, 2026. The [Jira queue](jira-update-queue.md) owns issue dispositions, assignment and proposed updates. This map routes engineering work to its maintained plan; dated evidence and completed writes remain in the [verification log](agentic-sdlc-jira-updates-verification.md). Older work maps are retained in Git.
+Refreshed October 15, 2026. The [Jira queue](jira-update-queue.md) owns issue dispositions, assignment and proposed updates. This map routes engineering work to its maintained plan; historical evidence and completed writes remain in the [audit index](jira-audit-records.md). Older work maps are retained in Git.
 
 ## Release recovery and time-sensitive work
 
 | Priority | Current state and next action | Plan |
 | --- | --- | --- |
 | ART builders, ACM-45318 | Due October 15; New. Addon samples still use Brew. Agree active streams and prepare the main pilot in both Dockerfiles, then qualify the actual image builds and runtime | [Builder inventory and pilot](art-builder-migration.md) |
-| 0.23.4, ACM-44527 | Six applicable OCP 4.16–4.21 stage Releases succeeded; catalog/stage children are Resolved. QE installation and production remain pending. Nettest reports ACM-48176 and ACM-48194 need primary logs and artifact attribution | [Recovery evidence](fbc-failure-recovery.md), [QE handoff](../releases/fbc/qe-0.23.4-stage-20261012.md) |
+| 0.23.4, ACM-44527 | Six applicable OCP 4.16–4.21 stage Releases succeeded; catalog/stage children are Resolved. QE acceptance and production remain pending. ACM-44539 already reports the 14-failure summary also in ACM-48176; both nettest reports need logs and exact artifact attribution | [Recovery evidence](fbc-failure-recovery.md), [QE handoff](../releases/fbc/qe-0.23.4-stage-20261012.md) |
 | Durable FBC recovery | FBC #85/#86 remain open at `02ac47d1` / `7c963da2`; required checks pass, Tide is pending. Their publication is separate from the completed recovery Releases | [Recovery plan](fbc-failure-recovery.md) |
 | OCP 5 catalog, ACM-48200 | In Progress; tenant MR !23786 and FBC #82 remain prerequisites. Resolve the pre-GA install/readiness conflict before a stage run is executable | [Rollout gates](ocp-5-0-fbc-rollout.md) |
 | OCP onboarding automation, ACM-48092 | In Progress; description now separates automation from catalog delivery. Draft #120 remains to land; #119 proposes the operational runbook | [Onboarding workflow](../.agents/workflows/add-fbc-ocp-version.md) |
@@ -20,7 +20,7 @@ Refreshed October 15, 2026. The [Jira queue](jira-update-queue.md) owns issue di
 
 ## Upstream audit and upgrade tests
 
-The eight FIND-006 Shipyard drafts #2566–2573 were closed without merging; their fixes are not established as shipped. Keep remediation/re-triage separate from upgrade-test repairs.
+The eight FIND-006 Shipyard drafts #2566–2573 are closed without merging. Fresh source reads find the original unverified installer pipe (`get-subctl.sh`, blob `f3c9548e`) on devel and 0.18–0.24; an equivalent fix has not landed in those files. The `subctl-devel` release now publishes `subctl-checksums.txt`, so the old blanket checksum-prerequisite blocker is stale. Reconcile exact release-tag/runtime inputs, supported branches and the finding's accepted disposition before proposing a reviewed fix. Keep this separate from upgrade-test repairs; no retrospective Jira split is selected.
 
 [Upgrade recovery](upgrade-ci-recovery.md) owns the current dependency/runtime sequence and maintained-stream backports. Shipyard #2654 is open, subctl #1944 remains draft, and issue #2635 remains the acceptance tracker. Shipyard #2656 has merged; #2618 still has a failing scan at its unchanged head and needs a refresh against that remedy, plus fresh OCP SCC admission evidence as a separate gate. Do not repeat the already fixed formatting work or bypass dependency/runtime guards.
 
@@ -52,7 +52,7 @@ No candidate script was executed or modified. Any branch push/PR or Jira progres
 
 [ai-helpers #617](https://github.com/openshift-eng/ai-helpers/pull/617) remains draft at `1a33dafe`; CORENET-7155 is In Progress. The maintainer originated the design and reports working rebases across six CoreNet repositories through Kubernetes 1.37. That report and published source do not replace the epic's measured evaluations, selected-runtime qualification and upstream merge criteria.
 
-The [historical qualification record](agentic-sdlc-jira-updates-verification.md#kubernetes-rebase-evidence) retains the trial source identities and limits. Current CNCC #276 and Multus #369 still have failing hosted checks. No rebase or model evaluation was rerun here; K1–K5 are unselected retrospective splits.
+The [historical qualification record](https://github.com/stolostron/submariner-release-management/blob/f071c65c288e2bf1b2fd8f2470e70d819ad2031a/plans/agentic-sdlc-jira-updates-verification.md#kubernetes-rebase-evidence) retains the trial source identities and limits. Current CNCC #276 and Multus #369 still have failing hosted checks. No rebase or model evaluation was rerun here. A retrospective story split is not required.
 
 ## Adjacent work with separate ownership and scope
 

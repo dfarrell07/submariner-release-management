@@ -6,9 +6,9 @@
 
 ## October 15 source refresh and proposed pilot
 
-Both addon Dockerfiles still use Brew at main `51589c4a`, release-2.15 `714a6ade`, release-2.16 `c36fa12d` and release-5.0 `aabf5d0e`. These are four refreshed samples, not a repeat of the October 8 audit. The 2.15/2.16 Konflux builds retain `CGO_ENABLED=1 GOEXPERIMENT=strictfipsruntime`; 5.0 retains its PQC runtime base.
+Both addon Dockerfiles still use Brew at main `0c3af666`, release-2.15 `714a6ade`, release-2.16 `c36fa12d` and release-5.0 `aabf5d0e`. These are four refreshed samples, not a repeat of the October 8 audit. Main advanced through the Kubernetes 1.37 rebase; both Dockerfiles and the Go 1.26 module floor remain unchanged. The 2.15/2.16 Konflux builds retain `CGO_ENABLED=1 GOEXPERIMENT=strictfipsruntime`; 5.0 retains its PQC runtime base.
 
-Proposed pilot: replace main's Brew `v1.26` FROM in `Dockerfile` and `Dockerfile.konflux` with `registry.redhat.io/openshift/golang-builder:golang-builder-v1.26-rhel9`, preserving build commands, runtime and crypto settings. Update the [Brew-selecting CVE guidance](../.agents/workflows/scan-cves.md#addon-go-toolchain). Confirm deployed sources/CI access and agree maintained-stream propagation before claiming migration complete. The addon cluster session does not currently authenticate.
+Proposed pilot: replace main's Brew `v1.26` FROM in `Dockerfile` and `Dockerfile.konflux` with `registry.redhat.io/openshift/golang-builder:golang-builder-v1.26-rhel9`, preserving build commands, runtime and crypto settings. Update the [Brew-selecting CVE guidance](../.agents/workflows/scan-cves.md#addon-go-toolchain). Confirm deployed sources/CI access and agree maintained-stream propagation before claiming migration complete. The last addon-session check was unauthenticated.
 
 ## Current source and coverage
 
@@ -39,7 +39,7 @@ The pinned historical tables own exact older branch SHAs. Refresh each accepted 
 
 ## Builder selection and qualification
 
-Current amd64 metadata samples report ART Go 1.26/RHEL9 as Go 1.26.7 and ART Go 1.25/RHEL8 as Go 1.25.14, matching the corresponding Brew version/family samples. They do not prove identical compilers: RPM releases/filesystem metadata differ. Brew/ART Go 1.26 declare `GOAMD64=v2`; changing a Go 1.25/RHEL8 consumer to RHEL9 would also change OS/CPU declarations. Choose the matching Go/OS family unless a separate requirement calls for a transition.
+October 15 amd64 metadata samples report ART Go 1.26/RHEL9 as Go 1.26.7 and ART Go 1.25/RHEL8 as Go 1.25.14, matching the corresponding Brew version/family samples. They do not prove identical compilers: RPM releases/filesystem metadata differ. Brew/ART Go 1.26 declare `GOAMD64=v2`; changing a Go 1.25/RHEL8 consumer to RHEL9 would also change OS/CPU declarations. Choose the matching Go/OS family unless a separate requirement calls for a transition.
 
 1. Confirm maintained/deployed branches, both Dockerfile consumers and effective Go/module/toolchain requirements. Keep unaffected and retired paths explicit; no blanket product migration is justified by a registry deadline.
 2. Replace verified Brew references and the operational guidance. Preserve runtime bases, CGO/FIPS settings, labels, build commands, prefetch and PaC filters. Add credentials or lockfile changes only for a demonstrated requirement.

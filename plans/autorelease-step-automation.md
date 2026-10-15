@@ -2,10 +2,7 @@
 
 # Autorelease: current implementation and remaining work
 
-Source review: October 7, 2026, release-management `2ecac9d`. This replaces the repeated completed-phase designs,
-shelved apply/parallel proposals and obsolete invocation walkthroughs. Earlier implementation history remains in Git at `2ecac9d`;
-the pre-edit working documents were also preserved locally. The scripts are the executable contract.
-Current release evidence is in [current work](current-work.md), and posting/closure decisions in [the assigned-issue queue](jira-update-queue.md).
+Source checked October 15, 2026 against main `f071c65c`. The scripts define behavior; this plan retains missing wiring and concrete review questions. [Current work](current-work.md) routes release evidence and [Jira tracking](jira-update-queue.md) records workflow decisions.
 
 ## Scope and authorization
 
@@ -44,30 +41,12 @@ The metadata's automation level and the existence of a script/verifier are separ
 
 Y-stream-only: createBranches, configureDownstream, tektonComponents and tektonBundle. Z-stream-only: versionLabels.
 Other steps are shared. Gate/hint steps can advance through verification; an in-progress scripted step with a verifier also checks external state before rerunning.
-The old claims that scripts and verifiers never coexist, component fan-out is unimplemented, or build-readiness steps auto-chain are retired.
 
 ## Delivered behavior to retain
 
-* `--complete`/`--refresh`, step ordering, tracker read validation, conditional dry-run, preflight reporting and propagation diagnostics exist.
-  `find_next_step` refuses failed/empty/non-array tracker reads; `_resolve_version` has a separate fallback read path discussed below.
-* Component fan-out, bundle setup, task-reference updates, CVE wrappers, EC task-version/parser/deny-rule handling and FBC catalog updates are implemented.
-  Source details belong in scripts and their focused tests, not duplicate pseudocode here.
-* PR-merge verifiers exist for task, RPM, version-label and CVE work; EC additionally checks its snapshot. They distinguish not done, failed preconditions and open PRs.
-  `try_auto_verify` records evidence and deduplicates progress output. This does not prove a failed Jira write was persisted.
-* Snapshot/time staleness warnings and tracker-vs-reality drift reporting exist. Warnings do not themselves invalidate a completed step.
-* October 13: merged [#114](https://github.com/stolostron/submariner-release-management/pull/114) and [#117](https://github.com/stolostron/submariner-release-management/pull/117) require completed EC/FBC evidence, exact component tags and stage identities.
-  Preserve provenance and the [manual recovery boundary](../.agents/workflows/create-fbc-stage-release.md#recover-a-policy-rejected-image); reuse these helpers instead of creating another checker.
-* `bundleShas` and `componentStage` are review level. `assert_bundle_rebuilt` compares selected versus recorded bundle digests and stops on equality;
-  missing bookkeeping remains a disclosed limitation, not proof of freshness. Bundle snapshot selection also warns when it predates the release tag.
-* Prod paths reuse a stage snapshot; they do not prove that a lexically selected YAML is the one actually approved by QE.
-* Checkout/worktree safety, original-ref restoration and review-stop push attempts are implemented. Version-label success-path stranding is fixed.
-  Signal/crash recovery and unpublished external skill changes need their own evidence; do not generalize handled-path tests to every interruption.
-* `fbcProdUrls` has a corrected template verifier and terminal handoff, but no script on main. Linear closeout expects conversion before the all-done path.
-  The older workflow's optional/deferred wording needs reconciliation; it is not an alternative completion policy to silently adopt.
-* Auto-close requires the shipped bundle, nonempty actual OCP scope and every in-scope production index. Unreachable/absent probes suppress it.
-  `--close` is a write fallback requiring actual release verification and appropriate treatment of unrelated/test subtasks.
-* `run_conductor` is extracted outside the testing guard and covered by `make test-conductor` integration tests.
-  The older claim that dispatch routing is wholly untested is obsolete. Assess remaining coverage against the current suite before filing test work.
+Main includes tracker integration, component fan-out, worktree restoration, task/CVE/EC remediation, active-host release-note review and the completed EC/FBC/exact-artifact gates from #114/#117. Reuse those scripts and the [recovery workflow](../.agents/workflows/create-fbc-stage-release.md#recover-a-policy-rejected-image). Source setup, PR merge, build, installation, QE and publication remain distinct evidence states.
+
+EC task-bump return codes are 0 for committed updates, 1 for failure/remaining active denial, and 2 for a manual diagnostic stop. Shared [log parsing](../scripts/lib/parse-ec-log.sh) and [deny-rule checks](../scripts/lib/deny-rules.sh) handle diagnosis; unavailable policy data is unchecked. The [historical records](jira-audit-records.md#historical-source-index) retain the delivered EC/deny designs without a second implementation backlog.
 
 ## Remaining work, in order
 
@@ -79,13 +58,11 @@ The old claims that scripts and verifiers never coexist, component fan-out is un
 | Skill execution portability | Finish konflux-ci-fix normalization and installed-host matrix in [compatibility plan](claude-codex-skill-compatibility.md) | Five overlapping known debt entries removed and meaningful Claude/Codex execution evidence, beyond discovery tests |
 | Addon setup proposal | Resolve current ART/addon ownership and supported branch/version inputs before using [addon proposal](addon-tekton-setup.md) | No `tektonAddon` exists today; do not blindly derive ACM 5.x from the old arithmetic mapping |
 
-These are existing scopes, not a request to create another set of Jira stories. QE validation does not depend on the proposed S/K children.
-Historical roadmap items 1–9 describe delivered work; they are removed from the active backlog rather than renumbered into new work.
+These are existing scopes; completed implementation designs and unselected retrospective story splits are not prerequisites.
 
 ## Source risks requiring a focused follow-up
 
-These observations preserve review questions from the October 7 roadmap. The reproduced FBC marker/identity issue is fixed in main;
-recheck the remaining observations and establish meaningful failure cases before changing behavior.
+These source observations identify review questions, not authorization for an implementation change. Establish a meaningful failure case and reconcile current tests before fixing one.
 
 * **Jira write acknowledgement.** `update_step` deliberately returns success on tracking failures. `try_auto_verify` can return verified success after that call,
   and its caller advances in memory. Preserve best-effort behavior for standalone scripts while considering explicit write/read-back acknowledgement at conductor boundaries.
@@ -104,13 +81,13 @@ recheck the remaining observations and establish meaningful failure cases before
   `relatedImages` pin belongs to the intended rebuilt release. Preserve source/snapshot/digest attribution at review and release gates.
 * **Concurrent execution.** No conductor lock was found. Different patch releases of one minor share branches and snapshot inputs as well as identical-version runs.
   Before implementing concurrency, define lock scope and verify no repo/STEP_DATA/push-log collisions.
-* **Rulesets and task trust.** Historical FBC topic-branch rejection and allowlist incidents need fresh ruleset/app-id/deny/expiry reads.
+* **Rulesets and task trust.** Historical FBC topic-branch rejection and allowlist incidents need current ruleset/app-id and resolved policy/trust/deny evidence; bundle expiry alone does not establish the active policy gate.
   Do not prescribe an admin push workaround or reuse an expired trusted pin from an incident account.
 
 ## Implementation contract and validation
 
-Scripts validate inputs and applicable scope before changes, preserve the original directory/ref and unrelated work,
-and expose reviewable artifacts plus pending push/apply actions. A tracking write records only the evidence actually observed;
+Implementation changes must validate inputs and applicable scope, preserve the original directory/ref and unrelated work,
+and expose reviewable artifacts plus pending external actions. A tracking write records only the evidence actually observed;
 local creation, PR merge, build, install, QE and publication are separate states. Network/auth failures must not become absence or completion.
 Verifier bodies read external state; the conductor wrapper can write their results. Exit codes and completion semantics follow each current script,
 not an old universal exit-0/mark-complete assumption. EC's nothing-to-update return remains a separate diagnostic stop.
@@ -119,4 +96,4 @@ For any implementation change, run its focused target plus `make test`.
 The existing targets include `test-autorelease`, `test-conductor`, `test-tracker`, `test-worktree-safety`, `test-component`,
 `test-fbc-snapshot`, `test-fbc-scope`, `test-prod-bundle`, `test-deny-rules`, `test-version-bump` and `test-skills`.
 Use failure/read/write-acknowledgement and actual routing scenarios where they establish behavior; avoid test counts as a release-readiness claim.
-Normal conductor, cluster apply, pushes and Jira transitions were not executed by this documentation review.
+The entitlement fixture intermittently fails different assertions under highly parallel full-suite runs while all 127 checks pass in isolation and the full suite passed with four-CPU affinity. Its `printf | grep -q` assertions run under `pipefail`; reproduce the failed assertion before a separate test-harness fix. This is not evidence of a product entitlement defect. No conductor or release operation was run by this review.

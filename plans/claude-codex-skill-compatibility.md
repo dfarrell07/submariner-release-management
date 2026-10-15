@@ -62,9 +62,8 @@ Compatibility-specific requirements are:
 
 Add focused tests for every existing target form, missing prerequisites,
 no-fix/manual-log stop, validated resume, successful deterministic fix, cleanup,
-and no push. Use `plans/ec-fix-autorelease-integration.md` only as a reference
-for the already-implemented task-bump helpers, not as the behavior contract for
-this skill.
+and no push. Use the existing task-bump/parser/deny helpers where their contracts fit;
+the broader skill remains responsible for its existing diagnosis scope.
 
 ### Phase 6: Cross-agent acceptance and documentation cleanup
 
