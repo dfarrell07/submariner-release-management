@@ -1,6 +1,3 @@
-# Production release-note update prepared for review; not applied.
-# CVE-2026-66780 remains pending Product Security review.
-# Confirm Jira fixVersions and closure targets before production.
 ---
 apiVersion: appstudio.redhat.com/v1alpha1
 kind: Release
@@ -71,8 +68,6 @@ spec:
             source: issues.redhat.com
           - id: ACM-38545
             source: issues.redhat.com
-          - id: ACM-38761
-            source: issues.redhat.com
           - id: ACM-47362
             source: issues.redhat.com
           - id: ACM-38306
@@ -83,13 +78,9 @@ spec:
             source: issues.redhat.com
           - id: ACM-38336
             source: issues.redhat.com
-          - id: ACM-38758
-            source: issues.redhat.com
           - id: ACM-38358
             source: issues.redhat.com
           - id: ACM-38363
-            source: issues.redhat.com
-          - id: ACM-38651
             source: issues.redhat.com
           - id: ACM-38317
             source: issues.redhat.com
@@ -100,6 +91,12 @@ spec:
           - id: ACM-38433
             source: issues.redhat.com
           - id: ACM-38489
+            source: issues.redhat.com
+          - id: ACM-38294
+            source: issues.redhat.com
+          - id: ACM-38296
+            source: issues.redhat.com
+          - id: ACM-38293
             source: issues.redhat.com
       cves:
         - key: CVE-2026-32936
@@ -152,6 +149,10 @@ spec:
           component: submariner-operator-0-23
         - key: CVE-2026-63209
           component: lighthouse-coredns-0-23
+        - key: CVE-2026-66780
+          component: subctl-0-23
+        - key: CVE-2026-66780
+          component: submariner-operator-0-23
         - key: CVE-2026-66781
           component: subctl-0-23
         - key: CVE-2026-66781
