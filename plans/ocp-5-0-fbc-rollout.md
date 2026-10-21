@@ -15,16 +15,18 @@ before qualification. Product compatibility and lifecycle-support changes
 remain separate.
 
 At review, #82, the [cluster-profile PR][profile] and [helper PR #120][helper]
-remain drafts. The 5.0 Application, Component and build account are absent;
-the `stable-5.0` graph has no release nodes. Refresh these observations when
+remain drafts. The last authenticated cluster check found the 5.0 Application,
+Component and build account absent; current cluster authentication has expired.
+The `stable-5.0` graph has no release nodes. Refresh these observations when
 executing the plan. Hosted GitLab CI and approvals still need verification.
 
 ## 1. Reconcile tenant resources and admissions
 
 Narrow [release-data !23786][tenant] to tenant infrastructure and publish the
 two RPA additions as a separate managed-config MR. Record its link here.
-Require review and hosted CI at each published head. ArgoCD reconciles tenant
-resources; release-data CI applies managed configuration.
+Refresh against current main, regenerate and validate each scoped proposal
+before publication. Require review and hosted CI at each published head.
+ArgoCD reconciles tenant resources; release-data CI applies managed configuration.
 
 Before retesting #82, verify the 5.0 Application, Component, ImageRepository,
 build-account ownership and image-push secret bindings. Check the registry
@@ -37,15 +39,22 @@ Merge the separate admissions after tenant onboarding. Both stage/prod
 ReleasePlans must actually match their admissions before live verification
 and release; keep autorelease disabled.
 
+Progress admissions, #120 review, cluster-profile access and OCP 5 release
+availability in parallel. Tenant reconciliation and build credentials unblock
+build retesting for #82; provisioning and release have their own later gates.
+
 ## 2. Build and identify the candidate
 
-If stage mirrors are needed, verify approved 0.24 mappings and pull access
-before merging the candidate source. The install pipeline reads
-`.tekton/images-mirror-set.yaml` at that SHA; the current file targets 0.23.
+Before merging the candidate source, record whether all intended bundle and
+operand digests can be pulled from production or need approved 0.24 stage
+mirrors. Verify mappings and pull access if mirrors are needed. The install
+pipeline reads `.tekton/images-mirror-set.yaml` at that SHA; the current file
+targets 0.23.
 
-Once infrastructure is ready, retest #82, obtain review and require successful
-required checks at its exact head before merging. Identify the original
-successful merged-source push PipelineRun, snapshot and immutable image.
+Once tenant resources and build credentials are reconciled, retest #82, obtain
+review and require successful required checks at its exact head before merging.
+Identify the original successful merged-source push PipelineRun, snapshot and
+immutable image.
 Verify all four platforms, effective build arguments, OCP base annotations,
 catalog validation and lifecycle-task execution using the onboarding workflow.
 Retain resolved task/image identities and the policy used by the build.
@@ -79,9 +88,10 @@ satisfy this gate.
 If no eligible unreleased bundle remains, use a separately reviewed explicit
 bundle/channel test; rerunning the unchanged selection is insufficient.
 
-Reconcile a reviewed tenant change, including regenerated manifests, making
+Prepare a separate tenant follow-up, including regenerated manifests, making
 the live 5.0 operator scenario required (`optional: "false"`) before final
-verification. Reuse a completed `TestPassed` run only if its candidate and test
+verification; review and reconcile it when the installation path is usable.
+Reuse a completed `TestPassed` run only if its candidate and test
 definition are unchanged and the installation evidence above is present.
 Otherwise, after existing tests finish, rerun the recorded snapshot using
 [Konflux instructions][rerun]; confirm its snapshot/scenario identities and
