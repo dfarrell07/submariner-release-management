@@ -2,14 +2,15 @@
 
 Reviewed October 21, 2026. Tracking: [ACM-48200][delivery]. Release management
 owns the automated installation test; QE follows the normal stage handoff.
-This plan records rollout-specific dependencies and evidence gates. Use the
-[onboarding workflow][onboarding] for preparation and verification mechanics.
+Use the [onboarding workflow][onboarding] for mechanics. Keep one candidate
+record linked from ACM-48200: bundle/channel, source SHA, push build, snapshot,
+image, lifecycle reference, test results, release identities and QE approval.
 
 The initial candidate is Submariner **0.24.1**, channel **stable-0.24**, for
-OCP **5.0**. [FBC PR #81][catalog] merged the catalog and tooling; the catalog
-contains 0.24.0 and 0.24.1. [FBC PR #82][pipelines] proposes the four-platform
-build (`amd64`, `arm64`, `ppc64le`, `s390x`) using the OCP 5 RHEL9 registry base
-and lifecycle injection. Confirm the intended bundle digest against the
+OCP **5.0**. [FBC PR #81][catalog] merged the catalog and tooling;
+[FBC PR #82][pipelines] proposes the four-platform build (`amd64`, `arm64`,
+`ppc64le`, `s390x`) using the OCP 5 RHEL9 registry base and lifecycle injection.
+Confirm the intended bundle digest against the
 approved component release before qualification. Catalog packaging does not
 establish product compatibility or a new lifecycle-support statement.
 
@@ -43,15 +44,19 @@ required checks at its exact head before merging. Identify the original
 successful merged-source push PipelineRun, snapshot and immutable image.
 Verify all four platforms, effective build arguments, OCP base annotations,
 catalog validation and lifecycle-task execution using the onboarding workflow.
-Record resolved task/image identities and the policy used by the build;
-time-based deny rules can change trust without a task-version change.
+Retain resolved task/image identities and the policy used by the build.
 
-Before using `verify-live`, land #120 **with its reviewed follow-up fixes**:
-accept the post-GA required operator-test label and compare injected lifecycle
-content against a reviewed reference while preserving exact source-file checks.
-The proposed `--expected-lifecycle` input is not on #120's published head at
-review. Publish, review and merge that follow-up, then use a checkout containing
-it and its updated workflow; a local proposal is not an available prerequisite.
+Obtain `lifecycle.json` from the original push build's digest-pinned lifecycle
+`SOURCE_ARTIFACT`. Check TaskRun ownership, successful injection `TEST_OUTPUT`
+and resolved task/image pins; review the lifecycle contents and retain the
+artifact digest and file SHA256. Do not extract the reference from the catalog
+image under test. Reference provenance and support policy are manual review
+inputs, not claims established by the content verifier.
+
+Merge #120 with the reviewed fixes for required operator-test labels and exact
+source/reference content verification before using `verify-live`. Its proposed
+`--expected-lifecycle` input is not on the published head at review: publish and
+review the follow-up, then use its merged helper and updated workflow.
 
 ## 3. Qualify installation and catalog contents
 
@@ -64,31 +69,28 @@ and its removal plan.
 Require successful intended-bundle selection, provisioning and deployment.
 For the upstream path, inspect `get-unreleased-bundle`, `pick-cluster-params`,
 `provision-cluster` and `deploy-operator`. Record the bundle digest/channel,
-installed CSV and the cluster's observed **5.0.x** version. PR-event skips,
-empty-result push no-ops and fallback 4.x clusters do not satisfy this gate.
+installed CSV and the cluster's observed **5.0.x** version from test artifacts.
+PR-event skips, empty-result push no-ops and fallback 4.x clusters do not
+satisfy this gate.
 If no eligible unreleased bundle remains, use a separately reviewed explicit
 bundle/channel test; rerunning the unchanged selection is insufficient.
 
-If tests need rerunning, use the same recorded push snapshot after its initial
-tests finish. Follow [Konflux rerun instructions][rerun], confirm the new test
-run belongs to that snapshot and scenario, and wait for completion. Record the
-resolved wrapper/pipeline/StepAction revisions and image digests: the Git
-resolver chain follows `main`, so inspect the actual resolved behavior.
+Reconcile a reviewed tenant change, including regenerated manifests, making
+the live 5.0 operator scenario required (`optional: "false"`) before final
+verification. Reuse a completed `TestPassed` run only if its candidate and test
+definition are unchanged
+and the installation evidence above is present. Otherwise, after existing tests
+finish, rerun the recorded snapshot using [Konflux instructions][rerun]; confirm
+its snapshot/scenario identities and successful completion. Retain resolved
+wrapper/pipeline/StepAction revisions and image digests; their Git resolver
+chain follows `main`.
 
-Obtain `lifecycle.json` from the original push build's digest-pinned lifecycle
-`SOURCE_ARTIFACT`. Check TaskRun ownership, successful injection `TEST_OUTPUT`
-and resolved task/image pins; review the lifecycle contents and retain the
-artifact digest and file SHA256. Do not extract the reference from the catalog
-image under test. Reference provenance and support policy are manual review
-inputs, not claims established by the content verifier.
-
-Run the merged helper's live verification for the recorded source SHA and
-reviewed lifecycle reference. Require matched admissions, account bindings,
-completed successful snapshot tests and exact source/reference content on all
-four platforms. This complements the actual installation evidence above.
-Once installation is available, make the 5.0 operator scenario required
-(`optional: "false"`) through a reviewed tenant change and regenerate manifests.
-Confirm the resulting scenario/test state before stage release.
+Then run the merged helper's live verification for the recorded source SHA and
+reviewed lifecycle reference. Require its reported snapshot/image and that
+snapshot's linked build PipelineRun to match the candidate record. Reconcile
+any mismatch before proceeding. Require matched admissions, account bindings,
+completed successful tests and exact source/reference content on all four
+platforms, alongside the actual installation evidence above.
 
 ## 4. Stage the pinned candidate and hand it to QE
 
@@ -101,10 +103,12 @@ established by the actual release execution.
 
 Require the exact stage Release to finish `Released=True/Succeeded` with no
 policy violations and no production-index publication. Follow the
-[QE handoff][qe] for the released fragment, intended bundle/channel and approved
-stage mirrors. Compare any URL-helper result with that exact Release, snapshot
-and fragment; a latest-successful lookup can select another candidate. Record
-these identities and artifact digests in the QE handoff, and wait for approval
+[QE handoff][qe] for the released fragment and intended bundle/channel. Verify
+approved **0.24** mappings and pull access if stage mirrors are needed; the
+current mirror file targets 0.23. Compare any URL-helper result with that exact
+Release, snapshot and fragment; a latest-successful lookup can select another
+candidate. Record these identities and artifact digests in the QE handoff, and
+wait for approval
 of those artifacts before production.
 
 ## 5. Publish the approved snapshot and activate scope
@@ -127,12 +131,9 @@ under [OPGM-261][compatibility] remain separate work.
 
 ## Related 4.x migration
 
-[release-data !23841][migration] is separate from OCP 5 onboarding. A prepared
-follow-up would replace its nonexistent `stable` channel with the catalog
-default. A default-channel run can skip installation or test a different stream
-instead of qualifying a maintenance candidate. Require intended-stream selection
-and enforced installation before calling maintenance automation qualified; this
-migration is not an OCP 5 release dependency.
+[release-data !23841][migration] is independent of this rollout. Its prepared
+default-channel follow-up still needs intended-stream selection and enforced
+installation to qualify maintenance releases.
 
 [delivery]: https://redhat.atlassian.net/browse/ACM-48200
 [catalog]: https://github.com/stolostron/submariner-operator-fbc/pull/81
