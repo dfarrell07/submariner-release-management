@@ -21,6 +21,8 @@ source "$_LIB_DIR/jira-tracker.sh"
 source "$_LIB_DIR/prod-bundle.sh"
 # shellcheck source=lib/fbc-scope.sh
 source "$_LIB_DIR/fbc-scope.sh"
+# shellcheck source=lib/dockerfile-version.sh
+source "$_LIB_DIR/dockerfile-version.sh"
 
 usage() {
   echo "Usage: $0 <version> [--complete STEP | --refresh STEP | --close]"
@@ -533,22 +535,27 @@ try_auto_verify() {
     return 2
   fi
   if [ "$verify_rc" -eq 3 ]; then
-    # Work in progress (PRs open). vdata contains the Jira comment text emitted
-    # by the verifier on stdout (subshell, so _add_comment wasn't available there).
+    # Work in progress (PRs open). The verifier returns evidence on stdout;
+    # record it in Jira here, after verification.
     # Only post if the open PR set has changed since the last run (dedup via
     # local cache file — avoids an extra Jira write just to store the hash).
     if [ -n "$vdata" ] && [ -n "$TRACKER" ]; then
       local new_hash
       new_hash=$(printf '%s' "$vdata" | md5sum | cut -d' ' -f1)
-      local cache_file="${GIT_ROOT}/.git/autorelease-pr-hash-${step}"
+      local cache_file
+      cache_file=$(git -C "$GIT_ROOT" rev-parse --path-format=absolute \
+        --git-path "autorelease-pr-hash-${VERSION}-${step}") || return 2
       local cached_hash=""
       [ -f "$cache_file" ] && cached_hash=$(cat "$cache_file")
       if [ "$new_hash" != "$cached_hash" ]; then
-        _add_comment "$TRACKER" "$vdata" || true
-        printf '%s' "$new_hash" > "$cache_file"
+        local jira_written=true
+        _add_comment "$TRACKER" "$vdata" || jira_written=false
         update_subtask_description "$VERSION" "$step" \
           "$(printf '## PRs\n\n%s\n\n## Status\n\nPRs open — waiting for merge and Konflux rebuild.' "$vdata")" \
-          "$TRACKER" || true
+          "$TRACKER" || jira_written=false
+        if $jira_written; then
+          printf '%s' "$new_hash" > "$cache_file" || echo "  Could not cache pending PR evidence" >&2
+        fi
       fi
     fi
     return 3
@@ -558,31 +565,22 @@ try_auto_verify() {
     # PR-merge verifiers emit Jira comment text on stdout (not JSON) so they can
     # run in this subshell context. Post the comment now, then record "{}" as the
     # tracker data (PR URLs already in the Jira comment; JSON tracker data is
-    # secondary). Other verifiers (createBranches, upstreamRelease, ecFixes,
-    # fbcProdUrls) emit JSON — detect by attempting jq parse.
+    # secondary). Other verifiers emit structured JSON directly.
     if [ -n "$vdata" ] && [ -n "$TRACKER" ]; then
       if ! printf '%s' "$vdata" | jq -e . >/dev/null 2>&1; then
         # Plain text output: PR-merge verifiers (tektonTasks, rpmLockfiles, etc.)
-        _add_comment "$TRACKER" "$vdata" || true
+        _add_comment "$TRACKER" "$vdata" || return 2
         update_subtask_description "$VERSION" "$step" \
           "$(printf '## PRs\n\n%s\n\n## Status\n\nAll PRs merged ✓' "$vdata")" \
-          "$TRACKER" || true
+          "$TRACKER" || return 2
         vdata="{}"
-      else
-        # JSON output: verifiers like ecFixes that include a `prs` field alongside
-        # structured data. Extract and post PR URLs as a Jira comment if present.
-        local _prs_text
-        _prs_text=$(printf '%s' "$vdata" | jq -r '.prs // empty' 2>/dev/null) || _prs_text=""
-        if [ -n "$_prs_text" ] && [ -n "$TRACKER" ]; then
-          _add_comment "$TRACKER" "$_prs_text" || true
-          update_subtask_description "$VERSION" "$step" \
-            "$(printf '## PRs\n\n%s\n\n## Status\n\nAll PRs merged, EC passed ✓' "$_prs_text")" \
-            "$TRACKER" || true
-        fi
       fi
     fi
     [ -n "$vdata" ] || vdata="{}"
-    update_step "$VERSION" "$step" "complete" "$vdata" "$TRACKER"
+    update_step "$VERSION" "$step" "complete" "$vdata" "$TRACKER" --strict || {
+      echo "  Could not record Jira completion for $step; retry before advancing" >&2
+      return 2
+    }
     _AUTORELEASE_QUIET=true
     return 0
   fi
@@ -651,34 +649,72 @@ verify_upstreamRelease() {
 source "$SCRIPT_DIR/lib/integration-tests.sh"
 _ec_status_from_snap() { ec_status_from_snapshot; }
 
+# Read every PR page for one target branch; query/schema failures cannot prove
+# absence or completion. Return a flat array for the caller's head-ref filter.
+_read_prs() {
+  local repo="$1" base="$2" state="$3" pages
+  command -v gh &>/dev/null || { echo "  gh not installed" >&2; return 2; }
+  if ! pages=$(gh api --paginate --slurp \
+      "repos/$repo/pulls?state=$state&base=$base&per_page=100"); then
+    echo "  Could not read PRs for $repo" >&2
+    return 2
+  fi
+  printf '%s' "$pages" | jq -ce --arg state "$state" '
+    if type != "array" or length == 0 or any(.[]; type != "array") or
+       any(.[][]; type != "object" or (.head.ref | type) != "string" or
+         (.base.ref | type) != "string" or (.html_url | type) != "string" or .html_url == "" or
+         (.state != "open" and .state != "closed") or ($state != "all" and .state != $state) or
+         (.merged_at != null and (.merged_at | type) != "string"))
+    then error("invalid PR response") else add end' || {
+    echo "  Invalid PR response for $repo" >&2
+    return 2
+  }
+}
+
+# The suffix applies after a literal branch prefix, so dots are not regexes.
+_open_automation_prs() {
+  local branch="$1" suffix="$2" repos="$3" version="$4"
+  local repo base prs urls open_urls=()
+  for repo in $repos; do
+    base="release-${version%.*}"
+    [ "$repo" = "stolostron/submariner-operator-fbc" ] && base="main"
+    prs=$(_read_prs "$repo" "$base" open) || return 2
+    urls=$(printf '%s' "$prs" | jq -r --arg branch "$branch" --arg suffix "$suffix" --arg base "$base" '
+      [.[] | select(.base.ref == $base) |
+        select(.head.ref | startswith($branch) and
+          (ltrimstr($branch) | test($suffix))) | .html_url] | join("\n")
+    ') || return 2
+    [ -n "$urls" ] && open_urls+=("$urls")
+  done
+  if [ "${#open_urls[@]}" -gt 0 ]; then
+    printf '%s\n' "${open_urls[@]}"
+    return 3
+  fi
+  return 0
+}
+
+_verify_ec_open_prs() {
+  local version="$1" urls="" rc=0
+  urls=$(_open_automation_prs "fix-tekton-tasks-${version%.*}" "^(-v[0-9]+|\\.${version##*.})?$" \
+    'submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl stolostron/submariner-operator-fbc' \
+    "$version") || rc=$?
+  [ "$rc" -eq 3 ] && printf 'EC repair PRs open for %s:\n%s' "$version" "$urls"
+  return "$rc"
+}
+
 verify_ecFixes() {
   local version="$1"
   local tracker="${2:-}"
   local dash_mm="${version%.*}"
   dash_mm="${dash_mm//./-}"
 
-  # If fix-tekton-tasks-<mm> PRs are open in any repo, the Konflux rebuild
-  # hasn't happened yet — return rc=3 (PRs open) so the conductor waits
-  # instead of re-running the script unnecessarily.  We reuse _verify_prs_merged
-  # (same branch + repos as verify_tektonTasks) but only act on the "open"
-  # signal; if it returns 0 (all merged) or 1 (no PRs), fall through to EC check.
-  local _merged_pr_text=""
-  if command -v gh &>/dev/null; then
-    local _pr_rc=0 _pr_out=""
-    # Capture stdout: _verify_prs_merged emits PR URLs on stdout which would
-    # corrupt verify_ecFixes's own stdout (JSON returned to try_auto_verify).
-    # Re-emit on rc=3 (open PRs); stash on rc=0 (all merged) for inclusion in
-    # the JSON returned to try_auto_verify so it can post a completion comment.
-    _pr_out=$(_verify_prs_merged "$version" "" "fix-tekton-tasks-${version%.*}" \
-      "submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl stolostron/submariner-operator-fbc" \
-      2>/dev/null) || _pr_rc=$?
-    if [ "$_pr_rc" -eq 3 ]; then
-      printf '%s' "$_pr_out"
-      return 3
-    fi
-    if [ "$_pr_rc" -eq 0 ] && [ -n "$_pr_out" ]; then
-      _merged_pr_text="$_pr_out"
-    fi
+  # EC repairs may affect only one repo and use a -vN retry branch. Check
+  # pending work independently of historical merges or missing PRs elsewhere.
+  local pr_out="" pr_rc=0
+  pr_out=$(_verify_ec_open_prs "$version") || pr_rc=$?
+  if [ "$pr_rc" -ne 0 ]; then
+    [ "$pr_rc" -eq 3 ] && printf '%s' "$pr_out"
+    return "$pr_rc"
   fi
 
   if ! command -v oc &>/dev/null; then
@@ -696,6 +732,10 @@ verify_ecFixes() {
     echo "  Expected namespace: submariner-tenant on kflux-prd-rh02" >&2
     return 2
   fi
+  if ! jq -e '(.items | type) == "array"' >/dev/null 2>&1 <<< "$snaps"; then
+    echo "  Invalid snapshot list — cannot verify EC" >&2
+    return 2
+  fi
 
   # If bundleShas has already chosen the component build we're shipping, verify EC
   # on THAT exact snapshot and record its name. This keeps the ecFixes
@@ -710,73 +750,55 @@ verify_ecFixes() {
     bundleShas_data=$(get_step "$version" "bundleShas" "$tracker" 2>/dev/null) || bundleShas_rc=$?
     # A FAILED tracker read must not fall through to the "latest snapshot"
     # branch — that would verify EC on, and record, a build other than the one
-    # bundleShas anchors. Decline to auto-verify (return 1); the conductor stops
+    # bundleShas anchors. Decline to auto-verify (return 2); the conductor stops
     # and the human re-runs once Jira is readable. A good read with no snapshot
     # yet (rc 0, empty) is the legitimate pre-bundleShas first pass → fall back.
     if [ "$bundleShas_rc" -ne 0 ]; then
       echo "verify_ecFixes: Jira read failed for bundleShas (rc $bundleShas_rc) — re-run once Jira is reachable" >&2
-      return 1
+      return 2
     fi
-    target_snap=$(printf '%s' "$bundleShas_data" | jq -r '.data.snapshot // empty' 2>/dev/null) || target_snap=""
+    target_snap=$(printf '%s' "$bundleShas_data" | jq -r '.data.snapshot // empty' 2>/dev/null) || {
+      echo "verify_ecFixes: Invalid bundleShas data — cannot select the candidate" >&2
+      return 2
+    }
   fi
 
+  local snap_json ec_status evidence_label="Latest snapshot"
   if [ -n "$target_snap" ]; then
-    # Verify enterprise-contract passed on the specific bundleShas snapshot. Split
-    # into two steps so a diagnostic can name the snapshot and its EC status on
-    # failure (previously: silent return 1 left the operator querying oc manually).
-    local snap_json ec_status_t
-    snap_json=$(echo "$snaps" | jq --arg n "$target_snap" '
-      [.items[] | select(.metadata.name == $n)] | last // null
-    ' 2>/dev/null) || snap_json="null"
-    if [ -z "$snap_json" ] || [ "$snap_json" = "null" ]; then
-      echo "  Snapshot $target_snap (from bundleShas) not found on cluster" >&2
-      return 1
-    fi
-    ec_status_t=$(printf '%s' "$snap_json" | _ec_status_from_snap)
-    # The shared reader requires finished aggregate and scenario evidence.
-    if [ "$ec_status_t" != "TestPassed" ] && [ "$ec_status_t" != "TestWarning" ] && [ "$ec_status_t" != "BuildPLRInProgress" ]; then
-      local ui_url="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${target_snap}"
-      echo "ecFixes: bundleShas snapshot: $target_snap (ec: $ec_status_t)" >&2
-      echo "  View EC failure details: $ui_url" >&2
-      echo "  If Tekton task refs are already current, EC is failing for a different reason." >&2
-      echo "  Investigate the EC log, fix the root cause, then re-run: /autorelease $version" >&2
-      return 1
-    fi
+    snap_json=$(jq -c --arg name "$target_snap" --arg app "submariner-${dash_mm}" \
+      '.items[] | select(.metadata.name == $name and .spec.application == $app)' <<< "$snaps") || return 2
     snap_name="$target_snap"
+    evidence_label="bundleShas snapshot"
+    if [ -z "$snap_json" ]; then
+      echo "  Snapshot $target_snap (from bundleShas) not found on cluster" >&2
+      return 2
+    fi
   else
-    # Find the latest main-branch (push/incoming/retest-all-comment) snapshot, then
-    # check its EC status. Two-step split gives a precise failure message instead of
-    # a silent return 1, which previously forced the operator to query oc manually.
-    local latest_candidate ec_status_f
-    latest_candidate=$(echo "$snaps" | jq -r --arg p "submariner-${dash_mm}-" '
-      [.items[] | select(.metadata.name | startswith($p)) |
-       select(.metadata.labels["pac.test.appstudio.openshift.io/event-type"] == "push" or
-              .metadata.labels["pac.test.appstudio.openshift.io/event-type"] == "incoming" or
-              .metadata.labels["pac.test.appstudio.openshift.io/event-type"] == "retest-all-comment")] |
-      last | .metadata.name // empty
-    ' 2>/dev/null) || latest_candidate=""
-    if [ -z "$latest_candidate" ] || [ "$latest_candidate" = "null" ]; then
+    snap_json=$(latest_component_snapshot "submariner-${dash_mm}" <<< "$snaps") || snap_json=""
+    snap_name=$(jq -r '.metadata.name // empty' <<< "$snap_json")
+    if [ -z "$snap_name" ]; then
       echo "  No qualifying main-branch snapshot for prefix submariner-${dash_mm}-" >&2
-      return 1
+      return 2
     fi
-    local snap_obj_f
-    snap_obj_f=$(echo "$snaps" | jq --arg n "$latest_candidate" \
-      '[.items[] | select(.metadata.name == $n)] | last' 2>/dev/null) || snap_obj_f="null"
-    ec_status_f=$(printf '%s' "$snap_obj_f" | _ec_status_from_snap)
-    # A retained marker is accepted only with the shared completion evidence.
-    if [ "$ec_status_f" != "TestPassed" ] && [ "$ec_status_f" != "TestWarning" ] && [ "$ec_status_f" != "BuildPLRInProgress" ]; then
-      local ui_url_f="https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${latest_candidate}"
-      echo "ecFixes: Latest snapshot: $latest_candidate (ec: $ec_status_f)" >&2
-      echo "  View EC failure details: $ui_url_f" >&2
-      echo "  If Tekton task refs are already current, EC is failing for a different reason." >&2
-      echo "  Investigate the EC log, fix the root cause, then re-run: /autorelease $version" >&2
-      return 1
-    fi
-    snap_name="$latest_candidate"
   fi
-  [ -n "$snap_name" ] && [ "$snap_name" != "null" ] || return 1
-  jq -cn --arg snap "$snap_name" --arg ver "$version" --arg prs "$_merged_pr_text" \
-    '{snapshot:$snap, version:$ver, prs:($prs | if . == "" then null else . end)}'
+  ec_status=$(printf '%s' "$snap_json" | _ec_status_from_snap)
+  case "$ec_status" in
+    TestPassed|TestWarning|BuildPLRInProgress) ;;
+    *)
+      echo "ecFixes: $evidence_label: $snap_name (ec: $ec_status)" >&2
+      echo "  View EC details: https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/applications/submariner-${dash_mm}/snapshots/${snap_name}" >&2
+      case "$ec_status" in
+        TestFail|TestFailed|TestError)
+          echo "  If Tekton task refs are already current, EC is failing for a different reason." >&2
+          echo "  Investigate the EC log, fix the root cause, then re-run: /autorelease $version" >&2
+          return 1 ;;
+        *)
+          echo "  EC evidence is unavailable or unfinished; wait or restore access before attempting repairs." >&2
+          return 2 ;;
+      esac ;;
+  esac
+  jq -cn --arg snap "$snap_name" --arg ver "$version" \
+    '{snapshot:$snap, version:$ver, prs:null}'
 }
 
 verify_fbcProdUrls() {
@@ -825,74 +847,63 @@ verify_fbcProdUrls() {
 }
 
 # --- PR-merge verifiers for review-level steps ---
-# Each checks that all expected PRs on a fix branch are merged, posts the PR
-# URLs to Jira as a comment, and returns JSON data for the tracker.
+# Each checks that all expected PRs on a fix branch are merged and returns
+# comment text; try_auto_verify records it in Jira.
 # Exit codes: 0=verified complete, 1=no PRs found (script hasn't run yet),
 #             2=precondition failure, 3=PRs open but not merged yet (wait).
 
 # _verify_prs_merged: shared helper used by tektonTasks/rpmLockfiles/versionLabels.
 # Args: $1=version $2=tracker $3=branch_name $4=space-separated "org/repo" list
-# Stdout: JSON {prs:[...]} on success. Stderr: human-readable status.
+# Stdout: comment text on success/pending. Stderr: human-readable status.
 _verify_prs_merged() {
   local version="$1"
   local tracker="$2"
   local branch="$3"
   local repos="$4"
 
-  if ! command -v gh &>/dev/null; then
-    echo "  gh not installed" >&2; return 2
-  fi
-
   local all_merged=true
   local any_open=false
-  local any_missing=false
   local merged_urls=()
   local open_urls=()
 
   for repo in $repos; do
-    local pr_json pr_rc=0
-    pr_json=$(gh pr list --repo "$repo" --head "$branch" --state all \
-      --json number,state,mergedAt,url --limit 5 2>/dev/null) || pr_rc=$?
-    if [ "$pr_rc" -ne 0 ]; then
-      echo "  gh pr list failed for $repo (exit $pr_rc) — network or auth issue" >&2
-      return 2
+    local pr_json base="release-${version%.*}"
+    [ "$repo" != stolostron/submariner-operator-fbc ] || base=main
+    pr_json=$(_read_prs "$repo" "$base" all) || return 2
+    pr_json=$(printf '%s' "$pr_json" | jq -c --arg branch "$branch" --arg base "$base" \
+      '[.[] | select(.head.ref == $branch and .base.ref == $base)]') || return 2
+
+    # Pending work takes precedence over an earlier merge on the same branch.
+    local open_url
+    open_url=$(printf '%s' "$pr_json" | \
+      jq -r '[.[] | select(.state=="open")] | last | .html_url // empty') || return 2
+    if [ -n "$open_url" ]; then
+      echo "  PR open, not yet merged: $open_url" >&2
+      open_urls+=("$open_url")
+      any_open=true
+      all_merged=false
+      continue
     fi
 
     local merged_url
     merged_url=$(printf '%s' "$pr_json" | \
-      jq -r '[.[] | select(.state=="MERGED")] | sort_by(.mergedAt) | last | .url // empty' \
-      2>/dev/null) || merged_url=""
+      jq -r '[.[] | select(.merged_at != null)] | sort_by(.merged_at) | last | .html_url // empty') || return 2
 
     if [ -n "$merged_url" ]; then
       merged_urls+=("$merged_url")
     else
-      local open_url
-      open_url=$(printf '%s' "$pr_json" | \
-        jq -r '[.[] | select(.state=="OPEN")] | last | .url // empty' 2>/dev/null) || open_url=""
-      if [ -n "$open_url" ]; then
-        echo "  PR open, not yet merged: $open_url" >&2
-        open_urls+=("$open_url")
-        any_open=true
-      else
-        echo "  No PR found on $repo (branch: $branch)" >&2
-        any_missing=true
-      fi
+      echo "  No PR found on $repo (branch: $branch)" >&2
       all_merged=false
     fi
   done
 
   if ! $all_merged; then
-    # If any repo has no PR at all, the action script still needs to run for it.
-    # Return rc=1 so the conductor re-runs the script rather than waiting — the
-    # script handles already-committed repos with no-changes (benign skip).
-    if $any_missing; then
-      return 1
-    fi
+    # Wait for existing reviews even when another repo needed no PR. Rerunning
+    # now would reset and force-push pending repair branches. Once these merge,
+    # missing PRs request a fresh-base check (which may legitimately be a no-op).
     if $any_open; then
-      # Emit open (and any already-merged) URLs on stdout so the caller can
-      # post them to Jira. _add_comment cannot be called here because this
-      # function runs inside a $() subshell in try_auto_verify, where shell
-      # functions from the parent are not available.
+      # Emit open (and any already-merged) URLs for try_auto_verify to record
+      # in Jira after verification.
       local open_list merged_list=""
       open_list=$(printf '%s\n' "${open_urls[@]}")
       [ "${#merged_urls[@]}" -gt 0 ] && merged_list=$(printf '%s\n' "${merged_urls[@]}")
@@ -918,8 +929,7 @@ _verify_prs_merged() {
 verify_tektonTasks() {
   local version="$1"
   local tracker="${2:-}"
-  local major_minor="${version%.*}"
-  local branch="fix-tekton-tasks-${major_minor}"
+  local branch="fix-tekton-tasks-${version}"
   # 5 component repos + FBC repo (stolostron org)
   local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl stolostron/submariner-operator-fbc"
   _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
@@ -937,109 +947,46 @@ verify_rpmLockfiles() {
 verify_versionLabels() {
   local version="$1"
   local tracker="${2:-}"
-  local major_minor="${version%.*}"
-  local branch="fix-version-labels-${major_minor}"
+  local branch="fix-version-labels-${version}"
   # Version labels apply to all 5 component repos
   local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl"
-  _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
+  local evidence repo file content has_binary rc=0
+  evidence=$(_verify_prs_merged "$version" "$tracker" "$branch" "$repos") || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ -z "$evidence" ] || printf '%s\n' "$evidence"
+    return "$rc"
+  fi
+  for repo in $COMPONENT_VERSION_REPOS; do
+    has_binary=true
+    [ "$repo" != shipyard ] || has_binary=false
+    for file in ${COMPONENT_DOCKERFILES[$repo]}; do
+      content=$(gh api -H 'Accept: application/vnd.github.raw+json' \
+        "repos/submariner-io/$repo/contents/$file?ref=release-${version%.*}") || return 2
+      if ! component_version_matches "$content" "$version" "$has_binary"; then
+        echo "  Image/compiled version mismatch: $repo/$file — re-run the version updater" >&2
+        return 1
+      fi
+    done
+  done
+  printf '%s\n' "$evidence"
 }
 
-# verify_cveFixes: detect CVE fix PR state across all 7 Go repos.
-#
-# CVE fix PRs are opened from a fork (the cve-fix skill uses fork-remote PR
-# creation), so `gh pr list --head <branch>` on the upstream org won't find
-# them — the head ref includes the fork username. Use `--search "fix-VERSION-cves
-# in:head"` instead, which matches the branch name substring regardless of fork
-# ownership, returning PRs from any fork targeting any base branch.
-#
-# "No PR found" for a repo means it was clean (no CVEs → no fix branch → no PR).
-# That is treated as verified for that repo.
-#
-# Exit codes (same contract as _verify_prs_merged):
-#   0  — all repos verified (all found PRs merged, or no PR needed)
-#   1  — no CVE PRs found in any repo (script hasn't run for this version yet)
-#   2  — gh not available or query failure
-#   3  — at least one repo has an open CVE fix PR (wait for merge)
-#
-# Stdout on rc=0: Jira comment text ("All CVE fix PRs merged for X...")
-# Stdout on rc=3: Jira comment text ("CVE fix PRs open for X...")
-# Stdout must be empty on rc=1 and rc=2 (verifier failure contract).
+# Wait for CVE fixes to merge, then let the wrapper rescan all seven repos.
+# A historical merged PR cannot prove that today's upstream sources are clean.
+# rc=3 waits, rc=2 cannot verify, rc=1 requests the authoritative clean rescan.
 verify_cveFixes() {
-  local version="$1"
-  local tracker="${2:-}"
-  # The cve-fix skill names branches fix-<major.minor>-cves-<date> (not full X.Y.Z).
-  # Use major.minor so the search matches e.g. "dfarrell07:fix-0.24-cves-20260825-v4".
-  local major_minor="${version%.*}"
-  local search_term="fix-${major_minor}-cves"
-  # All 7 Go repos scanned by cve-fixes-update.sh (matches its REPO_ORDER)
-  local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl submariner-io/admiral submariner-io/cloud-prepare"
-
-  if ! command -v gh &>/dev/null; then
-    echo "  gh not installed" >&2; return 2
-  fi
-
-  local any_open=false any_found=false
-  local merged_urls=() open_urls=()
-
-  for repo in $repos; do
-    local pr_json pr_rc=0
-    # --search finds PRs from any fork whose head branch contains the search
-    # term, across all states. GitHub search in:head matches the "<user>:<branch>"
-    # head ref string, so "fix-0.24-cves" matches e.g. "dfarrell07:fix-0.24-cves-20260825-v4".
-    pr_json=$(gh pr list --repo "$repo" \
-      --search "${search_term} in:head" \
-      --state all \
-      --json number,state,mergedAt,url --limit 5 2>/dev/null) || pr_rc=$?
-    if [ "$pr_rc" -ne 0 ]; then
-      echo "  gh pr list failed for $repo (exit $pr_rc) — network or auth issue" >&2
-      return 2
-    fi
-
-    local merged_url open_url
-    merged_url=$(printf '%s' "$pr_json" | \
-      jq -r '[.[] | select(.state=="MERGED")] | sort_by(.mergedAt) | last | .url // empty' \
-      2>/dev/null) || merged_url=""
-    open_url=$(printf '%s' "$pr_json" | \
-      jq -r '[.[] | select(.state=="OPEN")] | last | .url // empty' \
-      2>/dev/null) || open_url=""
-
-    # Check open before merged: a repo may have both (merged v1, open v2 re-run).
-    # Open takes priority — an open PR blocks completion regardless of prior merges.
-    if [ -n "$open_url" ]; then
-      any_found=true any_open=true
-      open_urls+=("$open_url")
-      [ -n "$merged_url" ] && merged_urls+=("$merged_url")
-      echo "  CVE fix PR open, not yet merged: $open_url" >&2
-    elif [ -n "$merged_url" ]; then
-      any_found=true
-      merged_urls+=("$merged_url")
-    fi
-    # No PR found → repo was clean (no CVEs → no fix branch → no PR). Verified.
-  done
-
-  if ! $any_found; then
-    # No CVE fix PRs in any repo — script hasn't run for this version yet.
-    return 1
-  fi
-
-  if $any_open; then
-    local open_list merged_list=""
-    open_list=$(printf '%s\n' "${open_urls[@]}")
-    [ "${#merged_urls[@]}" -gt 0 ] && merged_list=$(printf '%s\n' "${merged_urls[@]}")
-    if [ -n "$merged_list" ]; then
-      printf 'CVE fix PRs open for %s (some still open):\nOpen:\n%s\nMerged:\n%s' \
-        "$version" "$open_list" "$merged_list"
-    else
-      printf 'CVE fix PRs open for %s:\n%s' "$version" "$open_list"
-    fi
+  local version="$1" urls="" rc=0
+  # Existing review branches may end in -pr instead of a numbered retry.
+  urls=$(_open_automation_prs "fix-${version%.*}-cves" \
+    '^-[0-9]{4}-[0-9]{2}-[0-9]{2}(-v[0-9]+|-pr)?$' \
+    'submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl submariner-io/admiral submariner-io/cloud-prepare' \
+    "$version") || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    printf 'CVE fix PRs open for %s:\n%s' "$version" "$urls"
     return 3
   fi
-
-  # All found PRs are merged; repos with no PR were clean.
-  local url_list
-  url_list=$(printf '%s\n' "${merged_urls[@]}")
-  printf 'All CVE fix PRs merged for %s:\n%s' "$version" "$url_list"
-  return 0
+  [ "$rc" -eq 0 ] && return 1
+  return "$rc"
 }
 
 # Map step keys to verifier functions (only steps with external verifiers)
@@ -1300,7 +1247,11 @@ run_dry_run() {
   local _ip_step
   for _ip_step in "${STEP_ORDER[@]}"; do
     if [ "${step_statuses[$_ip_step]:-}" = "in_progress" ]; then
-      echo "⚠ ${STEP_TITLES[$_ip_step]:-$_ip_step}: in_progress — re-running may duplicate work if changes are already committed" >&2
+      if [ -n "${STEP_VERIFIER[$_ip_step]:-}" ]; then
+        echo "ℹ ${STEP_TITLES[$_ip_step]:-$_ip_step}: in_progress — a real run verifies existing work before rerunning" >&2
+      else
+        echo "⚠ ${STEP_TITLES[$_ip_step]:-$_ip_step}: in_progress — inspect existing work before rerunning" >&2
+      fi
     fi
   done
 
@@ -1381,10 +1332,15 @@ run_dry_run() {
         [ "${step_statuses[$NEXT_STEP]:-}" = "in_progress" ] && \
           _dr_note=" (in_progress)"
         echo "  $n. ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}${_dr_note}" >&2
+        local _dr_dispatch="run"
+        if [ -n "${STEP_VERIFIER[$NEXT_STEP]:-}" ]; then
+          echo "       first: ${STEP_VERIFIER[$NEXT_STEP]} (may wait for PRs, advance, or require repair)" >&2
+          _dr_dispatch="if needed after verification, run"
+        fi
         if [ -n "$args" ]; then
-          echo "       run: $script $VERSION $args" >&2
+          echo "       $_dr_dispatch: $script $VERSION $args" >&2
         else
-          echo "       run: $script $VERSION" >&2
+          echo "       $_dr_dispatch: $script $VERSION" >&2
         fi
         # Side effect, statically — four-way, matching classify_log_growth's
         # domain: RELEASE_YAML_STEPS write a release CR (apply/watch);
@@ -1405,6 +1361,9 @@ run_dry_run() {
           stop="$NEXT_STEP"
           stop_title="${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}"
           stop_reason="runs the script then pauses for review — re-run /autorelease $VERSION to execute"
+          if [ "$_dr_dispatch" != run ]; then
+            stop_reason="verifies existing work first; may wait, advance, or run the script and pause for review"
+          fi
           break
         fi
         # find_next_step sets NEXT_STEP and NEXT_REASON as side effects.
@@ -1662,14 +1621,10 @@ run_conductor() {
         fi
         prev_step="$NEXT_STEP"
 
-        # For in_progress steps with a verifier, check if the work is already
-        # done (e.g. PRs merged) before re-running the script. This handles the
-        # case where the conductor is re-invoked after a review-level step ran
-        # on a prior run — prev_step starts empty each fresh invocation, so the
-        # same-step guard above never fires, but we still must not re-run the
-        # script if the external state shows the step is complete.
+        # Check existing work even with a fresh tracker or a failed earlier Jira
+        # start write. Pending repairs must not be reset or regenerated.
         local_status="${step_statuses[$NEXT_STEP]:-}"
-        if [ "$local_status" = "in_progress" ] && [ -n "${STEP_VERIFIER[$NEXT_STEP]:-}" ]; then
+        if [ -n "${STEP_VERIFIER[$NEXT_STEP]:-}" ]; then
           _tav_rc=0; try_auto_verify "$NEXT_STEP" || _tav_rc=$?
           if [ "$_tav_rc" -eq 0 ]; then
             step_statuses[$NEXT_STEP]='complete'
@@ -1682,6 +1637,9 @@ run_conductor() {
             break
           fi
           if [ "$_tav_rc" -eq 3 ]; then
+            if [ "$local_status" != in_progress ]; then
+              update_step "$VERSION" "$NEXT_STEP" in_progress '{}' "$TRACKER"
+            fi
             echo "" >&2
             echo "⏳ ${STEP_TITLES[$NEXT_STEP]:-$NEXT_STEP}: PRs open, waiting for merge" >&2
             echo "  Re-run after PRs merge: /autorelease $VERSION" >&2
@@ -1721,15 +1679,11 @@ run_conductor() {
 
         echo "" >&2
         if [ "$local_exit" -eq 2 ]; then
-          # rc=2 means the script ran successfully but has nothing to commit:
-          # task versions and SHAs are already current, but EC is still failing.
-          # The script has already emitted a Konflux UI URL + EC log guidance.
-          # Stop the conductor here so we don't re-dispatch endlessly.
+          # No supported automatic repair was found. Source checks cannot
+          # diagnose every signed-image or release-policy failure.
           echo "⏸ ${local_title}: NOTHING TO UPDATE" >&2
-          echo "  Task versions and SHAs are already current." >&2
-          echo "  EC is failing for a reason other than stale task refs." >&2
-          echo "  See the Konflux UI URL above to download the EC log." >&2
-          echo "  After downloading the log, re-run: /autorelease $VERSION" >&2
+          echo "  Inspect the exact snapshot's EC report and repair its demonstrated violation." >&2
+          echo "  After repair and rebuild, re-run: /autorelease $VERSION" >&2
           break
         fi
 
@@ -1748,7 +1702,14 @@ run_conductor() {
           # Attempt automatic push/PR creation; fall back to manual pending actions
           # on failure. _try_auto_push rewrites the push log on success so the
           # Pending Actions trailer shows only the remaining manual steps (apply/watch).
-          _try_auto_push "$AUTORELEASE_PUSH_LOG" "$NEXT_STEP" "$_log_before" >&2 || true
+          if _try_auto_push "$AUTORELEASE_PUSH_LOG" "$NEXT_STEP" "$_log_before" >&2; then
+            if [ "$_growth_flag" = ran_pr_step ]; then
+              # Publication changed the evidence since any pre-dispatch check.
+              # Record PR links now, while retaining this review boundary.
+              unset "verified_steps[$NEXT_STEP]"
+              try_auto_verify "$NEXT_STEP" || true
+            fi
+          fi
           print_review_stop "$AUTORELEASE_PUSH_LOG" "$VERSION" >&2
           # Review-level steps intentionally stay in_progress until the verifier
           # confirms external state (PRs merged, etc.) — no write-failure check needed.
@@ -1930,15 +1891,14 @@ if [ "${_AUTORELEASE_TESTING:-}" != "true" ]; then
   # of as a cryptic mid-run failure or a silently non-chaining verifier gate.
   run_preflight
 
-  # Warn when not on main — release steps commit YAMLs to main; running from a
-  # feature branch means those commits land on the wrong branch or the scripts
-  # fail with a "not on main" guard. This is advisory only: --dry-run, --complete,
-  # --refresh, and --close are fine from any branch.
+  # Source updates can run from a feature checkout. Later release YAML and
+  # release-note helpers require main; do not switch away from tooling fixes
+  # before the source steps have exercised them.
   _cur_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
   if [ -n "$_cur_branch" ] && [ "$_cur_branch" != "main" ] && [ -z "${DRY_RUN:-}" ]; then
     echo "  ⚠ You are on branch '$_cur_branch', not 'main'." >&2
-    echo "    Release step scripts commit YAMLs to main — switch first:" >&2
-    echo "      git checkout main && git pull" >&2
+    echo "    Source updates can run here; release YAMLs and release notes require main." >&2
+    echo "    Before those steps, finish review and resume from an updated main checkout." >&2
     echo "" >&2
   fi
 

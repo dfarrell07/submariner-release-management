@@ -8,22 +8,23 @@
 #   repo:    Optional repo filter (submariner-operator, submariner, lighthouse,
 #            shipyard, subctl, fbc)
 #
-# Runs `pipeline-patcher bump-task-refs` in each of the 5 component repos (on
-# release-<X.Y>) plus the FBC repo (on main), committing the refreshed .tekton/
+# Repairs denied catalog moves in each of the 5 component repos (on
+# release-<X.Y>) plus the FBC repo (on main), committing the repaired .tekton/
 # pipeline files on a per-repo fix branch. It never pushes — push/PR is left to
 # the human (commands are printed and appended to $AUTORELEASE_PUSH_LOG). The
 # downstream ecFixes verifier confirms Enterprise Contract passes once the PRs
 # merge and Konflux rebuilds.
 #
-# The patcher only checks the trusted list, so the result is also checked against
-# the EC trusted-task DENY rules (scripts/lib/deny-rules.sh): a denial whose
-# message names a replacement catalog is rewritten before the patcher re-pins it;
-# any other active denial is reported for a manual fix and fails the run.
+# A denial whose message names a replacement catalog is rewritten and ONLY that
+# moved ref is re-pinned. Unrelated refs are preserved. Other active denials need
+# manual review. This source precheck does not prove signed-image EC compliance:
+# managed policy can inspect bundle manifest versions rather than source tags.
 #
 # Exit codes:
-#   0: Success (every applicable repo bumped or already current)
+#   0: Source checks/repairs completed (signed-image EC remains a separate gate)
 #   1: Failure (prerequisites, one or more repos failed, or an EC deny rule needs
 #      a manual fix)
+#   2: EC repair requested, but no supported catalog move was found
 
 set -euo pipefail
 
@@ -43,7 +44,7 @@ source "$_LIB_DIR/deny-rules.sh"
 
 # ━━━ CONSTANTS ━━━
 
-readonly SUBMARINER_BASE="$HOME/go/src/submariner-io"
+readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
 # FBC lives outside the upstream Go tree (see fbc-catalog-update.sh).
 # FBC_REPO_DEFAULT is the canonical path defined once in lib/jira-tracker.sh.
 readonly FBC_REPO_PATH="${FBC_REPO:-$FBC_REPO_DEFAULT}"
@@ -105,6 +106,61 @@ _restore_repo() {
   restore_stashed_worktree "$PWD" "$@"
 }
 
+# Parse every pipeline first: malformed YAML or missing bundle refs must not be
+# mistaken for a clean no-op. Preserve the full digest when identifying moves.
+task_bundle_refs() {
+  local dir="${1:-.}" data
+  local -a files=()
+  local f
+  for f in "$dir"/.tekton/*.yaml "$dir"/.tekton/*.yml; do
+    [ ! -f "$f" ] || files+=("$f")
+  done
+  [ "${#files[@]}" -gt 0 ] || return 1
+  data=$(yq -o=json -I=0 '[... | select(has("resolver") and .resolver == "bundles")]' \
+    "${files[@]}") || return 1
+  printf '%s\n' "$data" | jq -ers 'add |
+    map([.params[]? | select(.name == "bundle") | .value]) |
+    if length > 0 and all(.[]; length == 1) then map(.[0]) | unique
+    else error("Missing or duplicate bundle parameters") end |
+    if all(.[]; type == "string" and
+      test("^quay[.]io/[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$"))
+    then .[] else error("Missing or unsupported pinned bundle refs") end'
+}
+
+repair_moved_task_refs() {
+  local before after moved ref replacement escaped
+  before=$(task_bundle_refs .) || return 1
+  deny_rules_scan . >/dev/null || return 1
+  moved=$(deny_rules_rewrite_moved .) || return 1
+  [ -z "$moved" ] || printf '%s\n' "$moved"
+  after=$(task_bundle_refs .) || return 1
+  # A move may collapse into an existing full ref. Set comparison would then
+  # skip its re-pin; changing the existing pin needs manual review instead.
+  if [ "$(printf '%s\n' "$before" | wc -l)" != "$(printf '%s\n' "$after" | wc -l)" ]; then
+    echo "Catalog repair collides with an existing task ref; review manually" >&2
+    return 1
+  fi
+  while IFS= read -r ref; do
+    # The catalog rewrite is the only reason to select a ref. Never refresh an
+    # unrelated digest merely because the patcher offers a newer one.
+    if printf '%s\n' "$before" | grep -qxF -- "$ref"; then continue; fi
+    replacement=$(printf '%s' "$PATCHER_SCRIPT" | bash -s task-ref "$ref") || {
+      printf '%s\n' "$replacement" >&2
+      return 1
+    }
+    if ! [[ "$replacement" =~ ^quay\.io/konflux-ci/tekton-catalog/[A-Za-z0-9._-]+:[A-Za-z0-9._-]+@sha256:[a-f0-9]{64}$ ]] ||
+       [ "${replacement%@*}" != "${ref%@*}" ]; then
+      echo "Invalid replacement task ref: $replacement" >&2
+      return 1
+    fi
+    escaped="${ref//./\\.}"
+    local f
+    for f in .tekton/*.yaml .tekton/*.yml; do
+      [ ! -f "$f" ] || sed -i "s|$escaped|$replacement|g" "$f" || return 1
+    done
+  done <<< "$after"
+}
+
 # ━━━ PREREQUISITES ━━━
 
 check_prerequisites() {
@@ -116,12 +172,13 @@ check_prerequisites() {
   command -v curl &>/dev/null || MISSING_TOOLS+=("curl")
   command -v oras &>/dev/null || MISSING_TOOLS+=("oras")
   command -v yq &>/dev/null || MISSING_TOOLS+=("yq")
+  command -v jq &>/dev/null || MISSING_TOOLS+=("jq")
 
   if [ "${#MISSING_TOOLS[@]}" -gt 0 ]; then
     die "Missing required tools: ${MISSING_TOOLS[*]}"
   fi
 
-  echo "✓ Prerequisites verified: git, curl, oras, yq"
+  echo "✓ Prerequisites verified: git, curl, oras, yq, jq"
 }
 
 # ━━━ ARGUMENT PARSING ━━━
@@ -177,7 +234,7 @@ update_repo() {
   local REPO_PATH BASE_BRANCH FIX_BRANCH
   REPO_PATH="$(repo_path "$REPO")"
   BASE_BRANCH="$(repo_base_branch "$REPO")"
-  FIX_BRANCH="fix-tekton-tasks-${MAJOR_MINOR}"
+  FIX_BRANCH="fix-tekton-tasks-${VERSION}"
 
   echo "━━━ $REPO ━━━"
 
@@ -208,6 +265,11 @@ update_repo() {
     ORIGINAL_REF="$(git rev-parse HEAD 2>/dev/null || true)"
   fi
 
+  git fetch origin || {
+    REPOS_FAILED+=("$REPO:fetch-failed")
+    return
+  }
+
   # Resolve base branch (prefer origin/, fall back to local)
   local BRANCH_REF="origin/$BASE_BRANCH"
   if ! git show-ref --verify --quiet "refs/remotes/$BRANCH_REF"; then
@@ -218,6 +280,24 @@ update_repo() {
       # (needs a git fetch), not a benign skip, so the step is not marked done.
       REPOS_FAILED+=("$REPO:branch-not-found")
       echo ""
+      return
+    fi
+  fi
+
+  # A retry must not reset unpublished repairs or review corrections. Rebase
+  # merges change commit IDs, so accept patches already applied upstream too.
+  # git cherry omits merges; unique merge commits still need manual review.
+  if git show-ref --verify --quiet "refs/heads/$FIX_BRANCH" &&
+     ! git merge-base --is-ancestor "$FIX_BRANCH" "$BRANCH_REF"; then
+    local pending_patches pending_merges
+    if ! pending_patches=$(git cherry "$BRANCH_REF" "$FIX_BRANCH") ||
+       ! pending_merges=$(git rev-list --merges "$BRANCH_REF..$FIX_BRANCH") ||
+       [[ "$pending_patches" == +\ * || "$pending_patches" == *$'\n'+\ * ]] ||
+       [ -n "$pending_merges" ]; then
+      echo "  ✗ Existing $FIX_BRANCH contains work not confirmed upstream."
+      echo "    Inspect this branch and resolve pending work before retrying; it was preserved."
+      printf '    git -C %q show %q\n' "$REPO_PATH" "$FIX_BRANCH"
+      REPOS_FAILED+=("$REPO:existing-fix-branch")
       return
     fi
   fi
@@ -246,25 +326,24 @@ update_repo() {
     return
   fi
 
-  # Follow denial messages that name a replacement catalog BEFORE the patcher: it
-  # cannot re-pin a ref from a catalog it no longer knows and aborts the run.
+  # Missing policy data must stop before any edits or source-check completion.
+  if [ "$DENY_RULES_CHECKED" -ne 1 ]; then
+    REPOS_FAILED+=("$REPO:deny-rules-unchecked")
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
+    return
+  fi
+
   local moved_out="" moved_summary=""
-  if [ "$DENY_RULES_CHECKED" -eq 1 ]; then
-    moved_out=$(deny_rules_rewrite_moved ".")
+  if moved_out=$(repair_moved_task_refs 2>&1); then
     [ -n "$moved_out" ] && printf '%s\n' "$moved_out"
     # Two short lines per move: gitlint (enforced by the component repos' CI)
     # rejects body lines over 80 characters.
     moved_summary=$(printf '%s\n' "$moved_out" \
       | sed -E '/^$/d; s#quay\.io/konflux-ci/##g; s/^ *↻ ([^ ]+) -> ([^ ]+) \(.*$/- \1\n  -> \2/')
-  fi
-
-  # Bump task refs. The patcher edits .tekton/ in place; capture output so a
-  # failure is not opaque.
-  local patcher_out
-  if ! patcher_out=$(printf '%s' "$PATCHER_SCRIPT" | bash -s bump-task-refs 2>&1); then
-    echo "  ✗ pipeline-patcher failed:"
-    printf '%s\n' "$patcher_out" | sed 's/^/      /'
-    if printf '%s' "$patcher_out" | grep -q "Can't find"; then
+  else
+    echo "  ✗ Task repair failed:"
+    printf '%s\n' "$moved_out" | sed 's/^/      /'
+    if printf '%s' "$moved_out" | grep -q "Can't find"; then
       echo "    Hint: a task ref is missing from the trusted list — often a denied or"
       echo "    moved catalog. Check EC deny rules (scripts/lib/deny-rules.sh)."
     fi
@@ -278,7 +357,11 @@ update_repo() {
   # list. ACTIVE denials that survive need a manual fix; FUTURE ones only warn.
   local deny_scan="" deny_active=0
   if [ "$DENY_RULES_CHECKED" -eq 1 ]; then
-    deny_scan=$(deny_rules_scan "." 2>/dev/null || true)
+    if ! deny_scan=$(deny_rules_scan "."); then
+      REPOS_FAILED+=("$REPO:deny-scan-failed")
+      _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" || true
+      return
+    fi
     deny_active=$(deny_rules_count_active "$deny_scan")
     [ -n "$deny_scan" ] && deny_rules_report "$deny_scan" "  "
   fi
@@ -295,7 +378,7 @@ update_repo() {
       echo "  ✗ No automatic fix for the EC deny rule(s) above — manual change needed"
       REPOS_DENIED+=("$REPO:$deny_active")
     elif _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF"; then
-      echo "  - Task refs already current"
+      echo "  - No catalog repair needed; signed-image EC remains required"
       REPOS_SKIPPED+=("$REPO:no-changes")
     else
       REPOS_FAILED+=("$REPO:restore-failed")
@@ -306,10 +389,10 @@ update_repo() {
   fi
 
   # Commit
-  local commit_msg="Update Tekton task references to latest versions
+  local commit_msg="Repair denied Tekton task catalog references
 
-Refreshes .tekton pipeline task bundle references so Konflux builds pass
-Enterprise Contract validation."
+Replaces denied catalog references while preserving unrelated task pins.
+The rebuilt images still require Enterprise Contract validation."
   if [ -n "$moved_summary" ]; then
     commit_msg="${commit_msg}
 
@@ -392,8 +475,7 @@ print_summary() {
   fi
   if [ "$DENY_RULES_CHECKED" -eq 0 ]; then
     echo ""
-    echo "⚠ EC deny rules were NOT checked (policy-data unavailable): a clean run"
-    echo "  here does not prove EC will pass."
+    echo "✗ EC deny rules were NOT checked (policy-data unavailable)."
   fi
 
   if [ "$UPDATED_COUNT" -gt 0 ]; then
@@ -412,30 +494,26 @@ print_summary() {
       fork="$(fork_remote "$path" "$gh_user")"
       echo ""
       echo "# $repo"
-      echo "cd $path"
-      echo "git show"
-      echo "git push $fork $fix_branch"
-      # FBC repo (stolostron/submariner-operator-fbc) has no ready-to-test label
-      local label_flag="--label ready-to-test"
-      [ "$repo" = "fbc" ] && label_flag=""
-      # --head <user>:<branch> opens a cross-repo (fork) PR; gh_user is the
-      # fork owner. Falls back to branch-only if gh_user is unavailable.
-      local head_ref="$fix_branch"
+      printf 'git -C %q show %q\n' "$path" "$fix_branch"
+      # FBC has no ready-to-test label; all variable command arguments are quoted.
+      local label_flag=" --label ready-to-test"
+      [ "$repo" = fbc ] && label_flag=""
+      local head_ref="$fix_branch" pr_filter push_commands
       [ -n "$gh_user" ] && head_ref="${gh_user}:${fix_branch}"
-      # shellcheck disable=SC2086
-      echo "PR_URL=\$(gh pr create --base $base_branch --head $head_ref --title \"Update Tekton task references\" --body \"Refresh .tekton task refs for Enterprise Contract.\" --assignee @me $label_flag)"
-      echo "gh pr merge --auto --rebase \"\${PR_URL##*/}\""
-      # Append to push summary if conductor is running
+      pr_filter="[.[] | select(.headRepositoryOwner.login == \"$gh_user\")] | .[0].url // empty"
+      printf -v push_commands '\n  cd %q\n  git push --force-with-lease %q %q\n  PR_URL=$(gh pr list --base %q --head %q --state open --json url,headRepositoryOwner --jq %q)\n  if [ -z "$PR_URL" ]; then\n    PR_URL=$(gh pr create --base %q --head %q --title %q --body %q --assignee @me%s)\n  fi\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
+        "$path" "$fork" "$fix_branch" "$base_branch" "$fix_branch" "$pr_filter" \
+        "$base_branch" "$head_ref" "Repair denied Tekton task catalogs" \
+        "Replace denied task catalogs and preserve unrelated pins. Rebuilt images require Enterprise Contract verification." "$label_flag"
+      printf '%s' "$push_commands"
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push %s %s\n  PR_URL=$(gh pr create --base %s --head %s --title "Update Tekton task references" --body "Refresh .tekton task refs for Enterprise Contract." --assignee @me %s)\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
-          "$path" "$fork" "$fix_branch" "$base_branch" "$head_ref" "$label_flag" \
-          >> "$AUTORELEASE_PUSH_LOG"
+        printf '%s' "$push_commands" >> "$AUTORELEASE_PUSH_LOG"
       fi
     done
   fi
 
   echo ""
-  [ "$FAILED_COUNT" -eq 0 ]
+  [ "$FAILED_COUNT" -eq 0 ] && [ "$DENY_RULES_CHECKED" -eq 1 ]
 }
 
 # ━━━ MAIN ━━━
@@ -457,7 +535,7 @@ main() {
     DENY_RULES_CHECKED=1
     echo "✓ EC deny rules loaded"
   else
-    echo "⚠ EC deny rules NOT loaded — refs will not be checked against them"
+    die "EC deny rules NOT loaded; no task repairs attempted"
   fi
 
   # Tracker integration
@@ -475,18 +553,30 @@ main() {
 
   update_all
 
-  print_summary
+  print_summary || return $?
 
-  # Record completion when the full repo set was processed with no failures.
-  # review level: script stays in_progress. User must push/merge PRs, then
-  # explicitly mark complete: /autorelease --complete tektonTasks (or ecFixes). This prevents
-  # auto-chaining to downstream steps before the Tekton changes are merged.
-  # (Historically scripts marked themselves complete, which broke the review stop.)
-  if [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && [ "${#REPOS_FAILED[@]}" -eq 0 ] && [ "${#REPOS_DENIED[@]}" -eq 0 ]; then
-    local data
-    # shellcheck disable=SC2034
-    data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" --arg ver "$VERSION" \
-      '{reposUpdated:($count|tonumber),version:$ver}' | jq -c .) || data="{}"
+  if [ "$TRACKER_STEP" = ecFixes ] && [ "${#REPOS_UPDATED[@]}" -eq 0 ]; then
+    echo "No denied catalog move was repaired. Inspect the exact snapshot's EC report"
+    echo "and address its reported failures; unrelated task pins were preserved."
+    return 2
+  fi
+
+  # A full no-op checked every fresh base. Updates and incomplete work stay pending.
+  local clean_count=0 entry
+  local -a all_repos
+  read -ra all_repos <<< "$REPO_ORDER"
+  for entry in "${REPOS_SKIPPED[@]}"; do
+    [ "${entry##*:}" != no-changes ] || clean_count=$((clean_count + 1))
+  done
+  if [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] &&
+     [ "$TRACKER_STEP" = tektonTasks ] && [ "${#REPOS_UPDATED[@]}" -eq 0 ] && [ "${#REPOS_FAILED[@]}" -eq 0 ] &&
+     [ "${#REPOS_DENIED[@]}" -eq 0 ] && [ "$clean_count" -eq "${#all_repos[@]}" ]; then
+    # The merge verifier may have deferred to this fresh-base check because a
+    # repo needed no PR. Clear its old "PRs open" description before completing.
+    update_subtask_description "$VERSION" "$TRACKER_STEP" \
+      "$(printf '## Status\n\nFresh upstream task-source checks passed for all six repositories. No catalog repair or new PR is needed.\n\nChecked repositories: %s.\n\nSee parent tracker comments for PR history. Signed-image Enterprise Contract validation remains a separate release gate.' "$REPO_ORDER")" \
+      "$TRACKER" || return 1
+    update_step "$VERSION" "$TRACKER_STEP" complete '{}' "$TRACKER"
   fi
 }
 

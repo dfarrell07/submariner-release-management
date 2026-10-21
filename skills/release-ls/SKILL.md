@@ -18,7 +18,10 @@ Claude: /release-management:release-ls 0.22.0
 Codex:  $release-management:release-ls 0.22.0
 ```
 
-**Requires:** `oc login`
+Cluster verification requires `oc login`; without access, report partial results
+and identify what remains unverified.
+Production checks also need registry.redhat.io credentials for `skopeo` and
+`oc image extract` (the latter reads `~/.docker/config.json`).
 
 ## Inputs and execution
 
@@ -26,9 +29,8 @@ The release version is required. Use exactly the value supplied by the user;
 do not infer one. If it is missing, report the script's usage instead of
 starting a status check.
 
-Resolve the release-management root before running the operation. If
-`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
-root. Otherwise, locate the checkout containing this `SKILL.md` and
+Use the release-management checkout selected for this task. Otherwise, use an
+absolute `${CLAUDE_PLUGIN_ROOT}` or locate the checkout containing this `SKILL.md` and
 `scripts/release-status.sh`. Verify the script exists and is executable.
 
 Run `scripts/release-status.sh` with the supplied version as one argument.

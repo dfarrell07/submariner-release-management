@@ -348,9 +348,10 @@ apply_reviews() {
 
     if [[ "$count" -eq 0 ]]; then
       expected_subject="Remove $key from $version release notes"
+      # Drain git's output so an early match cannot SIGPIPE it under pipefail.
       found_commit=$(git -C "$repo_root" log --format='%H%x09%s' \
         "$base_commit..HEAD" -- "$stage_relative" |
-        awk -F '\t' -v subject="$expected_subject" '$2 == subject {print $1; exit}')
+        awk -F '\t' -v subject="$expected_subject" '$2 == subject && !found {print $1; found=1}')
       if [[ -n "$found_commit" ]]; then
         write_result "$run_dir" "$key" REMOVE "Recovered previously committed removal" "$found_commit"
         removed=$((removed + 1))

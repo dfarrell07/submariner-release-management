@@ -166,6 +166,12 @@ update_lockfiles() {
     [ "$DISPLAY_NAME" = "$REPO_NAME" ] && echo "==> $REPO_NAME" || echo "==> $DISPLAY_NAME (in $REPO_NAME)"
     echo "    Branch: $REPO_BRANCH"
 
+    # Refresh both the release base and the devel updater before using them.
+    git fetch origin || {
+      REPOS_FAILED+=("$DISPLAY_NAME:fetch-failed")
+      continue
+    }
+
     local BRANCH_REF="origin/$REPO_BRANCH"
     git show-ref --verify --quiet "refs/remotes/$BRANCH_REF" || {
       BRANCH_REF="$REPO_BRANCH"
@@ -197,7 +203,16 @@ update_lockfiles() {
     git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1 || \
       { REPOS_FAILED+=("$DISPLAY_NAME:branch-create-failed"); continue; }
 
-    git show "origin/devel:.rpm-lockfiles/update-lockfile.sh" > .rpm-lockfiles/update-lockfile.sh 2>/dev/null || {
+    # The release updater is tracked. Run the devel copy from outside the
+    # worktree so temporary changes cannot delete or overwrite that source file.
+    local LOCKFILE_UPDATER
+    LOCKFILE_UPDATER=$(mktemp) || {
+      REPOS_FAILED+=("$DISPLAY_NAME:temp-script-failed")
+      restore_clean_ref "$ORIGINAL_REF" || true
+      continue
+    }
+    git show "origin/devel:.rpm-lockfiles/update-lockfile.sh" > "$LOCKFILE_UPDATER" 2>/dev/null || {
+      rm -f "$LOCKFILE_UPDATER"
       echo "❌ Failed to copy update-lockfile.sh from origin/devel"
       echo "   Run: git fetch origin devel"
       REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed")
@@ -205,14 +220,12 @@ update_lockfiles() {
       continue
     }
 
-    chmod +x .rpm-lockfiles/update-lockfile.sh
-
     # Fix UBI version mismatch: devel script may use ubi10 but release branches use RHEL 9 repos.
     # Detect from repo files and patch the script to match.
     if grep -q 'ubi9\|rhel9' .rpm-lockfiles/*/submariner-rhel-*.repo 2>/dev/null && \
-       grep -q 'ubi10' .rpm-lockfiles/update-lockfile.sh; then
+       grep -q 'ubi10' "$LOCKFILE_UPDATER"; then
       sed -i 's|registry.access.redhat.com/ubi10/ubi:latest|registry.access.redhat.com/ubi9/ubi:latest|g' \
-        .rpm-lockfiles/update-lockfile.sh
+        "$LOCKFILE_UPDATER"
       echo "    (patched update-lockfile.sh: ubi10 → ubi9 to match branch repo files)"
     fi
 
@@ -221,24 +234,24 @@ update_lockfiles() {
     _lockfile_log=$(mktemp)
     if [[ "$COMPONENT_FILTER" =~ $COMPONENT_PATTERN ]]; then
       LOCKFILE_PATTERN=".rpm-lockfiles/$COMPONENT_FILTER/rpms.lock.yaml"
-      echo "Running: .rpm-lockfiles/update-lockfile.sh $FIX_BRANCH $COMPONENT_FILTER"
+      echo "Running RPM updater: $FIX_BRANCH $COMPONENT_FILTER"
       echo ""
-      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" "$COMPONENT_FILTER" > "$_lockfile_log" 2>&1
+      bash "$LOCKFILE_UPDATER" "$FIX_BRANCH" "$COMPONENT_FILTER" > "$_lockfile_log" 2>&1
     else
       LOCKFILE_PATTERN=".rpm-lockfiles/*/rpms.lock.yaml"
-      echo "Running: .rpm-lockfiles/update-lockfile.sh $FIX_BRANCH"
+      echo "Running RPM updater: $FIX_BRANCH"
       echo ""
-      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" > "$_lockfile_log" 2>&1
+      bash "$LOCKFILE_UPDATER" "$FIX_BRANCH" > "$_lockfile_log" 2>&1
     fi
     local LOCKFILE_EXIT=$?
     # Show status lines and "No sources" warnings; suppress dnf/pip/skopeo setup noise
     # and update-lockfile.sh's own manual-use "To commit/To push" instructions.
-    grep -E '^(--- |WARNING:rpm_lockfile: No sources)' "$_lockfile_log" || true
+    grep -E '^(--- |WARNING:rpm_lockfile:[[:space:]]*No sources)' "$_lockfile_log" || true
     # On failure, dump the full log so the problem is diagnosable.
     [ "$LOCKFILE_EXIT" -ne 0 ] && cat "$_lockfile_log" >&2
     rm -f "$_lockfile_log"
     set -e
-    rm -f .rpm-lockfiles/update-lockfile.sh
+    rm -f "$LOCKFILE_UPDATER"
 
     if [ $LOCKFILE_EXIT -ne 0 ]; then
       REPOS_FAILED+=("$DISPLAY_NAME:update-script-failed")
@@ -383,10 +396,14 @@ main() {
     done
   fi
 
-  print_summary
+  print_summary || return $?
 
-  # review level: script stays in_progress. User must push the lockfile changes and
-  # wait for Konflux to rebuild, then explicitly mark complete via autorelease verifier.
+  # A fresh full no-op needs no PR. Changed or unprocessed repos must stay pending.
+  if [ -n "${TRACKER:-}" ] && [ "$COMPONENT_FILTER" = all ] &&
+     [ "${#REPOS_UPDATED[@]}" -eq 0 ] && [ "${#REPOS_FAILED[@]}" -eq 0 ] &&
+     [ "$problem_skips" -eq 0 ]; then
+    update_step "$VERSION" rpmLockfiles complete '{}' "$TRACKER"
+  fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

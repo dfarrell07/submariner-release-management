@@ -37,6 +37,8 @@ fi
 source "$PATCHER_LIB"
 # shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
+# shellcheck source=lib/dockerfile-version.sh
+source "$SCRIPT_DIR/lib/dockerfile-version.sh"
 
 # ━━━ CONSTANTS ━━━
 
@@ -592,16 +594,11 @@ add_konflux_dockerfile() {
     echo "✓ Set com.github.url to submariner-io/${CURRENT_REPO}"
   fi
 
-  # Update version label for Y-stream (initial version)
-  if grep -q 'version=' "$DOCKERFILE"; then
-    sed -i "s/version=\"[^\"]*\"/version=\"v${VERSION_MAJOR}.${VERSION_MINOR}.0\"/" "$DOCKERFILE" || \
-      die "Failed to update version label in Dockerfile"
-    grep -q "version=\"v${VERSION_MAJOR}.${VERSION_MINOR}.0\"" "$DOCKERFILE" || \
-      die "Version label update verification failed"
-    echo "✓ Updated version label: v${VERSION_MAJOR}.${VERSION_MINOR}.0"
-  else
-    echo "⚠️  Warning: No version label found in Dockerfile"
-  fi
+  local has_binary=true
+  [ "$COMPONENT" != nettest ] || has_binary=false
+  set_component_version "$DOCKERFILE" "${VERSION_MAJOR}.${VERSION_MINOR}.0" "$has_binary" || \
+    die "Failed to align Dockerfile image and compiled versions"
+  echo "✓ Updated component version: v${VERSION_MAJOR}.${VERSION_MINOR}.0"
 
   # Remove obsolete go generate line if present (operator only)
   if [ "$COMPONENT" = "submariner-operator" ]; then

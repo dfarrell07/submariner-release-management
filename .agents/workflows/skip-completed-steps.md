@@ -12,7 +12,7 @@ Do not redo upstream work that is already done. These rules are maintainer decis
 | 6. Upstream release | `v$VERSION` exists on all 5 component repos | The tag is permanent. Never re-cut or move it. |
 | 5. CVE fixes | The CVE pass was done before the upstream tag was cut | CVE fixes land before the tag; later changes cannot affect it. |
 | 4. Tekton tasks | Snapshot and managed release-policy requirements met | Repair actual policy/trust failures only. |
-| 5b. Version labels | Labels already match `$VERSION` (release-ls shows them correct) | Nothing to change. |
+| 5b. Version labels | Component image and compiled Go versions match `$VERSION` (release-ls verifies both) | Nothing to change. |
 
 Consequences:
 
@@ -39,9 +39,14 @@ How the conductor decides each step is done:
 - `upstreamRelease` verifies the tags itself and completes when `v$VERSION` exists on all 5 repos. It runs only after its
   dependencies (`cveFixes`, `ecFixes`, `rpmLockfiles`, `tektonTasks`, `versionLabels`) are complete, so mark skipped ones first.
 - `ecFixes` verifies EC on the latest snapshot and completes when it passes.
-- `cveFixes` and `tektonTasks` complete on their own only if the verifier finds earlier merged fix PRs (`fix-X.Y-cves*`,
-  `fix-tekton-tasks-X.Y`). With open PRs it waits. With none found it concludes the work was never done and **runs the script**.
-  When the work is deliberately skipped there is nothing to find, so use `--complete` for these two.
+- `cveFixes` waits for matching open fix PRs on the release branch. After they merge, the script rescans all seven repositories;
+  only a clean scan completes the step. Historical merged PRs do not prove the current sources are clean.
+- `tektonTasks` waits for open fix PRs (`fix-tekton-tasks-X.Y.Z`), including partial repairs where other repos need no PR.
+  When some repos have no repair PR, it checks fresh source branches after pending reviews finish. It repairs only denied
+  catalog moves, preserving unrelated pins; all merged repair PRs can complete the source step directly.
+  Other violations need diagnosis from the actual EC report; neither task helper completion nor merged PRs prove that the
+  rebuilt images meet managed release policy. The exact snapshot still needs verification at the EC and release gates.
+  When completed source work is deliberately reused, verify the evidence above and use `--complete` for these steps.
 
 Do not refresh completed upstream source work solely because of age. Repair build tasks when the actual candidate fails
 policy or a trust expiry applies, even when its source tag already exists.
@@ -51,8 +56,8 @@ policy or a trust expiry applies, even when its source tag already exists.
 - `release-ls` suppresses the advisory age warning for completed `cveFixes` only after verifying `v$VERSION` on all five component
   repositories. Missing, unreachable or timed-out tag evidence keeps source completion unverified; do not skip work on that basis.
 - `release-ls` Step 5 separates completed upstream work from scan evidence for the current downstream snapshot.
-- After a retarget, old STEP_DATA from the previous version may still read `complete`. Check the tag, EC and labels directly (release-ls
-  does) rather than trusting old tracker entries.
+- After a retarget, old STEP_DATA from the previous version may still read `complete`. Check the tag, EC, image labels and
+  compiled versions directly (`release-ls` does) rather than trusting old tracker entries.
 
 ## Checklist before skipping
 

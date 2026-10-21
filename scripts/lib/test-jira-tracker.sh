@@ -223,14 +223,18 @@ _payloads=$(mktemp)
 assert_eq "create payloads: two parents and 33 subtasks" "$(jq -s length "$_payloads")" 35
 assert_eq "create payloads: Activity Type on every issue" \
   "$(jq -s 'all(.[]; .additionalAttributes.customfield_10464.id == "10608")' "$_payloads")" true
-assert_eq "create payloads: parent component retained" \
-  "$(jq -s 'all(.[] | select(.type == "Task"); .additionalAttributes.components == [{id:"33720"}])' "$_payloads")" true
+assert_eq "create payloads: networking component on every issue" \
+  "$(jq -s 'all(.[]; .additionalAttributes.components == [{id:"33720"}])' "$_payloads")" true
 assert_eq "create payloads: subtask parent retained" \
   "$(jq -s 'all(.[] | select(.type == "Sub-task"); .parentIssueId == "ACM-TEST")' "$_payloads")" true
 assert_eq "create payloads: release engineer assignee retained" \
   "$(jq -s --arg qe "${STEP_TITLES[qeValidation]}" 'all(.[] | select(.type == "Sub-task" and .summary != $qe); .assignee == "@me")' "$_payloads")" true
-assert_eq "create payloads: explicit and omitted QE assignees" \
-  "$(jq -cs --arg qe "${STEP_TITLES[qeValidation]}" '[.[] | select(.summary == $qe) | .assignee // null]' "$_payloads")" '["qe@example.invalid",null]'
+assert_eq "create payloads: explicit and unassigned QE assignees" \
+  "$(jq -cs --arg qe "${STEP_TITLES[qeValidation]}" '
+    [.[] | select(.summary == $qe) |
+      if has("assignee") then .assignee
+      elif (.additionalAttributes | has("assignee")) then .additionalAttributes.assignee
+      else "MISSING" end]' "$_payloads")" '["qe@example.invalid",{"accountId":null}]'
 assert_eq "create payloads: ADF docs contain no empty text nodes" \
   "$(jq -s 'all(.[]; .description.type == "doc" and .description.version == 1 and (.description.content | length) > 0) and all(.[] | .description | .. | objects | select(.type? == "text"); (.text | length) > 0)' "$_payloads")" true
 rm -f "$_payloads"
@@ -431,10 +435,71 @@ case "$_FIND_SUBTASK_ARGS" in
 esac
 
 # Stub internals for update_step tests
+for transition_case in already-resolved wrong-status unreadable; do
+  transition_rc=0
+  (
+    _acli() { return 1; }
+    query_jira() {
+      [ "$transition_case" != unreadable ] || return 1
+      local status=Resolved
+      [ "$transition_case" != wrong-status ] || status=New
+      jq -cn --arg status "$status" '[{fields:{status:{name:$status}}}]'
+    }
+    _transition_issue ACM-98 Resolved
+  ) >/dev/null 2>&1 || transition_rc=$?
+  expected=1
+  [ "$transition_case" != already-resolved ] || expected=0
+  assert_eq "transition retry: $transition_case" "$transition_rc" "$expected"
+done
 query_jira() { echo '[{"key":"ACM-99"}]'; }
 _find_subtask() { printf '%s' "ACM-98"; }
 _add_comment() { return 0; }
 _transition_issue() { return 0; }
+
+# Strict completion commits STEP_DATA only after required status writes.
+for strict_case in success comment-fails transition-fails lookup-fails no-subtask invalid-data child-complete child-start child-parent-read-fails child-parent-transition-fails; do
+  strict_result=$(
+    events=""
+    _find_subtask() {
+      [ "$strict_case" != lookup-fails ] || return 1
+      [ "$strict_case" = no-subtask ] || printf ACM-98
+    }
+    _transition_issue() {
+      events+="transition "
+      [ "$strict_case:$1" != child-parent-transition-fails:ACM-99 ] || return 1
+      [ "$strict_case" != transition-fails ]
+    }
+    _add_comment() {
+      events+="comment "
+      [ "$strict_case" != comment-fails ]
+    }
+    data='{}'
+    [ "$strict_case" != invalid-data ] || data=invalid
+    query_jira() {
+      [ "$strict_case" != child-parent-read-fails ] || return 1
+      echo '[{"fields":{"status":{"name":"New"}}}]'
+    }
+    status=complete
+    strict_args=(--strict)
+    if [[ "$strict_case" == child-* ]]; then
+      export AUTORELEASE_TRACKER_STEP=versionLabels
+      strict_args=()
+      [ "$strict_case" = child-complete ] || status=in_progress
+    fi
+    rc=0
+    update_step 0.24.2 versionLabels "$status" "$data" ACM-99 "${strict_args[@]}" 2>/dev/null || rc=$?
+    printf '%s|%s' "$rc" "$events"
+  )
+  case "$strict_case" in
+    success|child-complete) expected='0|transition comment ' ;;
+    child-start) expected='0|transition transition comment ' ;;
+    child-parent-transition-fails) expected='1|transition ' ;;
+    comment-fails) expected='1|transition comment ' ;;
+    transition-fails) expected='1|transition ' ;;
+    *) expected='1|' ;;
+  esac
+  assert_eq "strict completion: $strict_case" "$strict_result" "$expected"
+done
 
 # Returns 0
 update_step "0.24.0" "cveFixes" "complete" "{}" "ACM-99" 2>/dev/null
@@ -477,6 +542,18 @@ assert_eq "update_step: in_progress → subtask In Progress" \
   "$(printf '%s' "$_T" | grep -q 'ACM-98=>In Progress' && echo yes || echo no)" "yes"
 _T=""; update_step "0.24.0" "cveFixes" "failed" "{}" "ACM-99" 2>/dev/null
 assert_eq "update_step: failed → no subtask transition" "$_T" ""
+
+for test_parent_status in New Backlog 'In Progress' 'Code Review' Resolved; do
+  query_jira() { jq -cn --arg status "$test_parent_status" '[{fields:{status:{name:$status}}}]'; }
+  _T=""; update_step "0.24.0" "cveFixes" "in_progress" "{}" "ACM-99" 2>/dev/null
+  expected=$'ACM-98=>In Progress\n'
+  case "$test_parent_status" in New|Backlog) expected=$'ACM-99=>In Progress\n'"$expected" ;; esac
+  assert_eq "update_step: parent $test_parent_status starts only when pending" "$_T" "$expected"
+done
+query_jira() { return 1; }
+_T=""; update_step "0.24.0" "cveFixes" "in_progress" "{}" "ACM-99" 2>/dev/null
+assert_eq 'update_step: unreadable parent is not transitioned' "$_T" $'ACM-98=>In Progress\n'
+query_jira() { echo '[{"key":"ACM-99"}]'; }
 _transition_issue() { return 0; }
 
 # find_release_tracker: invalid version → empty (not crash)
@@ -492,6 +569,18 @@ _add_comment() { return 0; }
 query_jira() { echo '[{"key":"ACM-222"}]'; }
 result=$(find_release_tracker "0.24" 2>/dev/null)
 assert_eq "find_release_tracker: 2-seg version works" "$result" "ACM-222"
+query_jira() { echo "[]"; }
+
+# A renamed clone can retain the old release label. Jira's title phrase must
+# exclude it before selecting a tracker, including when that clone is closed.
+query_jira() {
+  case "$*" in
+    *'summary ~ "\"Release Submariner 0.24.1\""'*) echo '[{"key":"ACM-CORRECT"}]' ;;
+    *) echo '[{"key":"ACM-CLONE"},{"key":"ACM-CORRECT"}]' ;;
+  esac
+}
+result=$(find_release_tracker "0.24.1" 2>/dev/null)
+assert_eq "find_release_tracker: renamed clone is not reused" "$result" "ACM-CORRECT"
 query_jira() { echo "[]"; }
 
 # find_release_tracker: Jira query failure → return 2 (distinct from absent)

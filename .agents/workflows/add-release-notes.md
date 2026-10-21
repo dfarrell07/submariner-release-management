@@ -2,8 +2,8 @@
 
 **When:** After creating stage release (Step 8)
 
-> **Automated:** `/autorelease` handles this step automatically. Follow the manual
-> steps below only if debugging or running without the conductor.
+> **Automated:** `/autorelease` collects and applies release notes, then stops for review.
+> Follow the add-release-notes skill for per-issue review with the active agent before marking the step complete.
 
 ## Process
 
@@ -65,7 +65,8 @@ make review-release-notes VERSION=0.22.1      # Phase 5
 
 - Pre-fetches evidence per issue: Jira details + comments, DFBUGS
   status, GitHub PRs, git log keyword search across repos
-- Spawns one Claude agent per non-CVE issue to evaluate evidence
+- Prepares one evidence bundle per non-CVE issue for review by the active Claude or Codex agent
+- The agent writes structured decisions; the apply command validates them and commits removals serially
 - Default is KEEP; only removes for cross-squad addon-only fixes
   or issues clearly not about Submariner
 - Each removal is a separate commit, revertable with `git revert`

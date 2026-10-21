@@ -85,7 +85,15 @@ deny_rules_load() {
 # read as "unchecked", never as "nothing is denied".
 _deny_rules_valid() {
   jq -e '(.rule_data.trusted_task_rules.deny | type) == "object"
-         and (.rule_data.trusted_task_rules.deny | length) > 0' "$1" >/dev/null 2>&1
+    and (.rule_data.trusted_task_rules.deny | length) > 0
+    and (.rule_data.trusted_task_rules.deny | all(.[];
+      type == "array" and all(.[];
+        (.pattern | type == "string" and length > 0) and
+        ((has("versions") | not) or (.versions | type == "array" and length > 0 and
+          all(.[]; type == "string" and test("^<[0-9]+([.][0-9]+){0,2}$")))) and
+        ((has("effective_on") | not) or
+          (.effective_on | fromdateiso8601 | type == "number")) and
+        ((has("message") | not) or (.message | type == "string")))))' "$1" >/dev/null 2>&1
 }
 
 # True (0) when version $1 sorts strictly below $2. Compares numeric X.Y.Z

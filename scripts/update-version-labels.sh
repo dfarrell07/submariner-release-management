@@ -7,8 +7,8 @@
 #   version: Target release version (e.g., 0.23.1)
 #   repo:    Optional repo filter (submariner-operator, submariner, lighthouse, shipyard, subctl)
 #
-# Updates version labels in 9 Dockerfiles across 5 repos so Konflux's
-# {{ labels.version }} tag expansion produces correct image tags.
+# Updates labels and compiled versions in 8 component Dockerfiles across 5 repos.
+# Bundle labels are updated with the CSV by bundle-image-update.sh.
 #
 # Exit codes:
 #   0: Success (at least one repo updated, or all already correct)
@@ -21,22 +21,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
+# shellcheck source=lib/dockerfile-version.sh
+source "$SCRIPT_DIR/lib/dockerfile-version.sh"
 
 # ━━━ CONSTANTS ━━━
 
 readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
-
-# Repo → Dockerfiles mapping (space-separated within value)
-declare -A REPO_DOCKERFILES=(
-  ["submariner-operator"]="package/Dockerfile.submariner-operator.konflux"
-  ["submariner"]="package/Dockerfile.submariner-gateway.konflux package/Dockerfile.submariner-globalnet.konflux package/Dockerfile.submariner-route-agent.konflux"
-  ["lighthouse"]="package/Dockerfile.lighthouse-agent.konflux package/Dockerfile.lighthouse-coredns.konflux"
-  ["shipyard"]="package/Dockerfile.nettest.konflux"
-  ["subctl"]="package/Dockerfile.subctl.konflux"
-)
-
-# Ordered list of repos (bash associative arrays don't preserve order)
-readonly REPO_ORDER="submariner-operator submariner lighthouse shipyard subctl"
 
 # ━━━ GLOBAL VARIABLES ━━━
 
@@ -98,9 +88,9 @@ parse_arguments() {
 
   # Parse optional repo filter
   if [ -n "$REPO_ARG" ]; then
-    if [ -z "${REPO_DOCKERFILES[$REPO_ARG]+x}" ]; then
+    if [ -z "${COMPONENT_DOCKERFILES[$REPO_ARG]+x}" ]; then
       die "Unknown repo: $REPO_ARG" \
-          "Valid repos: ${REPO_ORDER}"
+          "Valid repos: ${COMPONENT_VERSION_REPOS}"
     fi
     REPO_FILTER="$REPO_ARG"
   fi
@@ -128,8 +118,9 @@ restore_original_ref() {
 update_repo() {
   local REPO="$1"
   local REPO_PATH="$SUBMARINER_BASE/$REPO"
-  local DOCKERFILES="${REPO_DOCKERFILES[$REPO]}"
-  local FIX_BRANCH="fix-version-labels-${MAJOR_MINOR}"
+  local -a DOCKERFILES
+  read -ra DOCKERFILES <<< "${COMPONENT_DOCKERFILES[$REPO]}"
+  local FIX_BRANCH="fix-version-labels-${VERSION}"
 
   echo "━━━ $REPO ━━━"
 
@@ -144,6 +135,18 @@ update_repo() {
   cd "$REPO_PATH" || {
     REPOS_FAILED+=("$REPO:cd-failed")
     echo ""
+    return
+  }
+
+  local initial_status
+  if ! initial_status=$(git status --porcelain --untracked-files=all) || [ -n "$initial_status" ]; then
+    echo "  ✗ Cannot safely switch $REPO_PATH; commit or stash local changes first." >&2
+    REPOS_FAILED+=("$REPO:dirty-tree")
+    return
+  fi
+
+  git fetch origin || {
+    REPOS_FAILED+=("$REPO:fetch-failed")
     return
   }
 
@@ -180,7 +183,9 @@ update_repo() {
 
   # Update standard Dockerfiles
   local FILES_UPDATED=0
-  for FILE in $DOCKERFILES; do
+  local has_binary=true
+  [ "$REPO" != shipyard ] || has_binary=false
+  for FILE in "${DOCKERFILES[@]}"; do
     if [ ! -f "$FILE" ]; then
       echo "  ✗ File not found: $FILE"
       REPOS_FAILED+=("$REPO:file-not-found")
@@ -189,39 +194,17 @@ update_repo() {
       return
     fi
 
-    if sed -i 's/version="v[0-9.]*"/version="v'"$VERSION"'"/' "$FILE" &&
-       grep -q "version=\"v${VERSION}\"" "$FILE"; then
+    if set_component_version "$FILE" "$VERSION" "$has_binary"; then
       echo "  ✓ $FILE"
       FILES_UPDATED=$((FILES_UPDATED + 1))
     else
-      echo "  ✗ Failed to update $FILE"
-      REPOS_FAILED+=("$REPO:sed-failed")
+      echo "  ✗ Failed to align image and compiled versions in $FILE"
+      REPOS_FAILED+=("$REPO:version-update-failed")
       restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
       echo ""
       return
     fi
   done
-
-  # Bundle special case (submariner-operator only)
-  if [ "$REPO" = "submariner-operator" ] && [ -f "bundle.Dockerfile.konflux" ]; then
-    if sed -i \
-      -e 's/^LABEL csv-version="[0-9.]*"/LABEL csv-version="'"$VERSION"'"/' \
-      -e 's/^LABEL release="v[0-9.]*"/LABEL release="v'"$VERSION"'"/' \
-      -e 's/^LABEL version="v[0-9.]*"/LABEL version="v'"$VERSION"'"/' \
-      bundle.Dockerfile.konflux &&
-       grep -q "csv-version=\"${VERSION}\"" bundle.Dockerfile.konflux && \
-       grep -q "release=\"v${VERSION}\"" bundle.Dockerfile.konflux && \
-       grep -q "version=\"v${VERSION}\"" bundle.Dockerfile.konflux; then
-      echo "  ✓ bundle.Dockerfile.konflux (3 labels)"
-      FILES_UPDATED=$((FILES_UPDATED + 1))
-    else
-      echo "  ✗ Failed to update bundle.Dockerfile.konflux"
-      REPOS_FAILED+=("$REPO:bundle-sed-failed")
-      restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
-      echo ""
-      return
-    fi
-  fi
 
   # Check if anything actually changed
   if git diff --quiet; then
@@ -238,12 +221,17 @@ update_repo() {
   fi
 
   # Commit
-  git add -A
-  if git commit -s -m "Update version labels to v$VERSION
+  # Branch changes can expose local files ignored only on the original ref.
+  if ! git add -- "${DOCKERFILES[@]}"; then
+    REPOS_FAILED+=("$REPO:stage-failed")
+    restore_original_ref "$ORIGINAL_REF" || true  # failure already recorded
+    return
+  fi
+  if git commit -s -m "Align component versions to v$VERSION
 
-Enables correct Konflux image tagging via {{ labels.version }}." >/dev/null 2>&1; then
+Match image labels and compiled Go versions, preserving source branch inputs." >/dev/null 2>&1; then
     echo "  ✓ Committed ($FILES_UPDATED file(s))"
-    REPOS_UPDATED+=("$REPO#$MAJOR_MINOR#$RELEASE_BRANCH")
+    REPOS_UPDATED+=("$REPO#$VERSION#$RELEASE_BRANCH")
   else
     echo "  ✗ Commit failed"
     REPOS_FAILED+=("$REPO:commit-failed")
@@ -264,7 +252,7 @@ update_all() {
   local ORIGINAL_DIR
   ORIGINAL_DIR=$(pwd)
 
-  for REPO in $REPO_ORDER; do
+  for REPO in $COMPONENT_VERSION_REPOS; do
     if [ -n "$REPO_FILTER" ] && [ "$REPO" != "$REPO_FILTER" ]; then
       continue
     fi
@@ -314,26 +302,27 @@ print_summary() {
     for entry in "${REPOS_UPDATED[@]}"; do
       local repo="${entry%%#*}"
       local rest="${entry#*#}"
-      local major_minor="${rest%%#*}"
+      local version="${rest%%#*}"
       local branch="${rest#*#}"
       local path fork fix_branch head_ref
       path="$SUBMARINER_BASE/$repo"
-      fix_branch="fix-version-labels-${major_minor}"
+      fix_branch="fix-version-labels-${version}"
       fork="$(fork_remote "$path" "$gh_user")"
       head_ref="$fix_branch"
       [ -n "$gh_user" ] && head_ref="${gh_user}:${fix_branch}"
       echo ""
       echo "# $repo"
-      echo "cd $path"
-      echo "git show"
-      echo "git push $fork $fix_branch"
-      echo "PR_URL=\$(gh pr create --base $branch --head $head_ref --title \"Update version labels to v$VERSION\" --body \"Enables correct Konflux image tagging.\" --assignee @me --label ready-to-test)"
-      echo "gh pr merge --auto --rebase \"\${PR_URL##*/}\""
+      printf 'git -C %q show %q\n' "$path" "$fix_branch"
+      local pr_filter push_commands
+      pr_filter="[.[] | select(.headRepositoryOwner.login == \"$gh_user\")] | .[0].url // empty"
+      printf -v push_commands '\n  cd %q\n  git push --force-with-lease %q %q\n  PR_URL=$(gh pr list --base %q --head %q --state open --json url,headRepositoryOwner --jq %q)\n  if [ -z "$PR_URL" ]; then\n    PR_URL=$(gh pr create --base %q --head %q --title %q --body %q --assignee @me --label ready-to-test)\n  fi\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
+        "$path" "$fork" "$fix_branch" "$branch" "$fix_branch" "$pr_filter" \
+        "$branch" "$head_ref" "Align component versions to v${version}" \
+        "Align image labels and compiled Go versions. Bundle labels follow CSV regeneration."
+      printf '%s' "$push_commands"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '\n  cd %s\n  git push %s %s\n  PR_URL=$(gh pr create --base %s --head %s --title "Update version labels to v%s" --body "Enables correct Konflux image tagging." --assignee @me --label ready-to-test)\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
-          "$path" "$fork" "$fix_branch" "$branch" "$head_ref" "$VERSION" \
-          >> "$AUTORELEASE_PUSH_LOG"
+        printf '%s' "$push_commands" >> "$AUTORELEASE_PUSH_LOG"
       fi
     done
   fi
@@ -362,20 +351,14 @@ main() {
 
   print_summary
 
-  # Record completion when the full repo set was processed with no failures.
-  # "All already correct" (0 updated, 0 failed) is still success — requiring
-  # REPOS_UPDATED>0 left the step stuck in_progress on a no-op re-run. A
-  # single-repo run (REPO_FILTER) covers only part of the step, so it must not
-  # mark the whole step complete.
-  # update_step is called AFTER print_summary so that a push-log write failure
-  # (inside print_summary) leaves the tracker at 'in_progress' rather than 'complete'.
-  # review level: script stays in_progress. User must push the label changes and
-  # wait for Konflux to rebuild, then explicitly mark complete.
-  if [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] && [ "${#REPOS_FAILED[@]}" -eq 0 ]; then
+  # A full no-op verified every label on the freshly fetched release branches.
+  # Changed repos remain in_progress until their PRs merge.
+  if [ -n "${TRACKER:-}" ] && [ -z "$REPO_FILTER" ] &&
+     [ "${#REPOS_UPDATED[@]}" -eq 0 ] && [ "${#REPOS_FAILED[@]}" -eq 0 ]; then
     local data
-    # shellcheck disable=SC2034
     data=$(jq -n --arg count "${#REPOS_UPDATED[@]}" --arg ver "$VERSION" \
       '{reposUpdated:($count|tonumber),version:$ver}' | jq -c .) || data="{}"
+    update_step "$VERSION" "versionLabels" "complete" "$data" "$TRACKER"
   fi
 }
 

@@ -77,6 +77,7 @@ inject_git_failures() {
       checkout-fails:checkout:-B|checkout-fails:checkout:-b|checkout-fails:checkout:devel) return 1 ;;
       restore-fails:checkout:-f|restore-fails:checkout:--quiet|noop-restore-fails:checkout:--quiet) return 1 ;;
       stage-fails:add:*|commit-fails:commit:*|copy-fails:show:origin/devel:*) return 1 ;;
+      fetch-fails:fetch:*) return 1 ;;
     esac
     command git "$@" || return
     if [ "$scenario:$verb:$option" = conflict:checkout:-f ]; then
@@ -92,8 +93,20 @@ tekton_case() (
   local kind="$1" scenario="$2"
   # shellcheck source=/dev/null
   source "$RELEASE_SCRIPTS/$kind.sh"
+  if [ "$kind" = tekton-task-refs-update ]; then
+    DENY_RULES_CHECKED=1
+    deny_rules_scan() { :; }
+    repair_moved_task_refs() { printf '%s' "$PATCHER_SCRIPT" | bash -s; }
+  fi
   local repo_dir="$TEST_ROOT/$kind-$scenario"
   setup_repo
+  local fix_branch=fix-tekton-tasks-0.25
+  if [ "$kind" = tekton-task-refs-update ]; then
+    fix_branch='fix-tekton-tasks-0.25.1'
+    git init -q --bare "$repo_dir-origin.git"
+    git remote add origin "$repo_dir-origin.git"
+    if [ "$scenario" != missing-base ]; then git push -q origin release-0.25; fi
+  fi
   repo_path() { printf '%s\n' "$repo_dir"; }
   VERSION=0.25.1 MAJOR_MINOR=0.25
   PATCHER_SCRIPT='printf "task: v2\n" > .tekton/pipe.yaml'
@@ -139,7 +152,7 @@ tekton_case() (
         normal|detached)
           assert_eq 'update recorded' "${#REPOS_UPDATED[@]}" 1
           assert_eq 'no failures' "${#REPOS_FAILED[@]}" 0
-          assert_eq 'user work not committed' "$(command git show fix-tekton-tasks-0.25:payload)" baseline
+          assert_eq 'user work not committed' "$(command git show "$fix_branch:payload")" baseline
           ;;
         noop)
           assert_eq 'no-op recorded' "${REPOS_SKIPPED[0]:-}" testcomp:no-changes
@@ -157,6 +170,78 @@ tekton_case() (
   # refs-update returns that status directly from print_summary.
   if [ "$kind" = tekton-task-refs-update ] && [ "${#REPOS_FAILED[@]}" -gt 0 ]; then
     assert_eq 'summary fails' "$summary_rc" 1
+  fi
+)
+
+tekton_retry_case() (
+  local scenario="$1"
+  # shellcheck source=/dev/null
+  source "$RELEASE_SCRIPTS/tekton-task-refs-update.sh"
+  local repo_dir="$TEST_ROOT/task-retry-$scenario"
+  setup_repo
+  local repo=testcomp base=release-0.25 fix=fix-tekton-tasks-0.25.1
+  if [ "$scenario" = fbc-noop ]; then
+    repo=fbc base=main
+    git branch main
+  fi
+  git init -q --bare "$repo_dir-origin.git"
+  git remote add origin "$repo_dir-origin.git"
+  git push -q origin "$base"
+  repo_path() { printf '%s\n' "$repo_dir"; }
+  VERSION=0.25.1 MAJOR_MINOR=0.25 DENY_RULES_CHECKED=1
+  deny_rules_scan() { :; }
+  repair_moved_task_refs() {
+    [ "$scenario" = fbc-noop ] || printf 'task: v2\n' > .tekton/pipe.yaml
+  }
+  update_repo "$repo"
+  if [ "$scenario" = fbc-noop ]; then
+    assert_eq 'FBC main needs no artificial repair branch' "$(git branch --list "$fix")" ''
+    assert_eq 'FBC no-op recorded' "${REPOS_SKIPPED[0]:-}" fbc:no-changes
+    return
+  fi
+  local repair_sha
+  repair_sha=$(git rev-parse "$fix")
+  case "$scenario" in
+    review-correction)
+      git checkout -q "$fix"
+      printf 'review correction\n' > .tekton/review.yaml
+      git add .tekton/review.yaml
+      git commit -qm 'Preserve review correction'
+      git checkout -q original
+      ;;
+    rebase-applied|merge-only)
+      git checkout -q "$base"
+      printf 'new upstream content\n' >> payload
+      git add payload
+      git commit -qm 'Upstream change before rebase merge'
+      git cherry-pick "$repair_sha" >/dev/null
+      assert_eq 'rebase merge changed commit ID' "$([ "$(git rev-parse HEAD)" != "$repair_sha" ] && echo yes)" yes
+      git push -q origin "$base"
+      if [ "$scenario" = merge-only ]; then
+        git checkout -q "$fix"
+        git merge --no-ff --no-commit "$base" >/dev/null 2>&1
+        printf 'merge resolution work\n' > .tekton/resolution.yaml
+        git add .tekton/resolution.yaml
+        git commit -qm 'Merge with unpublished resolution'
+      fi
+      git checkout -q original
+      ;;
+  esac
+  local pending_sha
+  pending_sha=$(git rev-parse "$fix")
+  dirty_work
+  REPOS_UPDATED=() REPOS_SKIPPED=() REPOS_FAILED=()
+  update_repo "$repo"
+  assert_work_restored
+  assert_eq 'retry restores original branch' "$(git branch --show-current)" original
+  if [ "$scenario" = rebase-applied ]; then
+    assert_eq 'applied repair rechecks as a no-op' "${REPOS_SKIPPED[0]:-}" testcomp:no-changes
+    assert_eq 'applied repair does not fail' "${#REPOS_FAILED[@]}" 0
+    assert_eq 'applied repair creates no new commit' "${#REPOS_UPDATED[@]}" 0
+  else
+    assert_eq 'pending repair blocks resetting branch' "${REPOS_FAILED[0]:-}" testcomp:existing-fix-branch
+    assert_eq 'pending repair tip survives retry' "$(git rev-parse "$fix")" "$pending_sha"
+    assert_eq 'pending repair creates no new commit' "${#REPOS_UPDATED[@]}" 0
   fi
 )
 
@@ -267,12 +352,39 @@ rpm_case() (
   SUBMARINER_BASE="$TEST_ROOT/rpm-$scenario"
   local repo_dir="$SUBMARINER_BASE/submariner"
   setup_repo
+  # Real release branches track their updater; the devel copy is temporary.
+  printf '# release updater must remain unchanged\n' > .rpm-lockfiles/update-lockfile.sh
+  git add .rpm-lockfiles/update-lockfile.sh
+  git commit -qm 'Release updater fixture'
+  git branch -f release-0.25 HEAD
+  original_sha=$(git rev-parse HEAD)
   git checkout -qb devel
-  printf '#!/bin/bash\ncase "$RPM_TEST_MODE" in noop*) exit 0 ;; esac\nprintf "updated lockfile\\n" > .rpm-lockfiles/gateway/rpms.lock.yaml\n[ "$RPM_TEST_MODE" != updater-fails ]\n' \
-    > .rpm-lockfiles/update-lockfile.sh
+  cat > .rpm-lockfiles/update-lockfile.sh <<'UPDATER'
+#!/bin/bash
+case "$RPM_TEST_MODE" in noop*) exit 0 ;; esac
+if [ "$RPM_TEST_MODE" = no-sources ]; then
+  printf 'WARNING:rpm_lockfile:No sources found for package-one\n' >&2
+  printf 'WARNING:rpm_lockfile: No sources found for package-two\n' >&2
+fi
+printf 'updated lockfile\n' > .rpm-lockfiles/gateway/rpms.lock.yaml
+[ "$RPM_TEST_MODE" != updater-fails ]
+UPDATER
   git add .rpm-lockfiles/update-lockfile.sh
   git commit -qm 'Fixture updater'
-  git update-ref refs/remotes/origin/devel HEAD
+  git init -q --bare "$SUBMARINER_BASE/origin.git"
+  git remote add origin "$SUBMARINER_BASE/origin.git"
+  git push -q origin devel
+  if [ "$scenario" != local-base ]; then git push -q origin release-0.25; fi
+  local upstream_sha="$original_sha"
+  if [ "$scenario" = stale-origin ]; then
+    git checkout -q release-0.25
+    printf 'upstream change\n' > upstream-only
+    git add upstream-only
+    git commit -qm 'New upstream source'
+    upstream_sha=$(git rev-parse HEAD)
+    git push -q origin release-0.25
+    git update-ref refs/remotes/origin/release-0.25 "$original_sha"
+  fi
   git checkout -q original
   case "$scenario" in
     dirty) dirty_work ;;
@@ -283,12 +395,19 @@ rpm_case() (
   source "$RELEASE_SCRIPTS/rpm-lockfile-update.sh"
   BRANCH=release-0.25 VERSION=0.25.1 COMPONENT_FILTER=gateway
   inject_git_failures
-  update_lockfiles
+  local updater_output="$SUBMARINER_BASE/updater-output"
+  update_lockfiles > "$updater_output" 2>&1
+  cat "$updater_output"
+  if [ "$scenario" = no-sources ]; then
+    assert_eq 'source warnings remain visible' \
+      "$(grep -Ec '^WARNING:rpm_lockfile: ?No sources' "$updater_output" || true)" 2
+  fi
   assert_eq 'original commit preserved' "$(command git rev-parse original)" "$original_sha"
+  assert_eq 'release updater preserved' "$(< .rpm-lockfiles/update-lockfile.sh)" '# release updater must remain unchanged'
   local branch
   branch=$(command git rev-parse --abbrev-ref HEAD)
   case "$scenario" in
-    normal|detached|noop)
+    normal|detached|noop|stale-origin|local-base|no-sources)
       expected_branch=original
       [ "$scenario" = detached ] && expected_branch=HEAD
       assert_eq 'original branch restored' "$branch" "$expected_branch"
@@ -298,12 +417,22 @@ rpm_case() (
         assert_eq 'no-op recorded' "${REPOS_SKIPPED[0]:-}" gateway:no-changes
       else
         assert_eq 'update recorded' "${#REPOS_UPDATED[@]}" 1
+        assert_eq 'RPM fix includes current upstream commit' \
+          "$(command git merge-base "$upstream_sha" update-rpm-lockfiles-0.25.1)" "$upstream_sha"
       fi
       ;;
-    dirty|status-fails|checkout-fails)
+    dirty|status-fails|checkout-fails|fetch-fails|copy-fails)
       assert_eq 'original branch untouched' "$branch" original
       assert_eq 'failure recorded' "${#REPOS_FAILED[@]}" 1
       if [ "$scenario" = dirty ]; then assert_work_restored; fi
+      if [ "$scenario" = fetch-fails ]; then
+        assert_eq 'fetch failure reported' "${REPOS_FAILED[0]}" gateway:fetch-failed
+        assert_eq 'fetch failure creates no fix branch' \
+          "$(command git branch --list update-rpm-lockfiles-0.25.1)" ''
+      fi
+      if [ "$scenario" = copy-fails ]; then
+        assert_eq 'failed updater read preserves the checkout' "${REPOS_FAILED[0]}" gateway:script-copy-failed
+      fi
       ;;
     *)
       assert_eq 'unfinished work stays on fix branch' "$branch" update-rpm-lockfiles-0.25.1
@@ -352,6 +481,43 @@ bundle_case() (
   fi
 )
 
+rpm_tracker_case() (
+  local scenario="$1"
+  # shellcheck source=../rpm-lockfile-update.sh
+  source "$RELEASE_SCRIPTS/rpm-lockfile-update.sh"
+  local transitions="$TEST_ROOT/rpm-tracker-$scenario"
+  TRACKER_LIB="$TEST_ROOT/rpm-tracker-stub.sh"
+  cat > "$TRACKER_LIB" <<'STUB'
+find_release_tracker() { printf 'TEST-1\n'; }
+update_step() { printf '%s\n' "$3" >> "$transitions"; }
+STUB
+  check_prerequisites() { :; }
+  update_lockfiles() {
+    case "$scenario" in
+      current|filtered) REPOS_SKIPPED=(submariner:no-changes shipyard:no-changes) ;;
+      no-lockfiles) REPOS_SKIPPED=(submariner:no-changes shipyard:no-lockfiles) ;;
+      missing) REPOS_SKIPPED=(submariner:no-changes shipyard:repo-not-found) ;;
+      updated) REPOS_UPDATED=(submariner#submariner#0.25.1#release-0.25) ;;
+      failed) REPOS_FAILED=(shipyard:update-script-failed) ;;
+    esac
+  }
+  get_gh_user() { :; }
+  fork_remote() { printf 'fork\n'; }
+  local rc=0
+  if [ "$scenario" = filtered ]; then
+    main 0.25.1 gateway >/dev/null || rc=$?
+    assert_eq 'partial run does not update tracker' "$(cat "$transitions" 2>/dev/null || true)" ''
+  else
+    main 0.25.1 >/dev/null || rc=$?
+    local expected=in_progress
+    case "$scenario" in current|no-lockfiles) expected+=$'\ncomplete' ;; esac
+    assert_eq 'RPM tracker reflects fresh full-run outcome' "$(cat "$transitions")" "$expected"
+  fi
+  local expected_rc=0
+  [ "$scenario" != failed ] || expected_rc=1
+  assert_eq 'RPM outcome preserves failure status' "$rc" "$expected_rc"
+)
+
 PASS=0
 case_log="$TEST_ROOT/case.log"
 run_logged() {
@@ -374,6 +540,11 @@ for script in tekton-task-refs-update tekton-task-version-bump; do
     PASS=$((PASS + 1))
   done
 done
+for scenario in pending review-correction rebase-applied merge-only fbc-noop; do
+  run_logged tekton_retry_case "$scenario"
+  echo "  ✓ tekton-task-refs-update / retry $scenario"
+  PASS=$((PASS + 1))
+done
 run_logged tekton_case tekton-task-version-bump sed-fails
 echo "  ✓ tekton-task-version-bump / sed-fails"
 PASS=$((PASS + 1))
@@ -390,7 +561,7 @@ for scenario in normal restore-fails pop-fails conflict; do
   echo "  ✓ cve main / $scenario"
   PASS=$((PASS + 1))
 done
-for scenario in normal noop detached dirty status-fails checkout-fails copy-fails updater-fails stage-fails commit-fails restore-fails noop-restore-fails hook-artifact; do
+for scenario in stale-origin local-base fetch-fails normal noop no-sources detached dirty status-fails checkout-fails copy-fails updater-fails stage-fails commit-fails restore-fails noop-restore-fails hook-artifact; do
   run_logged rpm_case "$scenario"
   echo "  ✓ rpm / $scenario"
   PASS=$((PASS + 1))
@@ -398,6 +569,11 @@ done
 for scenario in normal dirty untracked status-fails restore-fails; do
   run_logged bundle_case "$scenario"
   echo "  ✓ bundle / $scenario"
+  PASS=$((PASS + 1))
+done
+for scenario in current no-lockfiles missing updated failed filtered; do
+  run_logged rpm_tracker_case "$scenario"
+  echo "  ✓ rpm tracker / $scenario"
   PASS=$((PASS + 1))
 done
 echo "All $PASS tests passed"

@@ -65,19 +65,14 @@ if ! ALL_SNAPSHOTS=$(oc get snapshots -n submariner-tenant -o json 2>/dev/null) 
   exit 1
 fi
 
-# Filter to component snapshots for this version
-# - Name matches: submariner-0-X-*
-# - Event type: push (not PR builds)
-# - Sort by creation timestamp, take latest
-SNAPSHOT_NAME=$(echo "$ALL_SNAPSHOTS" | jq -r "
-  .items[]
-  | select(.metadata.name | startswith(\"submariner-${VERSION_MAJOR_MINOR_DASH}-\"))
-  | select(.metadata.labels.\"pac.test.appstudio.openshift.io/event-type\" == \"push\" or .metadata.labels.\"pac.test.appstudio.openshift.io/event-type\" == \"incoming\" or .metadata.labels.\"pac.test.appstudio.openshift.io/event-type\" == \"retest-all-comment\")
-  | {name: .metadata.name, created: .metadata.creationTimestamp}
-" | jq -rs 'sort_by(.created) | reverse | .[0].name' 2>/dev/null)
+# Use the same branch-build selector and completion contract as release status.
+# shellcheck source=lib/integration-tests.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/integration-tests.sh"
+SNAPSHOT_JSON=$(latest_component_snapshot "submariner-$VERSION_MAJOR_MINOR_DASH" <<< "$ALL_SNAPSHOTS") || SNAPSHOT_JSON=""
+SNAPSHOT_NAME=$(jq -r '.metadata.name // empty' <<< "$SNAPSHOT_JSON")
 
 if [ -z "$SNAPSHOT_NAME" ] || [ "$SNAPSHOT_NAME" = "null" ]; then
-  echo "❌ ERROR: No passing component snapshot found for version $VERSION_MAJOR_MINOR" >&2
+  echo "❌ ERROR: No qualifying branch-build component snapshot found for version $VERSION_MAJOR_MINOR" >&2
   echo "" >&2
   echo "Possible causes:" >&2
   echo "- Step 7 not complete (bundle not built)" >&2
@@ -145,64 +140,21 @@ echo "✓ All 9 components present in snapshot" >&2
 echo "" >&2
 echo "Verifying all tests passed..." >&2
 
-# Extract test status annotation
-TEST_STATUS=$(echo "$ALL_SNAPSHOTS" | jq -r "
-  .items[] | select(.metadata.name == \"$SNAPSHOT_NAME\")
-  | .metadata.annotations.\"test.appstudio.openshift.io/status\"
-" 2>/dev/null)
-
-if [ -z "$TEST_STATUS" ] || [ "$TEST_STATUS" = "null" ]; then
-  echo "⚠️  WARNING: No test status annotation found" >&2
-  echo "Snapshot may not have completed testing yet" >&2
-  echo "Check: oc get snapshot $SNAPSHOT_NAME -n submariner-tenant -o jsonpath='{.metadata.annotations}'" >&2
-  # Don't fail - some snapshots may not have tests yet
-  TEST_STATUS="[]"
-fi
-
-# Parse test status JSON — BuildPLRInProgress means the pipeline run record is
-# being created; Konflux surfaces this transiently on fresh snapshots and it is
-# not a test failure. Treat it the same as TestPassed for gate purposes.
-FAILED_TESTS=$(echo "$TEST_STATUS" | jq -r '.[] | select(.status != "TestPassed" and .status != "BuildPLRInProgress") | .scenario' 2>/dev/null || true)
-
-if [ -n "$FAILED_TESTS" ]; then
-  echo "❌ ERROR: Snapshot has failing tests" >&2
-  echo "" >&2
-  echo "Failed test scenarios:" >&2
-  echo "$FAILED_TESTS" | while read -r scenario; do
-    STATUS=$(echo "$TEST_STATUS" | jq -r --arg s "$scenario" '.[] | select(.scenario == $s) | .status')
-    echo "  - $scenario ($STATUS)" >&2
-  done
-  echo "" >&2
-  echo "All tests must pass before creating a release" >&2
+if ! component_tests_passed <<< "$SNAPSHOT_JSON"; then
+  echo "❌ ERROR: Snapshot integration is not finished and successful" >&2
+  echo "Missing, malformed, failed or incomplete results cannot establish release readiness" >&2
+  echo "Check snapshot $SNAPSHOT_NAME aggregate conditions and completed scenario results" >&2
   exit 1
 fi
-
-# Check for enterprise-contract specifically (critical for releases)
-EC_TEST=$(echo "$TEST_STATUS" | jq -r '.[] | select(.scenario | contains("enterprise-contract")) | .status' 2>/dev/null) || EC_TEST=""
-
-if [ -n "$EC_TEST" ]; then
-  if [ "$EC_TEST" = "TestPassed" ] || [ "$EC_TEST" = "BuildPLRInProgress" ]; then
-    echo "  ✓ enterprise-contract: $EC_TEST" >&2
-  else
-    echo "  ✗ enterprise-contract: $EC_TEST (CRITICAL FAILURE)" >&2
-    exit 1
-  fi
-fi
-
-# Count total tests
-TOTAL_TESTS=$(echo "$TEST_STATUS" | jq -r '. | length' 2>/dev/null)
-if [ "$TOTAL_TESTS" -gt 0 ]; then
-  echo "✓ All $TOTAL_TESTS test(s) passed" >&2
-else
-  echo "⚠️  No tests found in snapshot (may still be building)" >&2
-fi
+TOTAL_TESTS=$(jq -r '.metadata.annotations["test.appstudio.openshift.io/status"] | fromjson | length' <<< "$SNAPSHOT_JSON")
+echo "✓ All $TOTAL_TESTS test(s) finished successfully" >&2
 
 # ============================================================================
 # Output JSON Result
 # ============================================================================
 
 echo "" >&2
-echo "✅ Verification complete - snapshot ready for release" >&2
+echo "✅ Snapshot components and completed integration verified" >&2
 echo "" >&2
 
 # Output JSON to stdout (orchestrator parses this)

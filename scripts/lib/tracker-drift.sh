@@ -52,6 +52,9 @@ ground_truth_done() {
       [ "${TEKTON_FETCH_FAILED:-0}" -gt 0 ] && { echo unknown; return; }  # non-404 probe error
       [ "${MISSING_TEKTON:-0}" -eq 0 ] && echo "done" || echo "not-done" ;;
     versionLabels)
+      # A later patch legitimately changes this branch. Current source cannot
+      # disprove the versions in an already-recorded immutable candidate.
+      [ -z "${PROD_YAML:-${STAGE_YAML:-}}" ] || { echo unknown; return; }
       [ "${IS_ZSTREAM:-false}" = "false" ] && { echo unknown; return; }
       [ "${WRONG_COUNT:-0}" -gt 0 ] && { echo not-done; return; }  # proven incomplete
       [ "${FETCH_FAILED:-0}" -gt 0 ] && { echo unknown; return; }  # can't prove done

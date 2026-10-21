@@ -21,6 +21,7 @@ acli() { echo "[]"; }
 calculate_acm_version() { ACM_VERSION="ACM 2.17.0"; }
 
 source "$SCRIPT_DIR/../autorelease.sh"
+_REAL_UPDATE_STEP=$(declare -f update_step)
 
 PASS=0 FAIL=0
 assert_eq() {
@@ -318,6 +319,172 @@ assert_contains "IT-6: error message mentions step" "$_it6_err" "unknownStep"
 # The guard is correct; this gap is accepted as a known limitation.
 
 echo ""
+echo "IT-7: Fresh source-fix steps check evidence before dispatching repairs"
+
+_IT_LOG="$_IT_TMPDIR/fresh-runs"; export _IT_LOG
+for _it7_step in rpmLockfiles versionLabels tektonTasks cveFixes ecFixes; do
+  _it7_done=()
+  for _it7_prior in rpmLockfiles versionLabels tektonTasks cveFixes ecFixes; do
+    [ "$_it7_prior" != "$_it7_step" ] || break
+    _it7_done+=("$_it7_prior:complete")
+  done
+  _IT7_CMT=$(_build_it_comments "${_it7_done[@]}")
+  _make_logging_stub "${STEP_SCRIPT[$_it7_step]}" "$_it7_step"
+  _it7_cases=(3 2 1 retry)
+  [ "$_it7_step" != ecFixes ] || _it7_cases+=(0)
+  for _it7_case in "${_it7_cases[@]}"; do
+    _it7_verify_rc="$_it7_case" _it7_write_fails=false
+    [ "$_it7_case" != retry ] || { _it7_verify_rc=3; _it7_write_fails=true; }
+    : > "$_IT_LOG"
+    _it7_rc=0
+    _it7_out=$(
+      unset _AUTORELEASE_TESTING
+      acli() { printf '%s' "$_IT7_CMT"; }
+      verify_cveFixes() { return "$_it7_verify_rc"; }
+      verify_ecFixes() { return "$_it7_verify_rc"; }
+      verify_tektonTasks() { return "$_it7_verify_rc"; }
+      verify_rpmLockfiles() { return "$_it7_verify_rc"; }
+      verify_versionLabels() { return "$_it7_verify_rc"; }
+      verify_upstreamRelease() { return 2; }  # Stop after verified EC, without live tag reads.
+      update_step() {
+        echo "$3:$2" >> "$_IT_LOG"
+        if ! $_it7_write_fails; then
+          _IT7_CMT=$(_build_it_comments "${_it7_done[@]}" "$2:$3")
+        fi
+      }
+      VERSION='0.99.1' RELEASE_TYPE='z-stream' TRACKER='FAKE-123'
+      GIT_ROOT="$_IT_TMPDIR"
+      AUTORELEASE_PUSH_LOG="$_IT_TMPDIR/fresh-pushes"; : > "$AUTORELEASE_PUSH_LOG"
+      ran_pr_step='' ran_release_yaml_step='' ran_direct_push_step=''
+      declare -A step_statuses=() verified_steps=()
+      _AUTORELEASE_QUIET=''
+      run_conductor 2>&1
+      if [ "$_it7_verify_rc" -eq 3 ]; then
+        # A new invocation reads recorded status; a failed write remains fresh.
+        step_statuses=() verified_steps=()
+        _AUTORELEASE_NOFETCH=''
+        run_conductor 2>&1
+      fi
+    ) || _it7_rc=$?
+    assert_eq "IT-7 $_it7_step $_it7_case: safe stop exits 0" "$_it7_rc" 0
+    case "$_it7_verify_rc" in
+      0)
+        assert_eq 'IT-7: passing EC completes without running repair' "$(cat "$_IT_LOG")" 'complete:ecFixes'
+        assert_contains 'IT-7: verified EC advances to upstream gate' "$_it7_out" 'Cannot verify Cut upstream release' ;;
+      1)
+        assert_eq "IT-7 $_it7_step: absent evidence runs wrapper once" "$(cat "$_IT_LOG")" "$_it7_step"
+        assert_contains 'IT-7: wrapper output needs review' "$_it7_out" REVIEW ;;
+      3)
+        _it7_expected="in_progress:$_it7_step"
+        if $_it7_write_fails; then
+          _it7_expected+=$'\n'"in_progress:$_it7_step"
+        fi
+        assert_eq "IT-7 $_it7_step $_it7_case: pending status recorded without repair" "$(cat "$_IT_LOG")" "$_it7_expected"
+        assert_contains 'IT-7: open fixes wait for merge' "$_it7_out" 'waiting for merge' ;;
+      2)
+        assert_eq "IT-7 $_it7_step: child and tracker untouched" "$(wc -c < "$_IT_LOG")" 0
+        assert_contains 'IT-7: failed verification blocks dispatch' "$_it7_out" 'Cannot verify' ;;
+    esac
+  done
+done
+
+echo ""
+echo 'IT-8: PR publication records Jira evidence before the review stop'
+git init -q "$_IT_TMPDIR"
+cat > "$_IT_TMPDIR/scripts/update-version-labels.sh" <<'STUB'
+#!/bin/bash
+echo versionLabels >> "$_IT_LOG"
+echo '# publication queued' >> "$AUTORELEASE_PUSH_LOG"
+STUB
+chmod +x "$_IT_TMPDIR/scripts/update-version-labels.sh"
+for _it8_case in fresh resumed push-fails; do
+  _IT_LOG="$_IT_TMPDIR/jira-$_it8_case"; export _IT_LOG
+  : > "$_IT_LOG"
+  _it8_marker="$_IT_TMPDIR/published-$_it8_case"
+  _it8_url="https://example.invalid/$_it8_case/labels"
+  _it8_out=$(
+    unset _AUTORELEASE_TESTING
+    acli() {
+      local pairs=('rpmLockfiles:complete')
+      [ "$_it8_case" != resumed ] || pairs+=('versionLabels:in_progress')
+      _build_it_comments "${pairs[@]}"
+    }
+    _try_auto_push() {
+      [ "$_it8_case" != push-fails ] || return 1
+      touch "$_it8_marker"
+    }
+    verify_versionLabels() {
+      [ -f "$_it8_marker" ] || return 1
+      echo "$_it8_url"
+      return 3
+    }
+    _add_comment() { printf 'comment:%s\n' "$2" >> "$_IT_LOG"; }
+    update_subtask_description() { printf 'description:%s\n' "$3" >> "$_IT_LOG"; }
+    update_step() { printf 'complete:%s\n' "$2" >> "$_IT_LOG"; }
+    VERSION='0.99.1' RELEASE_TYPE=z-stream TRACKER=FAKE-123 GIT_ROOT="$_IT_TMPDIR"
+    AUTORELEASE_PUSH_LOG="$_IT_TMPDIR/pushes-$_it8_case"; : > "$AUTORELEASE_PUSH_LOG"
+    export AUTORELEASE_PUSH_LOG
+    ran_pr_step='' ran_release_yaml_step='' ran_direct_push_step=''
+    declare -A step_statuses=() verified_steps=()
+    _AUTORELEASE_QUIET=''
+    run_conductor 2>&1
+  )
+  _it8_log=$(cat "$_IT_LOG")
+  assert_contains "IT-8 $_it8_case: labels ran" "$_it8_log" versionLabels
+  assert_contains "IT-8 $_it8_case: stops at review" "$_it8_out" REVIEW
+  assert_not_contains "IT-8 $_it8_case: pending PRs stay incomplete" "$_it8_log" complete:
+  if [ "$_it8_case" = push-fails ]; then
+    assert_not_contains 'IT-8: failed publication creates no evidence' "$_it8_log" comment:
+  else
+    assert_contains "IT-8 $_it8_case: PR comment recorded" "$_it8_log" "comment:$_it8_url"
+    assert_contains "IT-8 $_it8_case: subtask description recorded" "$_it8_log" 'description:## PRs'
+  fi
+done
+
+echo "IT-9: Failed Jira completion cannot dispatch the next source helper"
+_make_logging_stub "${STEP_SCRIPT[tektonTasks]}" tektonTasks
+for _it9_case in comment-fails transition-fails success; do
+  _IT_LOG="$_IT_TMPDIR/durable-$_it9_case"; export _IT_LOG
+  : > "$_IT_LOG"
+  _it9_out=$(
+    unset _AUTORELEASE_TESTING
+    eval "$_REAL_UPDATE_STEP"
+    _it9_failure="$_it9_case"
+    _IT9_CMT=$(_build_it_comments rpmLockfiles:complete versionLabels:in_progress)
+    acli() { printf '%s' "$_IT9_CMT"; }
+    verify_versionLabels() { echo 'Merged https://example.invalid/labels/1'; }
+    verify_tektonTasks() { return 1; }
+    update_subtask_description() { :; }
+    _find_subtask() { echo TEST-SUBTASK; }
+    _transition_issue() { [ "$_it9_failure" != transition-fails ]; }
+    _add_comment() {
+      if [[ "$2" == *STEP_DATA* ]]; then
+        [ "$_it9_failure" != comment-fails ] || return 1
+        echo completion >> "$_IT_LOG"
+        _IT9_CMT=$(_build_it_comments rpmLockfiles:complete versionLabels:complete)
+      fi
+    }
+    VERSION=0.99.1 RELEASE_TYPE=z-stream TRACKER=FAKE-123 GIT_ROOT="$_IT_TMPDIR"
+    AUTORELEASE_PUSH_LOG="$_IT_TMPDIR/durable-pushes"; : > "$AUTORELEASE_PUSH_LOG"
+    ran_pr_step='' ran_release_yaml_step='' ran_direct_push_step=''
+    declare -A step_statuses=() verified_steps=()
+    _AUTORELEASE_NOFETCH='' _AUTORELEASE_QUIET=''
+    run_conductor 2>&1
+    if [ "$_it9_case" != success ]; then
+      printf 'first-run-bytes=%s\n' "$(wc -c < "$_IT_LOG")"
+      _it9_failure=success
+      step_statuses=() verified_steps=()
+      _AUTORELEASE_NOFETCH=''
+      run_conductor 2>&1
+    fi
+  )
+  if [ "$_it9_case" != success ]; then
+    assert_contains "IT-9 $_it9_case: no completion or next helper before retry" "$_it9_out" first-run-bytes=0
+    assert_contains "IT-9 $_it9_case: failed completion stops" "$_it9_out" 'Cannot verify'
+  fi
+  assert_eq "IT-9 $_it9_case: completion precedes one helper dispatch" "$(cat "$_IT_LOG")" $'completion\ntektonTasks'
+done
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then echo "All $PASS tests passed"
 else echo "$FAIL FAILED, $PASS passed"; fi

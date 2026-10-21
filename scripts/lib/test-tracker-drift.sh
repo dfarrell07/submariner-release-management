@@ -21,6 +21,7 @@ assert_eq() {
 # Reset all ground-truth globals to a neutral baseline before each case.
 reset_globals() {
   IS_ZSTREAM=false; BRANCH_CHECK=""; MISSING_TEKTON=0
+  STAGE_YAML=""; PROD_YAML=""
   WRONG_COUNT=0; FETCH_FAILED=0; TAG_EXISTS=""
   BRANCH_FETCH_FAILED=0; TEKTON_FETCH_FAILED=0; TAG_FETCH_FAILED=0
 }
@@ -56,6 +57,11 @@ assert_eq "versionLabels: Y-stream -> unknown"     "$(ground_truth_done versionL
 reset_globals; IS_ZSTREAM=true; WRONG_COUNT=3; FETCH_FAILED=2
 assert_eq "versionLabels: wrong + fetch-failed -> not-done" \
   "$(ground_truth_done versionLabels)" "not-done"
+
+reset_globals; IS_ZSTREAM=true; WRONG_COUNT=3; STAGE_YAML=stage.yaml
+assert_eq "versionLabels: recorded candidate ignores newer branch versions" "$(ground_truth_done versionLabels)" unknown
+reset_globals; IS_ZSTREAM=true; WRONG_COUNT=3; PROD_YAML=prod.yaml
+assert_eq "versionLabels: historical production ignores newer branch versions" "$(ground_truth_done versionLabels)" unknown
 
 # upstreamRelease: both streams, from TAG_EXISTS.
 reset_globals; TAG_EXISTS="v0.23.1"

@@ -80,7 +80,7 @@ declare -a REPOS_DENIED=()      # repo:N-active-denials — needs a manual fix
 declare -a DENY_REPORTS=()      # "repo\nreport" blocks for the summary
 DENY_RULES_CHECKED=0            # 1 once policy-data was loaded (else: unchecked)
 
-SUBMARINER_BASE="$HOME/go/src/submariner-io"
+SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
 readonly FBC_REPO_PATH="${FBC_REPO:-${FBC_REPO_DEFAULT:-$HOME/konflux/submariner-operator-fbc}}"
 
 # Cache for acceptable-bundles data (fetched once, reused per-task)

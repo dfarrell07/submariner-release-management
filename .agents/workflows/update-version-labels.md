@@ -1,102 +1,28 @@
-# Update Component Version Labels
+# Update Component Versions
 
-**When:** Z-stream (0.21.1 → 0.21.2) before cutting upstream release
+**When:** Z-stream releases, before cutting upstream release. Y-stream initial versions are set by component setup.
 
-**Note:** For Y-stream (0.21 → 0.22), initial version labels are set as part of Step 3 (Fix Tekton Config PRs).
+Use the `update-version-labels` skill or `scripts/update-version-labels.sh`, passing the requested full release version
+and optional repository filter. The script fetches current source branches, prepares signed-off commits and emits
+publication commands. Autorelease executes those commands and stops for review.
 
-## Process
+| Repo | Component Dockerfiles |
+| --- | --- |
+| `submariner-operator` | operator |
+| `submariner` | gateway, globalnet, route-agent |
+| `lighthouse` | agent, coredns |
+| `shipyard` | nettest |
+| `subctl` | subctl |
 
-Update Konflux Dockerfile `version` labels to match the upcoming release version. This enables `{{ labels.version }}`
-tag expansion in Konflux ReleasePlanAdmission.
+The eight component Dockerfiles must have matching image labels and, for Go builds, compiled versions. The shared version helper
+sets Go version linker assignments, including the operator's default component image versions, to the literal target
+release. It preserves source-branch arguments and commit identifiers. This avoids a pipeline's `BASE_BRANCH` override
+silently compiling branch-named binaries into release-labeled images.
 
-**Repos with components** (all in <https://github.com/submariner-io>):
+Bundle metadata belongs to Step 7: `bundle-image-update.sh` regenerates the CSV and updates its Dockerfile labels
+in the same operation. Changing bundle labels alone creates an image whose declared version disagrees with its CSV.
 
-| Repo                  | Files | Component(s)                                                      |
-| --------------------- | ----- | ----------------------------------------------------------------- |
-| `submariner-operator` | 2     | submariner-operator, submariner-bundle                            |
-| `submariner`          | 3     | submariner-gateway, submariner-globalnet, submariner-route-agent  |
-| `lighthouse`          | 2     | lighthouse-agent, lighthouse-coredns                              |
-| `shipyard`            | 1     | nettest                                                           |
-| `subctl`              | 1     | subctl                                                            |
+After review and merge, verify the rebuilt images for the exact candidate: inspect image labels and compiled binary
+versions. Source checks and PR merges establish readiness to rebuild; they do not prove the resulting image payloads.
 
-**Total:** 9 Dockerfiles across 5 repos
-
-**Local:** `~/go/src/submariner-io/`
-
-### Determine Version
-
-Check current and next version:
-
-```bash
-cd ~/go/src/submariner-io/submariner-operator
-git fetch origin
-git tag -l "v0.21*" | sort -V | tail -3  # Shows: v0.21.0, v0.21.1, v0.21.2
-# Next release: v0.21.3
-```
-
-### Update Each Repo
-
-For each repo, update the LABEL `version` line (not the ldflags `-X` lines).
-
-**Bundle note:** `bundle.Dockerfile.konflux` has 3 version labels with `LABEL` prefix:
-
-```bash
-# In submariner-operator repo, also update bundle (different format):
-sed -i \
-  -e 's/^LABEL csv-version="0.21.2"/LABEL csv-version="0.21.3"/' \
-  -e 's/^LABEL release="v0.21.2"/LABEL release="v0.21.3"/' \
-  -e 's/^LABEL version="v0.21.2"/LABEL version="v0.21.3"/' \
-  bundle.Dockerfile.konflux
-```
-
-```bash
-# Example for submariner repo (3 files), bumping 0.21.2 → 0.21.3
-cd ~/go/src/submariner-io/submariner
-git checkout origin/release-0.21 -b fix-version-label-0.21
-
-# Update version label (careful: only LABEL, not ldflags)
-sed -i 's/^      version="v0.21.2"/      version="v0.21.3"/' \
-  package/Dockerfile.submariner-gateway.konflux \
-  package/Dockerfile.submariner-globalnet.konflux \
-  package/Dockerfile.submariner-route-agent.konflux
-
-git add -A && git commit -s -m "Pin Konflux Dockerfile version labels
-
-Enables dynamic tagging in Konflux releases."
-
-git push origin fix-version-label-0.21 && gh pr create \
-  --base release-0.21 --head fix-version-label-0.21 \
-  --title "Pin Konflux Dockerfile version labels" \
-  --body "Enables dynamic tagging in Konflux releases." --assignee @me
-```
-
-Repeat for all 5 repos:
-
-| Repo                  | Dockerfile path(s)                                                                 |
-| --------------------- | ---------------------------------------------------------------------------------- |
-| `submariner-operator` | `package/Dockerfile.submariner-operator.konflux`, `bundle.Dockerfile.konflux`      |
-| `submariner`          | `package/Dockerfile.submariner-{gateway,globalnet,route-agent}.konflux`            |
-| `lighthouse`          | `package/Dockerfile.lighthouse-{agent,coredns}.konflux`                            |
-| `shipyard`            | `package/Dockerfile.nettest.konflux`                                               |
-| `subctl`              | `package/Dockerfile.subctl.konflux`                                                |
-
-### Wait for Rebuilds
-
-After PRs merge, wait for Konflux to rebuild (~15-30 min):
-
-```bash
-oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp | grep "submariner-0-21" | tail -3
-```
-
-## Done When
-
-Verify one built image has correct label:
-
-```bash
-SNAPSHOT=$(oc get snapshots -n submariner-tenant --sort-by=.metadata.creationTimestamp | grep "submariner-0-21" | tail -1 | awk '{print $1}')
-IMAGE=$(oc get snapshot $SNAPSHOT -n submariner-tenant -o jsonpath='{.spec.components[?(@.name=="lighthouse-agent-0-21")].containerImage}')
-skopeo inspect "docker://$IMAGE" | jq -r '.Labels.version'
-# Should show: v0.21.3
-```
-
-**Next:** Proceed to Step 6 (Cut Upstream Release).
+**Next:** Complete the remaining build-readiness steps before cutting upstream release.
