@@ -247,8 +247,8 @@ class ConfigurationContracts(unittest.TestCase):
                 )
 
     def test_ocp5_omits_channel_instead_of_materializing_an_empty_value(self):
-        # The live controller turned an explicit empty ITS value into null,
-        # which Tekton rejected with impossible ParamValues.Type:"".
+        # Inspected integration-service source converts empty ITS values to null;
+        # null reproduces the observed admission error in server dry-run controls.
         objects = {(doc["kind"], doc["metadata"]["name"]): doc for doc in self.objects}
         mod.validate_tenant_objects(objects, "5-0")
         for parameter in (

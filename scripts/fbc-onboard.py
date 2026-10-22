@@ -382,8 +382,8 @@ def operator_its_patch(text, base, version):
             "Conflicting ITS patch: CHANNEL_NAME",
         )
         # Remove last so inherited OCI_REF/secret patches keep their base indices.
-        # Omission inherits the reviewed 0.3 pipeline's empty default; an explicit
-        # empty ITS value becomes null when integration-service constructs the run.
+        # Omission inherits the reviewed 0.3 pipeline's empty default. Inspected
+        # integration-service source converts empty ITS values to null.
         patches = [op for op in patches if op.get("path") not in channel_paths]
         return "---\n" + yaml.safe_dump(
             patches + additions + [channel_test, channel_remove], sort_keys=False
