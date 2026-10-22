@@ -325,8 +325,10 @@ def operator_its_patch(text, base, version):
         else:
             additions.append(expected)
 
-    parameter(["spec", "params"], "CHANNEL_NAME", "")
-    if int(version.split("-")[0]) >= 5:
+    ocp5 = int(version.split("-")[0]) >= 5
+    if not ocp5:
+        parameter(["spec", "params"], "CHANNEL_NAME", "")
+    if ocp5:
         parameter(["spec", "resolverRef", "params"], "pathInRepo", OPERATOR_ITS_5)
         field(
             "/spec/resolverRef/resourceKind",
@@ -350,10 +352,41 @@ def operator_its_patch(text, base, version):
                 additions.append(expected)
         field(
             "/metadata/labels/test.appstudio.openshift.io~1optional",
-            base.get("metadata", {}).get("labels", {}).get(
-                "test.appstudio.openshift.io/optional"
-            ),
+            base.get("metadata", {})
+            .get("labels", {})
+            .get("test.appstudio.openshift.io/optional"),
             "true",
+        )
+    if ocp5:
+        indices = [
+            i
+            for i, item in enumerate(base["spec"]["params"])
+            if item.get("name") == "CHANNEL_NAME"
+        ]
+        require(len(indices) == 1, "Expected one base ITS parameter: CHANNEL_NAME")
+        prefix = f"/spec/params/{indices[0]}"
+        channel_test = {"op": "test", "path": prefix + "/name", "value": "CHANNEL_NAME"}
+        channel_remove = {"op": "remove", "path": prefix}
+        channel_paths = {prefix, prefix + "/name", prefix + "/value"}
+        inherited = [op for op in patches if op.get("path") in channel_paths]
+        require(
+            all(
+                op
+                in (
+                    channel_test,
+                    channel_remove,
+                    {"op": "replace", "path": prefix + "/value", "value": ""},
+                )
+                for op in inherited
+            ),
+            "Conflicting ITS patch: CHANNEL_NAME",
+        )
+        # Remove last so inherited OCI_REF/secret patches keep their base indices.
+        # Omission inherits the reviewed 0.3 pipeline's empty default; an explicit
+        # empty ITS value becomes null when integration-service constructs the run.
+        patches = [op for op in patches if op.get("path") not in channel_paths]
+        return "---\n" + yaml.safe_dump(
+            patches + additions + [channel_test, channel_remove], sort_keys=False
         )
     if additions:
         text = (text.rstrip() + "\n" if patches else "---\n") + yaml.safe_dump(
@@ -596,8 +629,11 @@ def validate_tenant_objects(objects, version):
         params["CREDENTIALS_SECRET_NAME"] == f"imagerepository-{app}-image-push",
         "Wrong ITS secret",
     )
-    require(params["CHANNEL_NAME"] == "", "ITS must use the catalog default channel")
     if int(version.split("-")[0]) >= 5:
+        require(
+            "CHANNEL_NAME" not in params,
+            "OCP 5+ ITS must omit CHANNEL_NAME to inherit the pipeline default",
+        )
         refs = named_values(
             operator["spec"]["resolverRef"]["params"], "operator ITS resolver params"
         )
@@ -612,6 +648,10 @@ def validate_tenant_objects(objects, version):
         require(
             params.get("CREDENTIALS_SECRET_KEY") == ".dockerconfigjson",
             "OCP 5+ ITS must select the image-push secret's .dockerconfigjson key",
+        )
+    else:
+        require(
+            params["CHANNEL_NAME"] == "", "ITS must use the catalog default channel"
         )
     require(
         operator["spec"]["contexts"][0]["name"] == f"component_{app}",
@@ -1440,7 +1480,8 @@ def snapshot_tests_complete(snapshot, tests):
         and all(
             isinstance(test.get("completionTime"), str)
             and test["completionTime"]
-            and test.get("status") in ("TestPassed", "TestWarning", "BuildPLRInProgress")
+            and test.get("status")
+            in ("TestPassed", "TestWarning", "BuildPLRInProgress")
             for test in tests
         )
     )

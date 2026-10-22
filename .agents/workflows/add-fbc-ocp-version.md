@@ -95,7 +95,10 @@ The tenant change adds eight overlay files, registers the overlay, runs the
 repository's `build-manifests.sh` for this tenant, and validates seven generated
 resource identities and their application/image/test relationships. The new
 operator ITS uses the package default channel, avoiding the nonexistent `stable`
-channel. New 5.x overlays use the upstream `deploy-fbc-operator` 0.3 pipeline via
+channel. New 5.x overlays omit the entire `CHANNEL_NAME` parameter to inherit
+the reviewed 0.3 pipeline's empty default. An explicit empty ITS value becomes
+null during integration-service materialization and Tekton rejects the run.
+New 5.x overlays use the upstream `deploy-fbc-operator` 0.3 pipeline via
 `pipelineruns/deploy-fbc-operator/0.2/deploy-fbc-operator-run.yaml`, which supplies
 its workspace. They explicitly select the image-push secret's `.dockerconfigjson`
 key. The existing 4.x overlays keep their selected install path. Both release plans

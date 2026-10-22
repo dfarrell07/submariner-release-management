@@ -96,14 +96,24 @@ class PipelineExecution(unittest.TestCase):
             with self.subTest(mode=mode):
                 self.pair["push"] = pipeline("push")
                 tasks = self.pair["push"]["spec"]["pipelineSpec"]["tasks"]
-                lifecycle = next(t for t in tasks if t["name"] == "fbc-inject-lifecycle")
+                lifecycle = next(
+                    t for t in tasks if t["name"] == "fbc-inject-lifecycle"
+                )
                 if mode == "missing":
                     tasks.remove(lifecycle)
                 elif mode == "skipped":
-                    lifecycle["when"] = [{"input": "true", "operator": "in", "values": ["false"]}]
+                    lifecycle["when"] = [
+                        {"input": "true", "operator": "in", "values": ["false"]}
+                    ]
                 else:
-                    target = lifecycle if mode == "wrong-source" else next(t for t in tasks if t["name"] == "run-opm-command")
-                    next(p for p in target["params"] if p["name"] == "SOURCE_ARTIFACT")["value"] = "$(tasks.init.results.SOURCE_ARTIFACT)"
+                    target = (
+                        lifecycle
+                        if mode == "wrong-source"
+                        else next(t for t in tasks if t["name"] == "run-opm-command")
+                    )
+                    next(p for p in target["params"] if p["name"] == "SOURCE_ARTIFACT")[
+                        "value"
+                    ] = "$(tasks.init.results.SOURCE_ARTIFACT)"
                 with self.assertRaises(ValueError):
                     self.validate()
 
@@ -236,6 +246,31 @@ class ConfigurationContracts(unittest.TestCase):
                     {(doc["kind"], doc["metadata"]["name"]): doc for doc in docs}, "5-0"
                 )
 
+    def test_ocp5_omits_channel_instead_of_materializing_an_empty_value(self):
+        # The live controller turned an explicit empty ITS value into null,
+        # which Tekton rejected with impossible ParamValues.Type:"".
+        objects = {(doc["kind"], doc["metadata"]["name"]): doc for doc in self.objects}
+        mod.validate_tenant_objects(objects, "5-0")
+        for parameter in (
+            {"name": "CHANNEL_NAME", "value": ""},
+            {"name": "CHANNEL_NAME", "value": None},
+            {"name": "CHANNEL_NAME"},
+            {"name": "CHANNEL_NAME", "value": "stable-0.24"},
+        ):
+            with self.subTest(parameter=parameter):
+                docs = copy.deepcopy(self.objects)
+                its = next(
+                    doc
+                    for doc in docs
+                    if doc["metadata"]["name"] == "submariner-fbc-operator-5-0"
+                )
+                its["spec"]["params"].append(parameter)
+                with self.assertRaisesRegex(ValueError, "CHANNEL_NAME|Malformed"):
+                    mod.validate_tenant_objects(
+                        {(doc["kind"], doc["metadata"]["name"]): doc for doc in docs},
+                        "5-0",
+                    )
+
     def test_ocp5_patch_from_a_4x_overlay_adds_every_required_change(self):
         # Shapes copied from the release-data base ITS and 4-22 overlay patch.
         base = {
@@ -263,6 +298,10 @@ class ConfigurationContracts(unittest.TestCase):
         previous = (
             "---\n- op: replace\n  path: /spec/application\n"
             "  value: submariner-fbc-5-0\n"
+            "- op: test\n  path: /spec/params/2/name\n  value: OCI_REF\n"
+            "- op: replace\n  path: /spec/params/2/value\n  value: approved-image\n"
+            "- op: test\n  path: /spec/params/3/name\n  value: CREDENTIALS_SECRET_NAME\n"
+            "- op: replace\n  path: /spec/params/3/value\n  value: approved-secret\n"
         )
         text = mod.operator_its_patch(previous, base, "5-0")
         ops = yaml.safe_load(text)
@@ -270,18 +309,52 @@ class ConfigurationContracts(unittest.TestCase):
             {
                 "op": "add",
                 "path": "/spec/params/-",
-                "value": {"name": "CREDENTIALS_SECRET_KEY", "value": ".dockerconfigjson"},
+                "value": {
+                    "name": "CREDENTIALS_SECRET_KEY",
+                    "value": ".dockerconfigjson",
+                },
             },
             ops,
         )
+        self.assertEqual(
+            ops[-2:],
+            [
+                {"op": "test", "path": "/spec/params/1/name", "value": "CHANNEL_NAME"},
+                {"op": "remove", "path": "/spec/params/1"},
+            ],
+        )
+        self.assertFalse(any(op.get("path") == "/spec/params/1/value" for op in ops))
+        self.assertEqual(ops[:5], yaml.safe_load(previous))
+        # Credential additions and inherited index-based patches run before removal.
+        self.assertLess(
+            next(i for i, op in enumerate(ops) if op.get("path") == "/spec/params/-"),
+            len(ops) - 2,
+        )
+        legacy = yaml.safe_load(mod.operator_its_patch(previous, base, "4-22"))
+        self.assertIn(
+            {"op": "replace", "path": "/spec/params/1/value", "value": ""}, legacy
+        )
+        self.assertFalse(any(op.get("op") == "remove" for op in legacy))
         paths = {op["path"]: op for op in ops}
-        self.assertEqual(paths["/spec/resolverRef/resourceKind"]["value"], "pipelinerun")
+        self.assertEqual(
+            paths["/spec/resolverRef/resourceKind"]["value"], "pipelinerun"
+        )
         self.assertEqual(
             paths["/metadata/labels/test.appstudio.openshift.io~1optional"]["value"],
             "true",
         )
-        self.assertEqual(paths["/spec/resolverRef/params/2/value"]["value"], mod.OPERATOR_ITS_5)
+        self.assertEqual(
+            paths["/spec/resolverRef/params/2/value"]["value"], mod.OPERATOR_ITS_5
+        )
         self.assertEqual(mod.operator_its_patch(text, base, "5-0"), text)
+        inherited_empty = previous + yaml.safe_dump(
+            [
+                {"op": "test", "path": "/spec/params/1/name", "value": "CHANNEL_NAME"},
+                {"op": "replace", "path": "/spec/params/1/value", "value": ""},
+            ],
+            sort_keys=False,
+        )
+        self.assertEqual(mod.operator_its_patch(inherited_empty, base, "5-0"), text)
         base["spec"]["resolverRef"]["resourceKind"] = "pipeline"
         text = mod.operator_its_patch(previous, base, "5-0")
         self.assertIn(

@@ -143,10 +143,6 @@
           "value": "submariner"
         },
         {
-          "name": "CHANNEL_NAME",
-          "value": ""
-        },
-        {
           "name": "OCI_REF",
           "value": "quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-5-0"
         },
