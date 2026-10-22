@@ -1,6 +1,6 @@
 # Submariner FBC rollout to OCP 5.0
 
-Reviewed October 21, 2026. Tracking: [ACM-48200][delivery]. Release management
+Reviewed October 22, 2026. Tracking: [ACM-48200][delivery]. Release management
 owns the automated installation test; QE follows the normal stage handoff.
 Use the [onboarding workflow][onboarding] for mechanics. Keep one candidate
 record linked from ACM-48200: bundle/channel, source SHA, push build, snapshot,
@@ -15,33 +15,39 @@ before qualification. Product compatibility and lifecycle-support changes
 remain separate.
 
 At review, #82, the [cluster-profile PR][profile] and [helper PR #120][helper]
-remain drafts. The last authenticated cluster check found the 5.0 Application,
-Component and build account absent; current cluster authentication has expired.
-The `stable-5.0` graph has no release nodes. Refresh these observations when
-executing the plan. Hosted GitLab CI and approvals still need verification.
+remain drafts. Tenant resources and admissions have reconciled. The fresh
+[PR build][pr-build] passed on all four platforms; the optional operator scenario
+could not start because an empty parameter became JSON `null`. This is not
+installation evidence. The `stable-5.0` graph remains empty; candidate releases
+exist. Refresh these observations when executing the plan.
 
 ## 1. Reconcile tenant resources and admissions
 
-Narrow [release-data !23786][tenant] to tenant infrastructure and publish the
-two RPA additions as a separate managed-config MR. Record its link here.
-Refresh against current main, regenerate and validate each scoped proposal
-before publication. Require review and hosted CI at each published head.
-ArgoCD reconciles tenant resources; release-data CI applies managed configuration.
+[Release-data !23786][tenant] merged both tenant resources and admissions.
+Live account ownership, credential bindings and stage/prod admission matching
+are verified. Keep autorelease disabled.
 
-Before retesting #82, verify the 5.0 Application, Component, ImageRepository,
+Review and reconcile the tenant follow-up removing the entire `CHANNEL_NAME`
+parameter from the 5.0 operator scenario. Integration-service converts its
+explicit empty value to JSON `null`, invalidating PipelineRun creation. Omission
+uses the upstream pipeline's empty-string default and preserves catalog-default
+selection. Removing only the value is insufficient. Regenerate the manifest
+from source and require hosted CI/review at the published head.
+
+For any new build, recheck the 5.0 Application, Component, ImageRepository,
 build-account ownership and image-push secret bindings. Check the registry
 credential binding on `konflux-integration-runner` and confirm authenticated
 pulls in the eventual test. ServiceAccount existence alone is insufficient.
 Reconcile any bot-generated pipeline PR with #82 rather than merging two
 competing pipeline definitions.
 
-Merge the separate admissions after tenant onboarding. Both stage/prod
-ReleasePlans must actually match their admissions before live verification
-and release; keep autorelease disabled.
+After the tenant fix reconciles, retry the operator scenario on the recorded
+PR snapshot to verify PipelineRun creation. Release qualification still needs
+the original merged-source push below. Both stage/prod ReleasePlans must remain
+matched before live verification and release.
 
-Progress admissions, #120 review, cluster-profile access and OCP 5 release
-availability in parallel. Tenant reconciliation and build credentials unblock
-build retesting for #82; provisioning and release have their own later gates.
+Progress the tenant fix, #120 review, cluster-profile access and OCP 5 release
+availability in parallel. Build readiness and installation have separate gates.
 
 ## 2. Build and identify the candidate
 
@@ -51,8 +57,9 @@ mirrors. Verify mappings and pull access if mirrors are needed. The install
 pipeline reads `.tekton/images-mirror-set.yaml` at that SHA; the current file
 targets 0.23.
 
-Once tenant resources and build credentials are reconciled, retest #82, obtain
-review and require successful required checks at its exact head before merging.
+Obtain maintainer `lgtm`, clear #82's draft/WIP gate after review, and require
+successful required checks at its exact head before merging. Its reviewed PR
+build has passed; repeat it only when changes or failures require another run.
 Identify the original successful merged-source push PipelineRun, snapshot and
 immutable image.
 Verify all four platforms, effective build arguments, OCP base annotations,
@@ -66,10 +73,10 @@ artifact digest and file SHA256. Do not extract the reference from the catalog
 image under test. Reference provenance and support policy are manual review
 inputs, not claims established by the content verifier.
 
-Merge #120 with the reviewed fixes for required operator-test labels and exact
-source/reference content verification before using `verify-live`. Its proposed
-`--expected-lifecycle` input is not on the published head at review: publish and
-review the follow-up, then use its merged helper and updated workflow.
+Merge #120 with the reviewed fixes for omitted default-channel parameters,
+required operator-test labels and exact source/reference content verification
+before using `verify-live`. Use its merged helper and updated workflow with
+`--expected-lifecycle` pointing to the reviewed original push reference.
 
 ## 3. Qualify installation and catalog contents
 
@@ -77,7 +84,9 @@ Actual provisioning requires [cluster-profile access][profile] and an available
 requested OCP release. The reviewed upstream pipeline requests `stable`;
 recheck `stable-5.0` rather than assuming GA makes it available. If earlier
 testing is needed, separately review a temporary candidate-channel pipeline
-and its removal plan.
+and tenant resolver revision, selecting an approved exact prerelease with a
+removal plan. Verify the observed cluster version matches that selection.
+Tenant `CHANNEL_NAME` selects the OLM channel, not the OCP release channel.
 
 Require successful intended-bundle selection, provisioning and deployment.
 For the upstream path, inspect `get-unreleased-bundle`, `pick-cluster-params`,
@@ -142,6 +151,7 @@ under [OPGM-261][compatibility] remain separate work.
 [delivery]: https://redhat.atlassian.net/browse/ACM-48200
 [catalog]: https://github.com/stolostron/submariner-operator-fbc/pull/81
 [pipelines]: https://github.com/stolostron/submariner-operator-fbc/pull/82
+[pr-build]: https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/pipelinerun/submariner-fbc-5-0-on-pull-request-68kcc
 [profile]: https://github.com/openshift/release/pull/87176
 [helper]: https://github.com/stolostron/submariner-release-management/pull/120
 [tenant]: https://gitlab.cee.redhat.com/releng/konflux-release-data/-/merge_requests/23786
