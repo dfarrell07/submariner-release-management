@@ -147,6 +147,24 @@ class ConfigurationContracts(unittest.TestCase):
             (ROOT / "scripts/tests/fixtures/ocp5-tenant.json").read_text()
         )
 
+    def test_required_post_ga_operator_test_is_valid_but_invalid_labels_are_not(self):
+        objects = {(doc["kind"], doc["metadata"]["name"]): doc for doc in self.objects}
+        operator = objects["IntegrationTestScenario", "submariner-fbc-operator-5-0"]
+        label = "test.appstudio.openshift.io/optional"
+        operator["metadata"]["labels"][label] = "false"
+        mod.validate_tenant_objects(objects, "5-0")
+        for value in (None, False, "", "yes"):
+            with self.subTest(value=value):
+                operator["metadata"]["labels"][label] = value
+                with self.assertRaisesRegex(ValueError, "optional label"):
+                    mod.validate_tenant_objects(objects, "5-0")
+        operator["metadata"]["labels"][label] = "false"
+        objects["IntegrationTestScenario", "submariner-fbc-standard-5-0"]["metadata"][
+            "labels"
+        ][label] = "true"
+        with self.assertRaisesRegex(ValueError, "standard scenario optional label"):
+            mod.validate_tenant_objects(objects, "5-0")
+
     def test_sequence_layouts_preserve_comments_and_values(self):
         for text in (
             "# keep\nresources:\n- old # comment\n",

@@ -526,15 +526,15 @@ def validate_tenant_objects(objects, version):
         )
     for scenario in ("standard", "operator"):
         its = objects["IntegrationTestScenario", f"submariner-fbc-{scenario}-{version}"]
-        expected_optional = (
-            "true"
+        allowed_optional = (
+            {"true", "false"}
             if (scenario == "operator" and int(version.split("-")[0]) >= 5)
-            else "false"
+            else {"false"}
         )
         require(
             its["metadata"]["labels"].get("test.appstudio.openshift.io/optional")
-            == expected_optional,
-            f"Wrong {scenario} scenario optional label (expected {expected_optional})",
+            in allowed_optional,
+            f"Wrong {scenario} scenario optional label",
         )
         require(
             [context["name"] for context in its["spec"]["contexts"]]
@@ -1339,8 +1339,49 @@ def merged_catalog_contract(commit, version, minimum=None):
         return catalog_contract(root, version, minimum)
 
 
-def verify_catalog_images(image, manifests, expected, contract):
-    """Reuse oc image extraction, comparing every platform's complete catalog to Git."""
+def read_expected_lifecycle(path):
+    """Read an explicitly reviewed reference, not lifecycle data from the image under test."""
+    require(
+        path.is_file() and not path.is_symlink(),
+        "Lifecycle reference must be a regular file",
+    )
+    content = path.read_bytes()
+
+    def unique_fields(pairs):
+        values = {}
+        for name, value in pairs:
+            require(name not in values, f"Duplicate lifecycle field: {name}")
+            values[name] = value
+        return values
+
+    def invalid_constant(value):
+        raise ValueError(f"Invalid lifecycle JSON constant: {value}")
+
+    data = json.loads(
+        content, object_pairs_hook=unique_fields, parse_constant=invalid_constant
+    )
+    require(
+        isinstance(data, dict)
+        and data.get("schema") == "io.openshift.operators.lifecycles.v1alpha1"
+        and data.get("package") == "submariner"
+        and isinstance(data.get("versions"), list)
+        and data["versions"]
+        and all(isinstance(version, dict) for version in data["versions"]),
+        "Expected one Submariner lifecycle JSON object with versions",
+    )
+    return content
+
+
+def verify_catalog_images(image, manifests, expected, contract, lifecycle=None):
+    """Match source files exactly, plus the explicitly reviewed generated lifecycle."""
+    expected = dict(expected)
+    if lifecycle is not None:
+        digest = git_blob(lifecycle)
+        require(
+            "lifecycle.json" not in expected or expected["lifecycle.json"] == digest,
+            "Lifecycle reference conflicts with the committed lifecycle file",
+        )
+        expected["lifecycle.json"] = digest
     checked = []
     with tempfile.TemporaryDirectory(prefix="fbc-live-content-") as temporary:
         for manifest in manifests:
@@ -1526,6 +1567,18 @@ def verify_live(args, base_image):
 
     try:
         validate_base_reference(base_image, args.ocp)
+        lifecycle = None
+        lifecycle_path = getattr(args, "expected_lifecycle", None)
+        if int(args.ocp.split("-")[0]) >= 5:
+            require(
+                lifecycle_path is not None,
+                "OCP 5+ verify-live requires --expected-lifecycle from the reviewed "
+                "digest-pinned lifecycle task artifact",
+            )
+            lifecycle = read_expected_lifecycle(lifecycle_path)
+            result["lifecycle_reference_sha256"] = hashlib.sha256(lifecycle).hexdigest()
+        else:
+            require(lifecycle_path is None, "Lifecycle references require OCP 5+")
         require_merged_commit(args.expected_commit)
         result["merged_on_main"] = True
         expected_files = catalog_git_files(args.expected_commit, args.ocp)
@@ -1718,7 +1771,7 @@ def verify_live(args, base_image):
                 )
             )
         result["catalog_content_verified"] = verify_catalog_images(
-            image, children, expected_files, contract
+            image, children, expected_files, contract, lifecycle
         )
         result.update(build_ready=True, image=image, platforms=sorted(arches))
     except (
@@ -1965,7 +2018,17 @@ def main(argv=None):
     parser.add_argument(
         "--expected-commit", help="merged commit required for live verification"
     )
+    parser.add_argument(
+        "--expected-lifecycle",
+        type=Path,
+        help="reviewed lifecycle.json from the original build's digest-pinned lifecycle "
+        "task artifact (required for OCP 5+ verify-live)",
+    )
     args = parser.parse_args(argv)
+    require(
+        args.expected_lifecycle is None or args.phase == "verify-live",
+        "--expected-lifecycle is only supported with --phase verify-live",
+    )
     if args.legacy_cutoff:
         require(
             not args.min_supported_sub,

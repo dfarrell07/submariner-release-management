@@ -19,7 +19,21 @@ from test_fbc_review import BASE, pipeline
 class LiveEvidence(unittest.TestCase):
     def setUp(self):
         self.app, self.commit = "submariner-fbc-5-0", "a" * 40
-        self.args = SimpleNamespace(ocp="5-0", expected_commit=self.commit)
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        lifecycle = Path(self.temporary.name) / "lifecycle.json"
+        lifecycle.write_text(
+            json.dumps(
+                {
+                    "schema": "io.openshift.operators.lifecycles.v1alpha1",
+                    "package": "submariner",
+                    "versions": [{"name": "0.24", "phases": [{"name": "full"}]}],
+                }
+            )
+        )
+        self.args = SimpleNamespace(
+            ocp="5-0", expected_commit=self.commit, expected_lifecycle=lifecycle
+        )
         self.repo = f"quay.io/redhat-user-workloads/submariner-tenant/{self.app}"
         self.tests = [
             {
@@ -182,6 +196,19 @@ class LiveEvidence(unittest.TestCase):
         self.assertIn("unverified", result["runtime_on_requested_ocp"])
         return result
 
+    def test_lifecycle_reference_is_required_and_reported(self):
+        result = self.verify()
+        self.assertTrue(result["build_ready"])
+        self.assertEqual(len(result["lifecycle_reference_sha256"]), 64)
+        self.assertEqual(
+            self.verify_catalog_images.call_args.args[-1],
+            self.args.expected_lifecycle.read_bytes(),
+        )
+        self.args.expected_lifecycle = None
+        result = self.verify()
+        self.assertFalse(result["build_ready"])
+        self.assertIn("--expected-lifecycle", result["errors"][0])
+
     def test_complete_content_and_provenance_are_required(self):
         result = self.verify()
         self.assertTrue(result["configuration_ready"] and result["build_ready"])
@@ -306,6 +333,88 @@ class LiveEvidence(unittest.TestCase):
 
 
 class ImageContents(unittest.TestCase):
+    def test_reviewed_lifecycle_is_exact_on_every_platform_and_other_files_stay_exact(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            reference = source / "lifecycle.json"
+            reference.write_text(
+                json.dumps(
+                    {
+                        "schema": "io.openshift.operators.lifecycles.v1alpha1",
+                        "package": "submariner",
+                        "versions": [{"name": "0.24", "phases": [{"name": "full"}]}],
+                    }
+                )
+            )
+            lifecycle = mod.read_expected_lifecycle(reference)
+            expected = {"package.yaml": mod.git_blob(b"package data\n")}
+            manifests = [
+                {"digest": "sha256:" + str(i) * 64, "platform": {"architecture": arch}}
+                for i, arch in enumerate(("amd64", "arm64", "ppc64le", "s390x"))
+            ]
+            mode = "valid"
+
+            def extract(*args, **kwargs):
+                directory = Path(args[args.index("--path") + 1].split(":", 1)[1])
+                (directory / "package.yaml").write_bytes(b"package data\n")
+                (directory / "lifecycle.json").write_bytes(lifecycle)
+                if directory.name == "s390x":
+                    if mode == "missing":
+                        (directory / "lifecycle.json").unlink()
+                    elif mode == "changed_lifecycle":
+                        (directory / "lifecycle.json").write_bytes(lifecycle + b"\n")
+                    elif mode == "changed_source":
+                        (directory / "package.yaml").write_text("wrong package\n")
+                    elif mode == "extra":
+                        (directory / "extra.json").write_text("{}")
+                    elif mode == "symlink":
+                        (directory / "lifecycle.json").unlink()
+                        (directory / "lifecycle.json").symlink_to(reference)
+
+            with (
+                patch.object(mod, "run", side_effect=extract),
+                patch.object(mod, "validate_catalog_contents"),
+            ):
+                self.assertEqual(
+                    mod.verify_catalog_images(
+                        "example/image", manifests, expected, (), lifecycle
+                    ),
+                    ["amd64", "arm64", "ppc64le", "s390x"],
+                )
+                self.assertNotIn("lifecycle.json", expected)
+                for mode in (
+                    "missing",
+                    "changed_lifecycle",
+                    "changed_source",
+                    "extra",
+                    "symlink",
+                ):
+                    with self.subTest(mode=mode), self.assertRaises(ValueError):
+                        mod.verify_catalog_images(
+                            "example/image", manifests, expected, (), lifecycle
+                        )
+                mode = "valid"
+                with self.assertRaisesRegex(ValueError, "catalog differs"):
+                    mod.verify_catalog_images("example/image", manifests, expected, ())
+
+    def test_lifecycle_reference_rejects_wrong_packages_and_malformed_json(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "lifecycle.json"
+            for content in (
+                "[]",
+                "{}",
+                "not json",
+                '{"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"other","versions":[{}]}',
+                '{"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"other","package":"submariner","versions":[{}]}',
+                '{"schema":"io.openshift.operators.lifecycles.v1alpha1","package":"submariner","versions":[NaN]}',
+            ):
+                with self.subTest(content=content):
+                    path.write_text(content)
+                    with self.assertRaises(ValueError):
+                        mod.read_expected_lifecycle(path)
+
     def test_each_platform_is_extracted_and_wrong_content_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)

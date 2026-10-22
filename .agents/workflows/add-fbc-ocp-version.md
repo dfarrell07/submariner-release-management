@@ -167,7 +167,8 @@ After deployment, run the read-only live checks with the expected merged SHA:
 
 ```bash
 ./scripts/add-fbc-ocp-version.sh 5.0 --phase verify-live \
-  --expected-commit <40-character-merged-commit>
+  --expected-commit <40-character-merged-commit> \
+  --expected-lifecycle /path/to/reviewed/lifecycle.json
 ```
 
 This checks live resource relationships, actual matched RPA contracts, build-account
@@ -178,7 +179,61 @@ retains `BuildPLRInProgress` after passing, so that marker counts only with this
 completion evidence.
 It links the original push build to its snapshot and image, checks effective build
 arguments and all four base annotations, then extracts each platform's catalog and
-compares every file with the pinned merged source and template/cutoff contract.
+compares every source catalog file with the pinned merged source and template/cutoff
+contract. For OCP 5+, the required injection task adds `lifecycle.json`. Supply
+`--expected-lifecycle` with a separately reviewed reference from that original
+build's digest-pinned lifecycle `SOURCE_ARTIFACT`. Confirm the TaskRun belongs to
+the expected push PipelineRun, succeeded, reports successful injection in
+`TEST_OUTPUT`, and uses the reviewed task/image pins. Record its artifact digest
+and the reference file's SHA256 with the rollout evidence. Do not create the
+reference by extracting it from the catalog image being verified: that would only
+compare the image with itself.
+
+The pinned artifact utility stores a gzip tar **blob**, identified as
+`oci:<repository>@sha256:<archive-digest>` ([archive creation][ta-create],
+[restoration][ta-use]). Use an existing ORAS registry login with pull access to
+that repository; set `REGISTRY_AUTH_FILE` to its authentication file and
+`SOURCE_ARTIFACT` to the checked TaskRun's output URI. Run this Bash recipe to
+verify the archive digest and copy only the expected regular-file member:
+
+```bash
+(
+set -euo pipefail
+[[ "$SOURCE_ARTIFACT" =~ ^oci:[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]
+EVIDENCE=$(mktemp -d)
+oras blob fetch --registry-config "$REGISTRY_AUTH_FILE" \
+  --output "$EVIDENCE/lifecycle-source.tar.gz" "${SOURCE_ARTIFACT#oci:}"
+printf '%s  %s\n' "${SOURCE_ARTIFACT##*@sha256:}" \
+  "$EVIDENCE/lifecycle-source.tar.gz" | sha256sum --check -
+python3 - "$EVIDENCE/lifecycle-source.tar.gz" "$EVIDENCE/lifecycle.json" <<'PY'
+import pathlib, sys, tarfile
+with tarfile.open(sys.argv[1], "r:gz") as archive:
+    members = [m for m in archive.getmembers()
+               if m.name == "./catalog-5-0/lifecycle.json"]
+    if len(members) != 1 or not members[0].isfile():
+        raise SystemExit("Expected one regular ./catalog-5-0/lifecycle.json")
+    with archive.extractfile(members[0]) as source:
+        pathlib.Path(sys.argv[2]).write_bytes(source.read())
+PY
+sha256sum "$EVIDENCE/lifecycle.json"
+printf 'Retain evidence and review reference: %s\n' "$EVIDENCE"
+)
+```
+
+This member path follows the current 5.0 build's source root and Dockerfile;
+recheck it if executed context/build arguments change. Retain the archive and
+TaskRun evidence, review the reference, then pass its path to
+`--expected-lifecycle`. Authenticated extraction from a qualifying original 5.0
+build remains to be verified when that build exists.
+
+[ta-create]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/create-oci.sh#L72
+[ta-use]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/use-oci.sh#L71
+
+The verifier checks the reference's Submariner schema/package, records its SHA256,
+and requires the exact reference bytes on all four platforms. Every other file
+still has to match Git exactly; missing lifecycle data, additional files and
+symlinks fail. The reference is an explicit reviewed input; the verifier does not
+authenticate its external provenance or establish lifecycle support policy.
 Configuration and build results remain separate when one check is unavailable.
 It still reports runtime compatibility as unverified. For scoped release creation,
 set `FBC_EXPECTED_COMMIT` to that merged SHA and pass `--ocp 5.0`.
@@ -198,6 +253,13 @@ For remote readiness, record distinct evidence:
 - Runtime: operator installation actually ran with the intended bundle/channel,
   and the provisioned cluster reports 5.0. A fallback 4.x cluster or no-op install
   does not establish OCP 5 support. Record QE evidence separately.
+
+Initial 5.x preparation keeps the operator scenario optional while the install
+prerequisites are unavailable. Once installation is required, change its label to
+`test.appstudio.openshift.io/optional: "false"` and regenerate the manifests.
+Both states are accepted for 5.x configuration verification; completed passing
+snapshot results and actual installation evidence remain separate gates. The
+standard scenario and 4.x operator scenarios must remain required.
 
 For the 0.3 install path, confirm access to its configured OpenShift CI cluster
 profile (the upstream default is `aws-konflux-prod`) before provisioning.
