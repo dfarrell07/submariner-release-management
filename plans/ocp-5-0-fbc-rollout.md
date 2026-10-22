@@ -17,9 +17,10 @@ remain separate.
 At review, #82, the [cluster-profile PR][profile] and [helper PR #120][helper]
 remain drafts. Tenant resources and admissions have reconciled. The fresh
 [PR build][pr-build] passed on all four platforms; the optional operator scenario
-could not start because an empty parameter became JSON `null`. This is not
-installation evidence. The `stable-5.0` graph remains empty; candidate releases
-exist. Refresh these observations when executing the plan.
+failed admission before execution. Reviewed source and server controls point to
+empty-to-null parameter conversion; the deployed controller revision was not
+captured. This is not installation evidence. The `stable-5.0` graph remains
+empty; candidate releases exist. Refresh these observations when executing the plan.
 
 ## 1. Reconcile tenant resources and admissions
 
@@ -28,9 +29,10 @@ Live account ownership, credential bindings and stage/prod admission matching
 are verified. Keep autorelease disabled.
 
 Review and reconcile the tenant follow-up removing the entire `CHANNEL_NAME`
-parameter from the 5.0 operator scenario. Integration-service converts its
-explicit empty value to JSON `null`, invalidating PipelineRun creation. Omission
-uses the upstream pipeline's empty-string default and preserves catalog-default
+parameter from the 5.0 operator scenario. Reviewed integration-service source
+converts an empty ITS value to JSON `null`; server controls reproduce the same
+admission error for null. Verify the repair after reconciliation. Omission uses
+the upstream pipeline's empty-string default and preserves catalog-default
 selection. Removing only the value is insufficient. Regenerate the manifest
 from source and require hosted CI/review at the published head.
 
@@ -56,6 +58,12 @@ operand digests can be pulled from production or need approved 0.24 stage
 mirrors. Verify mappings and pull access if mirrors are needed. The install
 pipeline reads `.tekton/images-mirror-set.yaml` at that SHA; the current file
 targets 0.23.
+
+Confirm the snapshot-linked build PipelineRun will remain available through
+installation and final `verify-live`; the helper needs its live resolved spec.
+Capture build/task/lifecycle evidence immediately. If the live run disappears,
+stop and review a supported retention or Tekton Results verification path;
+retained check/image evidence alone cannot satisfy the helper.
 
 Obtain maintainer `lgtm`, clear #82's draft/WIP gate after review, and require
 successful required checks at its exact head before merging. Its reviewed PR
