@@ -280,8 +280,9 @@ version, which gets its first release (x.y.0) on GA day. Check
 While it has no nodes, provisioning fails: rerun the scenario after GA. If a
 release is needed sooner, point the ITS at a temporary pipeline copy that
 requests `candidate`, and remove it at GA.
-Provisioning and deployment run only on push events, so retrigger a push
-snapshot; a PR-event pass skips all of it. The test and build PipelineRuns are
+Provisioning and deployment run only on push events, so rerun the scenario
+on the recorded push snapshot rather than a PR snapshot, whose pass skips all
+of it; a new push build would replace the candidate. The test and build PipelineRuns are
 pruned within hours, so save the `provision-cluster` step log and the claim
 status from the Konflux UI before they disappear.
 Inspect the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
