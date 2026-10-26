@@ -15,7 +15,7 @@ before qualification. Product compatibility and lifecycle-support changes
 remain separate.
 
 Status as of October 26, 2026. Tenant resources and admissions have reconciled.
-FBC PR #82 merged as `13b7416`; its original push build produced snapshot
+FBC PR #82 merged as `13b7416`; its push build produced snapshot
 `submariner-fbc-5-0-20261026-144157-000` and image digest
 `sha256:6bd0ce2161ac…` (the [PR build][pr-build] for head `897c64a` had already passed on all four platforms).
 The [cluster-profile PR][profile] and [helper PR #120][helper] are still open.
@@ -56,7 +56,7 @@ pulls in the eventual test. ServiceAccount existence alone is insufficient.
 Reconcile any bot-generated pipeline PR with #82 rather than merging two
 competing pipeline definitions.
 
-Release qualification needs the original merged-source push below. Both
+Release qualification needs the recorded candidate push build below. Both
 stage/prod ReleasePlans must remain matched before live verification and
 release.
 
@@ -81,37 +81,42 @@ Build PipelineRuns are short-lived. The push run for `13b7416`
 from the cluster a few hours after they finished, before any of this evidence
 could be captured. The snapshot, its recorded image digest and the lifecycle
 artifact tag `13b7416f64ac909538ac5ec818ffcad7491f17ae.lifecycle` remain in
-quay. The helper needs the build's live resolved spec, so for the next
-candidate capture the PipelineRun, TaskRuns, logs and lifecycle artifact digest
-immediately after the build completes. For `13b7416`, either establish a
-reviewed Tekton Results (or equivalent) path that recovers the run, or treat it
-as unverifiable. A fresh push build changes the source SHA, so qualifying one
-replaces the candidate record (source SHA, snapshot, image, lifecycle digest and
-`FBC_EXPECTED_COMMIT`) and must pass every gate again. Do that only once
-cluster-profile access is merged and either `stable-5.0` has nodes or a
-reviewed candidate-channel test is approved; otherwise its operator test fails
-the same way. Retained check/image evidence alone cannot satisfy the helper.
-
-FBC PR #82 has merged; its gating checks passed at the merged head. Its original
-push build, snapshot and immutable image recorded above are the current
-candidate, unless the retention gate above forces a replacement.
+quay, but the helper needs the build's live resolved spec, and retained
+check/image evidence alone cannot satisfy it. Treat `13b7416` as unverifiable
+unless a reviewed Tekton Results (or equivalent) path recovers its run.
 
 Several task pins in the merged 5.0 pipelines are marked with an `expires_on` date
 in Conforma's trusted-task data (checked October 26): `init` on 2026-11-16, and
-`git-clone-oci-ta`, `build-image-index` and `fbc-inject-lifecycle-oci-ta` on
-2026-11-22. After a pin's date, a build using it stops passing release policy, so
-the `13b7416` build cannot be released past 2026-11-16. Expect to rebuild: bump
-the pins in a standalone FBC change (4.x pipelines have their own expiring pins,
-some as early as 2026-10-30), and treat the resulting push build as the
-candidate to record and qualify, not an optional extra. Take the current
-non-expiring digests from Conforma's trusted-task data
+`git-clone-oci-ta`, `build-image-index` (an 11-18 record also exists) and
+`fbc-inject-lifecycle-oci-ta` on 2026-11-22. A build using an expired pin
+fails the trusted-task check if the release policy uses this data, so the
+`13b7416` build may not be releasable past 2026-11-16. A replacement build is
+therefore expected, not optional. Bump the pins in a standalone FBC change (4.x
+pipelines have their own expiring pins, some as early as 2026-10-30), taking the
+current non-expiring digests from Conforma's trusted-task data
 (`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`) rather than
-copying digests from this plan.
+copying digests from this plan. Merging that change starts a 5.0 push build; it
+is not itself qualifying unless the gates below can be met for it.
+
+The candidate is the push build recorded in the candidate record: `13b7416`
+only if it is recovered as above, otherwise the first replacement build that
+meets these conditions. A replacement is qualifying only if its PipelineRun,
+TaskRuns and lifecycle artifact stay retrievable until `verify-live`. Capture
+them, with logs and the lifecycle artifact digest, immediately after it
+completes. If they are pruned before installation and `verify-live` finish,
+build again once the install path is ready (cluster-profile access merged and
+either `stable-5.0` has nodes or a reviewed candidate-channel test approved);
+before that, its operator test fails the same way. A replacement creates a new
+snapshot, image and lifecycle artifact (and a new source SHA if it needs a
+commit), so it replaces the candidate record (source SHA, snapshot, image,
+lifecycle digest and `FBC_EXPECTED_COMMIT`) and must pass every gate again.
+
+FBC PR #82 has merged and its gating checks passed at the merged head.
 Verify all four platforms, effective build arguments, OCP base annotations,
 catalog validation and lifecycle-task execution using the onboarding workflow.
 Retain resolved task/image identities and the policy used by the build.
 
-Obtain `lifecycle.json` from the original push build's digest-pinned lifecycle
+Obtain `lifecycle.json` from the candidate push build's digest-pinned lifecycle
 `SOURCE_ARTIFACT`. Check TaskRun ownership, successful injection `TEST_OUTPUT`
 and resolved task/image pins; review the lifecycle contents and retain the
 artifact digest and file SHA256. Do not extract the reference from the catalog
@@ -121,7 +126,7 @@ inputs, not claims established by the content verifier.
 Merge #120 with the reviewed fixes for omitted default-channel parameters,
 required operator-test labels and exact source/reference content verification
 before using `verify-live`. Use its merged helper and updated workflow with
-`--expected-lifecycle` pointing to the reviewed original push reference.
+`--expected-lifecycle` pointing to the reviewed candidate push reference.
 
 ## 3. Qualify installation and catalog contents
 
