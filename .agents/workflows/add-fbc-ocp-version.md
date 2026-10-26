@@ -180,11 +180,11 @@ Completed tests use the same rule as `fbc_tests_passed`: finished passing aggreg
 conditions and a completion time for every scenario. The tenant's standard scenario
 retains `BuildPLRInProgress` after passing, so that marker counts only with this
 completion evidence.
-It links the original push build to its snapshot and image, checks effective build
+It links the candidate push build to its snapshot and image, checks effective build
 arguments and all four base annotations, then extracts each platform's catalog and
 compares every source catalog file with the pinned merged source and template/cutoff
 contract. For OCP 5+, the required injection task adds `lifecycle.json`. Supply
-`--expected-lifecycle` with a separately reviewed reference from that original
+`--expected-lifecycle` with a separately reviewed reference from that candidate
 build's digest-pinned lifecycle `SOURCE_ARTIFACT`. Confirm the TaskRun belongs to
 the expected push PipelineRun, succeeded, reports successful injection in
 `TEST_OUTPUT`, and uses the reviewed task/image pins. Record its artifact digest
@@ -226,7 +226,7 @@ printf 'Retain evidence and review reference: %s\n' "$EVIDENCE"
 This member path follows the current 5.0 build's source root and Dockerfile;
 recheck it if executed context/build arguments change. Retain the archive and
 TaskRun evidence, review the reference, then pass its path to
-`--expected-lifecycle`. Authenticated extraction from a qualifying original 5.0
+`--expected-lifecycle`. Authenticated extraction from a qualifying 5.0
 build remains to be verified when that build exists.
 
 [ta-create]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/create-oci.sh#L72
