@@ -18,6 +18,8 @@ help:
 	@echo "                         - Add FBC support for new OCP version in Konflux release data"
 	@echo "                           Creates overlays, tenant config, and RPA entries"
 	@echo "                           Example: make add-fbc-ocp-version OCP_VERSION=5.0 MIN_SUPPORTED_SUB=0.24"
+	@echo "                           PHASE=verify-live also takes EXPECTED_COMMIT=<40-char merged SHA> and,"
+	@echo "                           for OCP 5+, EXPECTED_LIFECYCLE=<path to reviewed lifecycle.json>"
 	@echo "  make create-fbc-releases VERSION=... [TYPE=stage|prod]"
 	@echo "                         - Create FBC releases for applicable OCP versions (requires oc login)"
 	@echo "                           Default TYPE is stage if not specified"

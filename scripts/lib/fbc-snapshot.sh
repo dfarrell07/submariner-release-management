@@ -45,6 +45,12 @@ fbc_catalog_bundle_digest() {
   esac
 }
 
+# GET a GitHub API URL; $2 is an optional token, passed through curl's stdin config.
+_fbc_github_get() {
+  printf '%s\n' "${2:+header = \"Authorization: Bearer $2\"}" |
+    curl --config - -fsS --connect-timeout 10 --max-time 30 "$1"
+}
+
 # Event names alone cannot establish main-branch provenance: retests can be PRs.
 declare -A _FBC_MERGED_REVISIONS=()
 fbc_revision_on_main() {
@@ -57,9 +63,10 @@ fbc_revision_on_main() {
   if [ -z "$token" ] && command -v gh >/dev/null 2>&1; then
     token=$(gh auth token 2>/dev/null || true)
   fi
-  comparison=$(printf '%s\n' "${token:+header = \"Authorization: Bearer $token\"}" |
-    curl --config - -fsS --connect-timeout 10 --max-time 30 \
-      "https://api.github.com/repos/stolostron/submariner-operator-fbc/compare/${revision}...main?per_page=1") || return 1
+  local url="https://api.github.com/repos/stolostron/submariner-operator-fbc/compare/${revision}...main?per_page=1"
+  # A stale or revoked token gets a 401 even for public data, so retry anonymously once.
+  comparison=$(_fbc_github_get "$url" "$token") ||
+    { [ -n "$token" ] && comparison=$(_fbc_github_get "$url" ""); } || return 1
   jq -e --arg revision "$revision" '
     .base_commit.sha == $revision and .merge_base_commit.sha == $revision and
     (.status == "ahead" or .status == "identical")
