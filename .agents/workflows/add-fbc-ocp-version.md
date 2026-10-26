@@ -266,12 +266,25 @@ standard scenario and 4.x operator scenarios must remain required.
 
 For the 0.3 install path, confirm access to its configured OpenShift CI cluster
 profile (the upstream default is `aws-konflux-prod`) before provisioning.
+A tenant that is not an owner of the profile in `openshift/release`
+(`cluster-profiles-config.yaml`) is rejected at once, but `provision-cluster`
+keeps polling the `InitializationFailed` phase for its full 2-hour timeout and
+then exits 255. The claim status dumped at the end of the step log shows the
+cause, for example `konflux cluster "kflux-prd-rh02" and tenant
+"submariner-tenant" don't own the cluster profile "aws-konflux-prod"`
+(`EphemeralClusterValidationFailure`). Fix ownership first; the OCP release
+check below only matters after it.
 The upstream pipeline requests the OCP `stable` channel for the fragment's
 version, which gets its first release (x.y.0) on GA day. Check
 `https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-5.0&arch=multi`.
 While it has no nodes, provisioning fails: rerun the scenario after GA. If a
 release is needed sooner, point the ITS at a temporary pipeline copy that
-requests `candidate`, and remove it at GA. Inspect the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
+requests `candidate`, and remove it at GA.
+Provisioning and deployment run only on push events, so retrigger a push
+snapshot; a PR-event pass skips all of it. The test and build PipelineRuns are
+pruned within hours, so save the `provision-cluster` step log and the claim
+status from the Konflux UI before they disappear.
+Inspect the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
 `pick-cluster-params`, `provision-cluster` and `deploy-operator`: the selected bundle
 digest/channel must be the approved one and `deploy-operator` must have executed
 successfully. Use the provisioned cluster's `oc get clusterversion version -o json`
