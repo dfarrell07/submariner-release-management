@@ -83,7 +83,7 @@ All four inspected release-data checkouts are clean. Cached main is `8c18efee295
 `submariner-fbc-5-0-20261026-144157-000` passed the build, but the optional operator scenario ended `TestFail`:
 `submariner-tenant` is not yet an owner of cluster profile `aws-konflux-prod`
 ([openshift/release #87176](https://github.com/openshift/release/pull/87176)), and `stable-5.0` has no releases.
-Its lifecycle task pin (`sha256:465d8c87…`) expires on 2026-11-22; bump it before then. The build and test PipelineRuns
+Four of its task pins expire between 2026-11-16 (`init`) and 2026-11-22; see section 2 of the rollout plan. The build and test PipelineRuns
 are already pruned from the cluster.
 
 Catalog/tooling PRs #76 and #81 are merged. The September implementation records are historical local evidence, not a current statement that no catalog or PR exists.

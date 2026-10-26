@@ -95,8 +95,10 @@ therefore expected, not optional. Bump the pins in a standalone FBC change (4.x
 pipelines have their own expiring pins, some as early as 2026-10-30), taking the
 current non-expiring digests from Conforma's trusted-task data
 (`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`) rather than
-copying digests from this plan. Merging that change starts a 5.0 push build; it
-is not itself qualifying unless the gates below can be met for it.
+copying digests from this plan. Merge it before 2026-11-16 regardless of
+install-path readiness, to keep the 5.0 pipeline releasable. Merging it starts
+a 5.0 push build, which is a placeholder rather than the qualifying build unless
+the gates below can be met for it.
 
 The candidate is the push build recorded in the candidate record: `13b7416`
 only if it is recovered as above, otherwise the first replacement build that
@@ -106,9 +108,12 @@ them, with logs and the lifecycle artifact digest, immediately after it
 completes. If they are pruned before installation and `verify-live` finish,
 build again once the install path is ready (cluster-profile access merged and
 either `stable-5.0` has nodes or a reviewed candidate-channel test approved);
-before that, its operator test fails the same way. A replacement creates a new
-snapshot, image and lifecycle artifact (and a new source SHA if it needs a
-commit), so it replaces the candidate record (source SHA, snapshot, image,
+before that, its operator test fails the same way. Start that qualifying build
+only when every install prerequisite is met, capture the run at once, and do the
+scenario rerun and `verify-live` the same day, or first establish a Tekton
+Results path. A rebuild needs a new commit to `main` that touches the 5.0
+build files. It creates a new source SHA, snapshot, image and lifecycle
+artifact, so it replaces the candidate record (source SHA, snapshot, image,
 lifecycle digest and `FBC_EXPECTED_COMMIT`) and must pass every gate again.
 
 FBC PR #82 has merged and its gating checks passed at the merged head.
