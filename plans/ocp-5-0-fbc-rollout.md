@@ -1,6 +1,6 @@
 # Submariner FBC rollout to OCP 5.0
 
-Reviewed October 22, 2026. Tracking: [ACM-48200][delivery]. Release management
+Reviewed October 26, 2026. Tracking: [ACM-48200][delivery]. Release management
 owns the automated installation test; QE follows the normal stage handoff.
 Use the [onboarding workflow][onboarding] for mechanics. Keep one candidate
 record linked from ACM-48200: bundle/channel, source SHA, push build, snapshot,
@@ -8,19 +8,31 @@ image, lifecycle reference, test results, release identities and QE approval.
 
 The initial candidate is Submariner **0.24.1**, channel **stable-0.24**, for
 OCP **5.0**. [FBC PR #81][catalog] merged the catalog and tooling;
-[FBC PR #82][pipelines] proposes the four-platform build (`amd64`, `arm64`,
+[FBC PR #82][pipelines] merged the four-platform build (`amd64`, `arm64`,
 `ppc64le`, `s390x`) using the OCP 5 RHEL9 registry base and lifecycle injection.
 Confirm the intended bundle digest against the approved component release
 before qualification. Product compatibility and lifecycle-support changes
 remain separate.
 
-At review, #82, the [cluster-profile PR][profile] and [helper PR #120][helper]
-remain drafts. Tenant resources and admissions have reconciled. The fresh
-[PR build][pr-build] passed on all four platforms; the optional operator scenario
-failed admission before execution. Reviewed source and server controls point to
-empty-to-null parameter conversion; the deployed controller revision was not
-captured. This is not installation evidence. The `stable-5.0` graph remains
-empty; candidate releases exist. Refresh these observations when executing the plan.
+Status as of October 26, 2026. Tenant resources and admissions have reconciled.
+FBC PR #82 merged as `13b7416`; its original push build produced snapshot
+`submariner-fbc-5-0-20261026-144157-000` and image digest
+`sha256:6bd0ce2161ac…` (the [PR build][pr-build] for head `897c64a` had already passed on all four platforms).
+The [cluster-profile PR][profile] and [helper PR #120][helper] are still open.
+
+The optional operator scenario now creates its PipelineRun: the tenant fix
+removing `CHANNEL_NAME` (release-data !24109) is deployed, and the first push
+run completed `get-unreleased-bundle` (channel `stable-0.24`, the 0.24.1 bundle) and
+`pick-cluster-params` (OCP 5.0, amd64). `provision-cluster` then failed
+validation: `konflux cluster "kflux-prd-rh02" and tenant "submariner-tenant"
+don't own the cluster profile "aws-konflux-prod"`
+(`EphemeralClusterValidationFailure`). The task kept polling the
+`InitializationFailed` phase for its full 2-hour timeout and exited 255, so the
+scenario ended `TestFail`. That is a profile-ownership failure, resolved only by
+the cluster-profile PR; it is not installation evidence and says nothing yet
+about the OCP release. The `stable-5.0` update graph still has no nodes
+(`candidate-5.0` has releases, for example `5.0.0-rc.7`). Refresh these
+observations when executing the plan.
 
 ## 1. Reconcile tenant resources and admissions
 
@@ -28,13 +40,14 @@ empty; candidate releases exist. Refresh these observations when executing the p
 Live account ownership, credential bindings and stage/prod admission matching
 are verified. Keep autorelease disabled.
 
-Review and reconcile the tenant follow-up removing the entire `CHANNEL_NAME`
-parameter from the 5.0 operator scenario. Reviewed integration-service source
-converts an empty ITS value to JSON `null`; server controls reproduce the same
-admission error for null. Verify the repair after reconciliation. Omission uses
-the upstream pipeline's empty-string default and preserves catalog-default
-selection. Removing only the value is insufficient. Regenerate the manifest
-from source and require hosted CI/review at the published head.
+The tenant follow-up removing the entire `CHANNEL_NAME` parameter from the 5.0
+operator scenario (release-data !24109) has merged and reconciled, and the
+first push run confirmed it: the scenario now creates its PipelineRun instead
+of failing admission. Reviewed integration-service source converts an empty ITS
+value to JSON `null`; server controls reproduced the same admission error for
+null. Omission uses the upstream pipeline's empty-string default and preserves
+catalog-default selection. Removing only the value is insufficient. Keep this
+shape in any regenerated manifest.
 
 For any new build, recheck the 5.0 Application, Component, ImageRepository,
 build-account ownership and image-push secret bindings. Check the registry
@@ -43,13 +56,12 @@ pulls in the eventual test. ServiceAccount existence alone is insufficient.
 Reconcile any bot-generated pipeline PR with #82 rather than merging two
 competing pipeline definitions.
 
-After the tenant fix reconciles, retry the operator scenario on the recorded
-PR snapshot to verify PipelineRun creation. Release qualification still needs
-the original merged-source push below. Both stage/prod ReleasePlans must remain
-matched before live verification and release.
+Release qualification needs the original merged-source push below. Both
+stage/prod ReleasePlans must remain matched before live verification and
+release.
 
-Progress the tenant fix, #120 review, cluster-profile access and OCP 5 release
-availability in parallel. Build readiness and installation have separate gates.
+Progress #120 review, cluster-profile access and OCP 5 release availability in
+parallel. Build readiness and installation have separate gates.
 
 ## 2. Build and identify the candidate
 
@@ -57,19 +69,44 @@ Before merging the candidate source, record whether all intended bundle and
 operand digests can be pulled from production or need approved 0.24 stage
 mirrors. Verify mappings and pull access if mirrors are needed. The install
 pipeline reads `.tekton/images-mirror-set.yaml` at that SHA; the current file
-targets 0.23.
+targets 0.23 only. The first push run was given that 0.23 mirror set, but it
+failed before any bundle or operand pull, so pull behavior is unobserved. Both
+5.0 catalog bundles are `registry.redhat.io` digests and the mirrors use
+`AllowContactingSource`; record the actual pull behavior of the installing run
+rather than assuming it. Any change to `images-mirror-set.yaml` triggers new
+builds of every FBC pipeline, including 5-0, and so replaces the candidate.
 
-Confirm the snapshot-linked build PipelineRun will remain available through
-installation and final `verify-live`; the helper needs its live resolved spec.
-Capture build/task/lifecycle evidence immediately. If the live run disappears,
-stop and review a supported retention or Tekton Results verification path;
-retained check/image evidence alone cannot satisfy the helper.
+Build PipelineRuns are short-lived. The push run for `13b7416`
+(`submariner-fbc-5-0-on-push-lcghf`) and its operator-test run were already gone
+from the cluster a few hours after they finished, before any of this evidence
+could be captured. The snapshot, its recorded image digest and the lifecycle
+artifact tag `13b7416f64ac909538ac5ec818ffcad7491f17ae.lifecycle` remain in
+quay. The helper needs the build's live resolved spec, so for the next
+candidate capture the PipelineRun, TaskRuns, logs and lifecycle artifact digest
+immediately after the build completes. For `13b7416`, either establish a
+reviewed Tekton Results (or equivalent) path that recovers the run, or treat it
+as unverifiable. A fresh push build changes the source SHA, so qualifying one
+replaces the candidate record (source SHA, snapshot, image, lifecycle digest and
+`FBC_EXPECTED_COMMIT`) and must pass every gate again. Do that only once
+cluster-profile access is merged and either `stable-5.0` has nodes or a
+reviewed candidate-channel test is approved; otherwise its operator test fails
+the same way. Retained check/image evidence alone cannot satisfy the helper.
 
-Obtain maintainer `lgtm`, clear #82's draft/WIP gate after review, and require
-successful required checks at its exact head before merging. Its reviewed PR
-build has passed; repeat it only when changes or failures require another run.
-Identify the original successful merged-source push PipelineRun, snapshot and
-immutable image.
+FBC PR #82 has merged; its gating checks passed at the merged head. Its original
+push build, snapshot and immutable image recorded above are the current
+candidate, unless the retention gate above forces a replacement.
+
+Several task pins in the merged 5.0 pipelines are marked with an `expires_on` date
+in Conforma's trusted-task data (checked October 26): `init` on 2026-11-16, and
+`git-clone-oci-ta`, `build-image-index` and `fbc-inject-lifecycle-oci-ta` on
+2026-11-22. After a pin's date, a build using it stops passing release policy, so
+the `13b7416` build cannot be released past 2026-11-16. Expect to rebuild: bump
+the pins in a standalone FBC change (4.x pipelines have their own expiring pins,
+some as early as 2026-10-30), and treat the resulting push build as the
+candidate to record and qualify, not an optional extra. Take the current
+non-expiring digests from Conforma's trusted-task data
+(`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`) rather than
+copying digests from this plan.
 Verify all four platforms, effective build arguments, OCP base annotations,
 catalog validation and lifecycle-task execution using the onboarding workflow.
 Retain resolved task/image identities and the policy used by the build.
@@ -89,8 +126,14 @@ before using `verify-live`. Use its merged helper and updated workflow with
 ## 3. Qualify installation and catalog contents
 
 Actual provisioning requires [cluster-profile access][profile] and an available
-requested OCP release. The reviewed upstream pipeline requests `stable`;
-recheck `stable-5.0` rather than assuming GA makes it available. If earlier
+requested OCP release, checked in that order because the profile check fails
+first: without access the claim is rejected within a second
+(`don't own the cluster profile "aws-konflux-prod"`) yet the task polls for its
+full 2-hour timeout before exiting 255. Provisioning runs only on push events;
+the PR-event `TestPassed` skips every install task, so it proves nothing here.
+The reviewed upstream pipeline requests `stable`;
+recheck `stable-5.0` (its graph had no nodes on October 26) rather than
+assuming GA makes it available. If earlier
 testing is needed, separately review a temporary candidate-channel pipeline
 and tenant resolver revision, selecting an approved exact prerelease with a
 removal plan. Verify the observed cluster version matches that selection.
@@ -110,8 +153,9 @@ the live 5.0 operator scenario required (`optional: "false"`) before final
 verification; review and reconcile it when the installation path is usable.
 Reuse a completed `TestPassed` run only if its candidate and test
 definition are unchanged and the installation evidence above is present.
-Otherwise, after existing tests finish, rerun the recorded snapshot using
-[Konflux instructions][rerun]; confirm its snapshot/scenario identities and
+Otherwise, after existing tests finish, rerun the scenario on the recorded
+push snapshot (not a new build, and never a PR-event snapshot, which skips
+installation) using [Konflux instructions][rerun]; confirm its snapshot/scenario identities and
 successful completion. Retain resolved wrapper/pipeline/StepAction revisions
 and image digests; their Git resolver chain follows `main`.
 
@@ -159,7 +203,7 @@ under [OPGM-261][compatibility] remain separate work.
 [delivery]: https://redhat.atlassian.net/browse/ACM-48200
 [catalog]: https://github.com/stolostron/submariner-operator-fbc/pull/81
 [pipelines]: https://github.com/stolostron/submariner-operator-fbc/pull/82
-[pr-build]: https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/pipelinerun/submariner-fbc-5-0-on-pull-request-68kcc
+[pr-build]: https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/pipelinerun/submariner-fbc-5-0-on-pull-request-npbx4
 [profile]: https://github.com/openshift/release/pull/87176
 [helper]: https://github.com/stolostron/submariner-release-management/pull/120
 [tenant]: https://gitlab.cee.redhat.com/releng/konflux-release-data/-/merge_requests/23786
