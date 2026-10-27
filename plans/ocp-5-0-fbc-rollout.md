@@ -88,8 +88,8 @@ unless a reviewed Tekton Results (or equivalent) path recovers its run.
 Several task pins are marked with an `expires_on` date in Conforma's legacy
 trusted-task list (checked October 26): in the merged 5.0 pipelines `init` on
 2026-11-16, and `git-clone-oci-ta`, `build-image-index` (an 11-18 record also
-exists) and `fbc-inject-lifecycle-oci-ta` on 2026-11-22; the 4.x pipelines have
-earlier dates, from 2026-10-30. These dates do not block release under today's
+exists) and `fbc-inject-lifecycle-oci-ta` on 2026-11-22; until fbc #86 merges, the
+4.x pipelines have earlier dates, from 2026-10-30. These dates do not block release under today's
 policy: the `fbc-standard` and `fbc-stage` policies load `policy-data`, which has
 `trusted_task_rules_enabled: true`, and when rules data is present the policy
 checks task versions against allow and deny rules and does not consult the expiry
