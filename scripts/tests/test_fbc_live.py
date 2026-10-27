@@ -399,6 +399,31 @@ class ImageContents(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "catalog differs"):
                     mod.verify_catalog_images("example/image", manifests, expected, ())
 
+    def test_lifecycle_bytes_are_compared_directly_not_only_by_git_hash(self):
+        """A weak or colliding hash must not let changed lifecycle bytes through."""
+        lifecycle = b'{"schema": "reference"}'
+        manifests = [
+            {"digest": "sha256:" + "a" * 64, "platform": {"architecture": "amd64"}}
+        ]
+        changed = {"value": lifecycle}
+
+        def extract(*args, **kwargs):
+            directory = Path(args[args.index("--path") + 1].split(":", 1)[1])
+            (directory / "lifecycle.json").write_bytes(changed["value"])
+
+        with (
+            patch.object(mod, "run", side_effect=extract),
+            patch.object(mod, "validate_catalog_contents"),
+            patch.object(mod, "git_blob", return_value="c" * 40),
+        ):
+            self.assertEqual(
+                mod.verify_catalog_images("example/image", manifests, {}, (), lifecycle),
+                ["amd64"],
+            )
+            changed["value"] = lifecycle + b" "
+            with self.assertRaisesRegex(ValueError, "differs from the reviewed"):
+                mod.verify_catalog_images("example/image", manifests, {}, (), lifecycle)
+
     def test_lifecycle_reference_rejects_wrong_packages_and_malformed_json(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "lifecycle.json"

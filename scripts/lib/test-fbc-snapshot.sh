@@ -146,7 +146,8 @@ for mutation in \
   '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[1].completionTime = "" | tojson)' \
   '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[1].completionTime = 123 | tojson)' \
   '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[0].scenario = .[1].scenario | tojson)' \
-  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[0].scenario = "unrelated" | tojson)'; do
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[0].scenario = "unrelated" | tojson)' \
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | . + [.[1]] | tojson)'; do
   assert_eq "reject $mutation" "$(passes "$(jq -c "$mutation" <<< "$snapshot")")" reject
 done
 markers=$(tests_json BuildPLRInProgress BuildPLRInProgress)

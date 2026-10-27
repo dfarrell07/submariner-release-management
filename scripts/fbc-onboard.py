@@ -1454,6 +1454,13 @@ def verify_catalog_images(image, manifests, expected, contract, lifecycle=None):
                 actual == expected,
                 f"Published {architecture} catalog differs from the expected merged source",
             )
+            # The reviewed reference is the integrity anchor, so compare its bytes directly
+            # instead of relying on Git's SHA-1 blob hash alone.
+            require(
+                lifecycle is None
+                or (directory / "lifecycle.json").read_bytes() == lifecycle,
+                f"Published {architecture} lifecycle.json differs from the reviewed reference",
+            )
             validate_catalog_contents(directory, *contract)
             checked.append(architecture)
     return checked
