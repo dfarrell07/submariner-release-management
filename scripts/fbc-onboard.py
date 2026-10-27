@@ -1608,6 +1608,7 @@ def verify_live(args, base_image):
         ValueError,
         KeyError,
         TypeError,
+        AttributeError,
         OSError,
         subprocess.CalledProcessError,
     ) as error:
@@ -1671,9 +1672,14 @@ def verify_live(args, base_image):
             candidates, key=lambda snap: snap["metadata"]["creationTimestamp"]
         )
         result["snapshot"] = snapshot["metadata"]["name"]
-        tests = json.loads(
-            snapshot["metadata"]["annotations"]["test.appstudio.openshift.io/status"]
+        status_annotation = (snapshot["metadata"].get("annotations") or {}).get(
+            "test.appstudio.openshift.io/status"
         )
+        require(
+            status_annotation,
+            "Snapshot has no test status annotation yet (tests have not started)",
+        )
+        tests = json.loads(status_annotation)
         names = [test["scenario"] for test in tests]
         required = {
             f"submariner-fbc-{kind}-{args.ocp}" for kind in ("standard", "operator")
@@ -1684,10 +1690,11 @@ def verify_live(args, base_image):
             and snapshot_tests_complete(snapshot, tests),
             "Required snapshot tests are missing or incomplete",
         )
-        build = get(
-            "pipelinerun",
-            snapshot["metadata"]["labels"]["appstudio.openshift.io/build-pipelinerun"],
+        build_name = (snapshot["metadata"].get("labels") or {}).get(
+            "appstudio.openshift.io/build-pipelinerun"
         )
+        require(build_name, "Snapshot has no build-pipelinerun label")
+        build = get("pipelinerun", build_name)
         require(
             any(
                 c["type"] == "Succeeded" and c["status"] == "True"
@@ -1826,6 +1833,7 @@ def verify_live(args, base_image):
         ValueError,
         KeyError,
         TypeError,
+        AttributeError,
         OSError,
         subprocess.CalledProcessError,
     ) as error:

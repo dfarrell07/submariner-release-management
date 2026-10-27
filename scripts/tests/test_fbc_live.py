@@ -227,6 +227,26 @@ class LiveEvidence(unittest.TestCase):
         )
         self.assertTrue(self.verify()["build_ready"])
 
+    def test_unannotated_or_null_snapshots_fail_with_a_clear_json_error(self):
+        # A fresh snapshot has no test annotation yet, and an API object may carry nulls.
+        del self.snapshot["metadata"]["annotations"]
+        result = self.verify()
+        self.assertFalse(result["build_ready"])
+        self.assertIn("no test status annotation", result["errors"][0])
+        self.snapshot["metadata"]["annotations"] = {
+            "test.appstudio.openshift.io/status": json.dumps(self.tests)
+        }
+        del self.snapshot["metadata"]["labels"][
+            "appstudio.openshift.io/build-pipelinerun"
+        ]
+        result = self.verify()
+        self.assertFalse(result["build_ready"])
+        self.assertIn("no build-pipelinerun label", result["errors"][0])
+        self.snapshot["status"] = None
+        result = self.verify()
+        self.assertFalse(result["build_ready"])
+        self.assertTrue(result["errors"])
+
     def test_unmerged_commit_is_never_ready(self):
         self.require_merged_commit.side_effect = ValueError("not on main")
         self.assertFalse(self.verify()["build_ready"])
