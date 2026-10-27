@@ -124,7 +124,7 @@
     "kind": "IntegrationTestScenario",
     "metadata": {
       "labels": {
-        "test.appstudio.openshift.io/optional": "false"
+        "test.appstudio.openshift.io/optional": "true"
       },
       "name": "submariner-fbc-operator-5-0",
       "namespace": "submariner-tenant"
@@ -141,10 +141,6 @@
         {
           "name": "PACKAGE_NAME",
           "value": "submariner"
-        },
-        {
-          "name": "CHANNEL_NAME",
-          "value": ""
         },
         {
           "name": "OCI_REF",
@@ -174,7 +170,8 @@
             "value": "pipelineruns/deploy-fbc-operator/0.2/deploy-fbc-operator-run.yaml"
           }
         ],
-        "resolver": "git"
+        "resolver": "git",
+        "resourceKind": "pipelinerun"
       }
     }
   },

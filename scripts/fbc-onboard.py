@@ -241,8 +241,23 @@ def sequence_item(text, keys, item):
     return candidate
 
 
-def add_resource(path, resource):
+def add_resource(path, resource, after=None):
     before = path.read_text()
+    current = yaml.safe_load(before) or {}
+    if resource in (current.get("resources") or []):
+        return
+    match = after and re.search(
+        rf"^([ \t]*)- {re.escape(after)}[ \t]*(#.*)?$", before, re.MULTILINE
+    )
+    if match:
+        end_line = match.end()
+        candidate = (
+            before[:end_line] + f"\n{match.group(1)}- {resource}" + before[end_line:]
+        )
+        expected = yaml.safe_load(candidate)
+        if expected and resource in expected.get("resources", []):
+            atomic_text(path, candidate)
+            return
     candidate = sequence_item(before, ["resources"], resource)
     if candidate != before:
         atomic_text(path, candidate)
@@ -298,9 +313,28 @@ def operator_its_patch(text, base, version):
                 ]
             )
 
-    parameter(["spec", "params"], "CHANNEL_NAME", "")
-    if int(version.split("-")[0]) >= 5:
+    def field(path, current, value):
+        # current is None when the base omits the field.
+        if current == value:
+            return
+        op = "add" if current is None else "replace"
+        expected = {"op": op, "path": path, "value": value}
+        existing = [op for op in patches if op.get("path") == path]
+        if existing:
+            require(existing == [expected], f"Conflicting ITS patch: {path}")
+        else:
+            additions.append(expected)
+
+    ocp5 = int(version.split("-")[0]) >= 5
+    if not ocp5:
+        parameter(["spec", "params"], "CHANNEL_NAME", "")
+    if ocp5:
         parameter(["spec", "resolverRef", "params"], "pathInRepo", OPERATOR_ITS_5)
+        field(
+            "/spec/resolverRef/resourceKind",
+            base["spec"].get("resolverRef", {}).get("resourceKind"),
+            "pipelinerun",
+        )
         key = {"name": "CREDENTIALS_SECRET_KEY", "value": ".dockerconfigjson"}
         if any(item.get("name") == key["name"] for item in base["spec"]["params"]):
             parameter(["spec", "params"], key["name"], key["value"])
@@ -316,6 +350,44 @@ def operator_its_patch(text, base, version):
                 require(existing == [expected], "Conflicting ITS credential-key patch")
             else:
                 additions.append(expected)
+        field(
+            "/metadata/labels/test.appstudio.openshift.io~1optional",
+            base.get("metadata", {})
+            .get("labels", {})
+            .get("test.appstudio.openshift.io/optional"),
+            "true",
+        )
+    if ocp5:
+        indices = [
+            i
+            for i, item in enumerate(base["spec"]["params"])
+            if item.get("name") == "CHANNEL_NAME"
+        ]
+        require(len(indices) == 1, "Expected one base ITS parameter: CHANNEL_NAME")
+        prefix = f"/spec/params/{indices[0]}"
+        channel_test = {"op": "test", "path": prefix + "/name", "value": "CHANNEL_NAME"}
+        channel_remove = {"op": "remove", "path": prefix}
+        channel_paths = {prefix, prefix + "/name", prefix + "/value"}
+        inherited = [op for op in patches if op.get("path") in channel_paths]
+        require(
+            all(
+                op
+                in (
+                    channel_test,
+                    channel_remove,
+                    {"op": "replace", "path": prefix + "/value", "value": ""},
+                )
+                for op in inherited
+            ),
+            "Conflicting ITS patch: CHANNEL_NAME",
+        )
+        # Remove last so inherited OCI_REF/secret patches keep their base indices.
+        # Omission inherits the reviewed 0.3 pipeline's empty default. Inspected
+        # integration-service source converts empty ITS values to null.
+        patches = [op for op in patches if op.get("path") not in channel_paths]
+        return "---\n" + yaml.safe_dump(
+            patches + additions + [channel_test, channel_remove], sort_keys=False
+        )
     if additions:
         text = (text.rstrip() + "\n" if patches else "---\n") + yaml.safe_dump(
             additions, sort_keys=False
@@ -362,6 +434,7 @@ def prepare_tenant(root, version, previous, kustomize=None):
         add_resource(
             stage / registration,
             f"overlay/application-submariner-fbc/{version}-overlay",
+            after=f"overlay/application-submariner-fbc/{previous}-overlay",
         )
         changed = stage / "changed-tenants"
         changed.write_text("cluster/kflux-prd-rh02/tenants/submariner-tenant\n")
@@ -486,10 +559,15 @@ def validate_tenant_objects(objects, version):
         )
     for scenario in ("standard", "operator"):
         its = objects["IntegrationTestScenario", f"submariner-fbc-{scenario}-{version}"]
+        allowed_optional = (
+            {"true", "false"}
+            if (scenario == "operator" and int(version.split("-")[0]) >= 5)
+            else {"false"}
+        )
         require(
             its["metadata"]["labels"].get("test.appstudio.openshift.io/optional")
-            == "false",
-            f"Optional {scenario} scenario",
+            in allowed_optional,
+            f"Wrong {scenario} scenario optional label",
         )
         require(
             [context["name"] for context in its["spec"]["contexts"]]
@@ -551,8 +629,11 @@ def validate_tenant_objects(objects, version):
         params["CREDENTIALS_SECRET_NAME"] == f"imagerepository-{app}-image-push",
         "Wrong ITS secret",
     )
-    require(params["CHANNEL_NAME"] == "", "ITS must use the catalog default channel")
     if int(version.split("-")[0]) >= 5:
+        require(
+            "CHANNEL_NAME" not in params,
+            "OCP 5+ ITS must omit CHANNEL_NAME to inherit the pipeline default",
+        )
         refs = named_values(
             operator["spec"]["resolverRef"]["params"], "operator ITS resolver params"
         )
@@ -561,8 +642,16 @@ def validate_tenant_objects(objects, version):
             "OCP 5+ requires the reviewed 0.3 install pipeline wrapper",
         )
         require(
+            operator["spec"]["resolverRef"].get("resourceKind") == "pipelinerun",
+            "OCP 5+ ITS must set resolverRef resourceKind to pipelinerun",
+        )
+        require(
             params.get("CREDENTIALS_SECRET_KEY") == ".dockerconfigjson",
             "OCP 5+ ITS must select the image-push secret's .dockerconfigjson key",
+        )
+    else:
+        require(
+            params["CHANNEL_NAME"] == "", "ITS must use the catalog default channel"
         )
     require(
         operator["spec"]["contexts"][0]["name"] == f"component_{app}",
@@ -811,7 +900,6 @@ def validate_pipeline_execution(definition, params):
             "IMAGE": "$(params.output-image)",
             "IMAGES": ["$(tasks.build-images.results.IMAGE_REF[*])"],
             "ALWAYS_BUILD_INDEX": "$(params.build-image-index)",
-            "IMAGE_EXPIRES_AFTER": "$(params.image-expires-after)",
         },
     }
     for name in (
@@ -1291,8 +1379,49 @@ def merged_catalog_contract(commit, version, minimum=None):
         return catalog_contract(root, version, minimum)
 
 
-def verify_catalog_images(image, manifests, expected, contract):
-    """Reuse oc image extraction, comparing every platform's complete catalog to Git."""
+def read_expected_lifecycle(path):
+    """Read an explicitly reviewed reference, not lifecycle data from the image under test."""
+    require(
+        path.is_file() and not path.is_symlink(),
+        "Lifecycle reference must be a regular file",
+    )
+    content = path.read_bytes()
+
+    def unique_fields(pairs):
+        values = {}
+        for name, value in pairs:
+            require(name not in values, f"Duplicate lifecycle field: {name}")
+            values[name] = value
+        return values
+
+    def invalid_constant(value):
+        raise ValueError(f"Invalid lifecycle JSON constant: {value}")
+
+    data = json.loads(
+        content, object_pairs_hook=unique_fields, parse_constant=invalid_constant
+    )
+    require(
+        isinstance(data, dict)
+        and data.get("schema") == "io.openshift.operators.lifecycles.v1alpha1"
+        and data.get("package") == "submariner"
+        and isinstance(data.get("versions"), list)
+        and data["versions"]
+        and all(isinstance(version, dict) for version in data["versions"]),
+        "Expected one Submariner lifecycle JSON object with versions",
+    )
+    return content
+
+
+def verify_catalog_images(image, manifests, expected, contract, lifecycle=None):
+    """Match source files exactly, plus the explicitly reviewed generated lifecycle."""
+    expected = dict(expected)
+    if lifecycle is not None:
+        digest = git_blob(lifecycle)
+        require(
+            "lifecycle.json" not in expected or expected["lifecycle.json"] == digest,
+            "Lifecycle reference conflicts with the committed lifecycle file",
+        )
+        expected["lifecycle.json"] = digest
     checked = []
     with tempfile.TemporaryDirectory(prefix="fbc-live-content-") as temporary:
         for manifest in manifests:
@@ -1325,9 +1454,44 @@ def verify_catalog_images(image, manifests, expected, contract):
                 actual == expected,
                 f"Published {architecture} catalog differs from the expected merged source",
             )
+            # The reviewed reference is the integrity anchor, so compare its bytes directly
+            # instead of relying on Git's SHA-1 blob hash alone.
+            require(
+                lifecycle is None
+                or (directory / "lifecycle.json").read_bytes() == lifecycle,
+                f"Published {architecture} lifecycle.json differs from the reviewed reference",
+            )
             validate_catalog_contents(directory, *contract)
             checked.append(architecture)
     return checked
+
+
+def snapshot_tests_complete(snapshot, tests):
+    """Match fbc_tests_passed: retained BuildPLRInProgress markers need completion evidence."""
+
+    def condition(kind, reason):
+        matches = [
+            c
+            for c in snapshot.get("status", {}).get("conditions", [])
+            if c.get("type") == kind
+        ]
+        return (
+            len(matches) == 1
+            and matches[0].get("status") == "True"
+            and matches[0].get("reason") == reason
+        )
+
+    return (
+        condition("AppStudioIntegrationStatus", "Finished")
+        and condition("AppStudioTestSucceeded", "Passed")
+        and all(
+            isinstance(test.get("completionTime"), str)
+            and test["completionTime"]
+            and test.get("status")
+            in ("TestPassed", "TestWarning", "BuildPLRInProgress")
+            for test in tests
+        )
+    )
 
 
 def verify_live(args, base_image):
@@ -1444,6 +1608,7 @@ def verify_live(args, base_image):
         ValueError,
         KeyError,
         TypeError,
+        AttributeError,
         OSError,
         subprocess.CalledProcessError,
     ) as error:
@@ -1451,6 +1616,18 @@ def verify_live(args, base_image):
 
     try:
         validate_base_reference(base_image, args.ocp)
+        lifecycle = None
+        lifecycle_path = getattr(args, "expected_lifecycle", None)
+        if int(args.ocp.split("-")[0]) >= 5:
+            require(
+                lifecycle_path is not None,
+                "OCP 5+ verify-live requires --expected-lifecycle from the reviewed "
+                "digest-pinned lifecycle task artifact",
+            )
+            lifecycle = read_expected_lifecycle(lifecycle_path)
+            result["lifecycle_reference_sha256"] = hashlib.sha256(lifecycle).hexdigest()
+        else:
+            require(lifecycle_path is None, "Lifecycle references require OCP 5+")
         require_merged_commit(args.expected_commit)
         result["merged_on_main"] = True
         expected_files = catalog_git_files(args.expected_commit, args.ocp)
@@ -1495,9 +1672,14 @@ def verify_live(args, base_image):
             candidates, key=lambda snap: snap["metadata"]["creationTimestamp"]
         )
         result["snapshot"] = snapshot["metadata"]["name"]
-        tests = json.loads(
-            snapshot["metadata"]["annotations"]["test.appstudio.openshift.io/status"]
+        status_annotation = (snapshot["metadata"].get("annotations") or {}).get(
+            "test.appstudio.openshift.io/status"
         )
+        require(
+            status_annotation,
+            "Snapshot has no test status annotation yet (tests have not started)",
+        )
+        tests = json.loads(status_annotation)
         names = [test["scenario"] for test in tests]
         required = {
             f"submariner-fbc-{kind}-{args.ocp}" for kind in ("standard", "operator")
@@ -1505,13 +1687,14 @@ def verify_live(args, base_image):
         require(
             required.issubset(names)
             and len(names) == len(set(names))
-            and all(test["status"] == "TestPassed" for test in tests),
+            and snapshot_tests_complete(snapshot, tests),
             "Required snapshot tests are missing or incomplete",
         )
-        build = get(
-            "pipelinerun",
-            snapshot["metadata"]["labels"]["appstudio.openshift.io/build-pipelinerun"],
+        build_name = (snapshot["metadata"].get("labels") or {}).get(
+            "appstudio.openshift.io/build-pipelinerun"
         )
+        require(build_name, "Snapshot has no build-pipelinerun label")
+        build = get("pipelinerun", build_name)
         require(
             any(
                 c["type"] == "Succeeded" and c["status"] == "True"
@@ -1643,13 +1826,14 @@ def verify_live(args, base_image):
                 )
             )
         result["catalog_content_verified"] = verify_catalog_images(
-            image, children, expected_files, contract
+            image, children, expected_files, contract, lifecycle
         )
         result.update(build_ready=True, image=image, platforms=sorted(arches))
     except (
         ValueError,
         KeyError,
         TypeError,
+        AttributeError,
         OSError,
         subprocess.CalledProcessError,
     ) as error:
@@ -1890,7 +2074,17 @@ def main(argv=None):
     parser.add_argument(
         "--expected-commit", help="merged commit required for live verification"
     )
+    parser.add_argument(
+        "--expected-lifecycle",
+        type=Path,
+        help="reviewed lifecycle.json from the original build's digest-pinned lifecycle "
+        "task artifact (required for OCP 5+ verify-live)",
+    )
     args = parser.parse_args(argv)
+    require(
+        args.expected_lifecycle is None or args.phase == "verify-live",
+        "--expected-lifecycle is only supported with --phase verify-live",
+    )
     if args.legacy_cutoff:
         require(
             not args.min_supported_sub,

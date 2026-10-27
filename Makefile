@@ -18,6 +18,8 @@ help:
 	@echo "                         - Add FBC support for new OCP version in Konflux release data"
 	@echo "                           Creates overlays, tenant config, and RPA entries"
 	@echo "                           Example: make add-fbc-ocp-version OCP_VERSION=5.0 MIN_SUPPORTED_SUB=0.24"
+	@echo "                           PHASE=verify-live also takes EXPECTED_COMMIT=<40-char merged SHA> and,"
+	@echo "                           for OCP 5+, EXPECTED_LIFECYCLE=<path to reviewed lifecycle.json>"
 	@echo "  make create-fbc-releases VERSION=... [TYPE=stage|prod]"
 	@echo "                         - Create FBC releases for applicable OCP versions (requires oc login)"
 	@echo "                           Default TYPE is stage if not specified"
@@ -122,7 +124,7 @@ configure-downstream:
 
 add-fbc-ocp-version:
 	@test -n "$(OCP_VERSION)" || (echo "OCP_VERSION required (example: 5.0)"; exit 1)
-	./scripts/add-fbc-ocp-version.sh "$(OCP_VERSION)" $(if $(MIN_SUB),"$(MIN_SUB)") $(if $(MIN_SUPPORTED_SUB),--min-supported-sub "$(MIN_SUPPORTED_SUB)") --phase "$(if $(PHASE),$(PHASE),plan)" $(if $(WORKSPACE),--workspace "$(WORKSPACE)") $(if $(RELEASE_DATA_REPO),--release-data-repo "$(RELEASE_DATA_REPO)") $(if $(FBC_REPO),--fbc-repo "$(FBC_REPO)") $(if $(RELEASE_DATA_REF),--release-data-ref "$(RELEASE_DATA_REF)") $(if $(FBC_REF),--fbc-ref "$(FBC_REF)") $(if $(BASE_REF),--base "$(BASE_REF)") $(if $(OVERLAY_PREVIOUS),--overlay-previous "$(OVERLAY_PREVIOUS)") $(if $(PIPELINE_PREVIOUS),--pipeline-previous "$(PIPELINE_PREVIOUS)") $(if $(BASE_IMAGE),--base-image "$(BASE_IMAGE)") $(if $(KUSTOMIZE),--kustomize "$(KUSTOMIZE)") $(if $(EXPECTED_COMMIT),--expected-commit "$(EXPECTED_COMMIT)")
+	./scripts/add-fbc-ocp-version.sh "$(OCP_VERSION)" $(if $(MIN_SUB),"$(MIN_SUB)") $(if $(MIN_SUPPORTED_SUB),--min-supported-sub "$(MIN_SUPPORTED_SUB)") --phase "$(if $(PHASE),$(PHASE),plan)" $(if $(WORKSPACE),--workspace "$(WORKSPACE)") $(if $(RELEASE_DATA_REPO),--release-data-repo "$(RELEASE_DATA_REPO)") $(if $(FBC_REPO),--fbc-repo "$(FBC_REPO)") $(if $(RELEASE_DATA_REF),--release-data-ref "$(RELEASE_DATA_REF)") $(if $(FBC_REF),--fbc-ref "$(FBC_REF)") $(if $(BASE_REF),--base "$(BASE_REF)") $(if $(OVERLAY_PREVIOUS),--overlay-previous "$(OVERLAY_PREVIOUS)") $(if $(PIPELINE_PREVIOUS),--pipeline-previous "$(PIPELINE_PREVIOUS)") $(if $(BASE_IMAGE),--base-image "$(BASE_IMAGE)") $(if $(KUSTOMIZE),--kustomize "$(KUSTOMIZE)") $(if $(EXPECTED_COMMIT),--expected-commit "$(EXPECTED_COMMIT)") $(if $(EXPECTED_LIFECYCLE),--expected-lifecycle "$(EXPECTED_LIFECYCLE)")
 
 .PHONY: test-fbc-onboarding
 test-fbc-onboarding:

@@ -24,6 +24,17 @@ digest and provisional status in the change description. Reuse real catalog
 inputs and complete preparation and image testing. This does not establish
 product compatibility or require changing the bundle's compatibility metadata.
 
+To resolve the stream, compare with the ACM release that ships it (Submariner
+0.N pairs with ACM 2.(N-7); for example, ACM 2.17 is in the v5.0 index and its
+submariner-addon subscribes to `stable-0.24`). ART's FBC targets are
+`OCP_TARGET_VERSIONS` in `group.yml` on the `acm-<X.Y>` branch of
+[ocp-build-data](https://github.com/openshift-eng/ocp-build-data), and that
+ACM branch's submariner-addon `defaultCatalogChannel` is the channel it subscribes
+to. Include a stream only where its ACM release targets the OCP version, and keep
+that channel present. Check the production index too, for example
+`registry.redhat.io/redhat/redhat-operator-index:v5.0`. If the ACM packages are in
+that index but `submariner` is not, the addon has a gap.
+
 The plan reports the local base commits and explicitly does not claim remote
 freshness. Fetch both repositories before preparation. A failed fetch blocks
 claims of freshness; cached bases can still support a clearly identified draft.
@@ -85,7 +96,10 @@ The tenant change adds eight overlay files, registers the overlay, runs the
 repository's `build-manifests.sh` for this tenant, and validates seven generated
 resource identities and their application/image/test relationships. The new
 operator ITS uses the package default channel, avoiding the nonexistent `stable`
-channel. New 5.x overlays use the upstream `deploy-fbc-operator` 0.3 pipeline via
+channel. New 5.x overlays omit the entire `CHANNEL_NAME` parameter to inherit
+the reviewed 0.3 pipeline's empty default. An explicit empty ITS value becomes
+null during integration-service materialization and Tekton rejects the run.
+New 5.x overlays use the upstream `deploy-fbc-operator` 0.3 pipeline via
 `pipelineruns/deploy-fbc-operator/0.2/deploy-fbc-operator-run.yaml`, which supplies
 its workspace. They explicitly select the image-push secret's `.dockerconfigjson`
 key. The existing 4.x overlays keep their selected install path. Both release plans
@@ -153,18 +167,108 @@ skill's explicit target-base test and Konflux build provide the OCP-base evidenc
 
 `--phase verify --workspace ... --min-supported-sub ...` checks local artifacts.
 It explicitly reports deployment, multiarch build, and runtime status as unverified.
-After deployment, run the read-only live checks with the expected merged SHA:
+After deployment, run the read-only live checks with the expected merged SHA.
+Run from the release-management repo root, logged in to the Konflux cluster
+(`oc login --web https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443/`, with
+access to `submariner-tenant`), with `gh` authenticated and `skopeo` installed; the
+lifecycle recipe below also needs `oras` and pull access to
+`quay.io/redhat-user-workloads/submariner-tenant`. The check reads the build's live
+PipelineRun and TaskRuns, which are pruned within hours, so run it and save the
+lifecycle artifact soon after the build completes.
 
 ```bash
 ./scripts/add-fbc-ocp-version.sh 5.0 --phase verify-live \
-  --expected-commit <40-character-merged-commit>
+  --expected-commit <40-character-merged-commit> \
+  --expected-lifecycle /path/to/reviewed/lifecycle.json
 ```
 
 This checks live resource relationships, actual matched RPA contracts, build-account
 ownership and secret bindings, completed snapshot tests, and merged-main ancestry.
-It links the original push build to its snapshot and image, checks effective build
+Completed tests use the same rule as `fbc_tests_passed`: finished passing aggregate
+conditions and a completion time for every scenario. The tenant's standard scenario
+retains `BuildPLRInProgress` after passing, so that marker counts only with this
+completion evidence.
+It links the candidate push build to its snapshot and image, checks effective build
 arguments and all four base annotations, then extracts each platform's catalog and
-compares every file with the pinned merged source and template/cutoff contract.
+compares every source catalog file with the pinned merged source and template/cutoff
+contract. For OCP 5+, the required injection task adds `lifecycle.json`. Supply
+`--expected-lifecycle` with a separately reviewed reference from that candidate
+build's digest-pinned lifecycle `SOURCE_ARTIFACT`. Confirm the TaskRun belongs to
+the expected push PipelineRun, succeeded, reports successful injection in
+`TEST_OUTPUT`, and uses the reviewed task/image pins. Record its artifact digest
+and the reference file's SHA256 with the rollout evidence. Do not create the
+reference by extracting it from the catalog image being verified: that would only
+compare the image with itself.
+
+To find the artifact, take the push PipelineRun name from the snapshot's
+`appstudio.openshift.io/build-pipelinerun` label and read the lifecycle TaskRun's
+results while it still exists:
+
+```bash
+PLR=<push PipelineRun name>
+oc get taskrun -n submariner-tenant \
+  -l "tekton.dev/pipelineRun=$PLR,tekton.dev/pipelineTask=fbc-inject-lifecycle" \
+  -o jsonpath='{range .items[*].status.results[*]}{.name}={.value}{"\n"}{end}'
+```
+
+This prints the `SOURCE_ARTIFACT` and `TEST_OUTPUT` results. If the TaskRun is gone, the
+`<source-sha>.lifecycle` tag in the FBC component's quay repository holds a
+single-layer artifact; its layer digest is the blob digest for the recipe below:
+
+```bash
+skopeo inspect --raw docker://quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-5-0:<source-sha>.lifecycle |
+  jq -r '.layers[0].digest'
+```
+
+Treat that as review evidence only: it cannot show that the artifact came from the
+candidate build's lifecycle TaskRun, so the ownership and `TEST_OUTPUT` checks above
+can no longer be made and the build stays unverified.
+
+The pinned artifact utility stores a gzip tar **blob**, identified as
+`oci:<repository>@sha256:<archive-digest>` ([archive creation][ta-create],
+[restoration][ta-use]). Use an existing ORAS registry login with pull access to
+that repository; set `REGISTRY_AUTH_FILE` to its authentication file and
+`SOURCE_ARTIFACT` to the checked TaskRun's output URI. Run this Bash recipe to
+verify the archive digest and copy only the expected regular-file member:
+
+```bash
+(
+set -euo pipefail
+[[ "$SOURCE_ARTIFACT" =~ ^oci:[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]
+EVIDENCE=$(mktemp -d)
+oras blob fetch --registry-config "$REGISTRY_AUTH_FILE" \
+  --output "$EVIDENCE/lifecycle-source.tar.gz" "${SOURCE_ARTIFACT#oci:}"
+printf '%s  %s\n' "${SOURCE_ARTIFACT##*@sha256:}" \
+  "$EVIDENCE/lifecycle-source.tar.gz" | sha256sum --check -
+python3 - "$EVIDENCE/lifecycle-source.tar.gz" "$EVIDENCE/lifecycle.json" <<'PY'
+import pathlib, sys, tarfile
+with tarfile.open(sys.argv[1], "r:gz") as archive:
+    members = [m for m in archive.getmembers()
+               if m.name == "./catalog-5-0/lifecycle.json"]
+    if len(members) != 1 or not members[0].isfile():
+        raise SystemExit("Expected one regular ./catalog-5-0/lifecycle.json")
+    with archive.extractfile(members[0]) as source:
+        pathlib.Path(sys.argv[2]).write_bytes(source.read())
+PY
+sha256sum "$EVIDENCE/lifecycle.json"
+printf 'Retain evidence and review reference: %s\n' "$EVIDENCE"
+)
+```
+
+This member path follows the current 5.0 build's source root and Dockerfile;
+recheck it if executed context/build arguments change. Retain the archive and
+TaskRun evidence, review the reference, then pass its path to
+`--expected-lifecycle`. Authenticated extraction from a qualifying 5.0
+build remains to be verified when that build exists.
+
+[ta-create]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/create-oci.sh#L82-L93
+[ta-use]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/use-oci.sh#L82-L83
+
+The verifier checks the reference's Submariner schema/package, records its SHA256,
+and requires the exact reference bytes on all four platforms. Every other file
+still has to match Git exactly; missing lifecycle data, additional files and
+symlinks fail. The reference is an explicit reviewed input; the verifier does not
+authenticate its external provenance or establish lifecycle support policy.
 Configuration and build results remain separate when one check is unavailable.
 It still reports runtime compatibility as unverified. For scoped release creation,
 set `FBC_EXPECTED_COMMIT` to that merged SHA and pass `--ocp 5.0`.
@@ -185,9 +289,47 @@ For remote readiness, record distinct evidence:
   and the provisioned cluster reports 5.0. A fallback 4.x cluster or no-op install
   does not establish OCP 5 support. Record QE evidence separately.
 
+Initial 5.x preparation keeps the operator scenario optional while the install
+prerequisites are unavailable. Once installation is required, change its label to
+`test.appstudio.openshift.io/optional: "false"` and regenerate the manifests.
+Both states are accepted for 5.x configuration verification; completed passing
+snapshot results and actual installation evidence remain separate gates. The
+standard scenario and 4.x operator scenarios must remain required.
+
 For the 0.3 install path, confirm access to its configured OpenShift CI cluster
-profile (the upstream default is `aws-konflux-prod`) before provisioning. Inspect
-the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
+profile (the upstream default is `aws-konflux-prod`) before provisioning.
+A tenant that is not an owner of the profile in `openshift/release`
+(`cluster-profiles-config.yaml`) is rejected at once, but `provision-cluster`
+keeps polling the `InitializationFailed` phase for its full 2-hour timeout and
+then exits 255. The claim status dumped at the end of the step log shows the
+cause, for example `konflux cluster "kflux-prd-rh02" and tenant
+"submariner-tenant" don't own the cluster profile "aws-konflux-prod"`
+(`EphemeralClusterValidationFailure`). Fix ownership first; the OCP release
+check below only matters after it.
+The upstream pipeline requests the OCP `stable` channel for the fragment's
+version. Check
+`https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-5.0&arch=multi`;
+while it has no nodes, provisioning fails, so rerun the scenario once it has them
+rather than assuming GA day makes one available. To test earlier, use a separately
+reviewed temporary pipeline copy that requests the `candidate-5.0` OCP channel with
+an approved exact prerelease, verify the observed cluster version matches, and remove the copy
+afterwards.
+Provisioning and deployment run only on push events. Rerun the scenario on the
+push snapshot named in your candidate record (the notes that identify the one build
+you are qualifying; see the [rollout runbook](../../plans/ocp-5-0-fbc-rollout.md)),
+never on a PR snapshot, whose `TestPassed` skips every install task. A new push
+build creates a new snapshot and replaces the candidate record. The test and build PipelineRuns are
+pruned within hours, so save the `provision-cluster` step log and the claim
+status from the Konflux UI before they disappear.
+The install task also pushes its workspace (the gathered cluster resources and the
+CSV and InstallPlan dumps) to `<OCI_REF>:<source-sha>-<taskrun-uid>` in the FBC
+component's quay repository, which outlives the pruned run; pull it after a run that
+reaches that step and look for cluster-version evidence, whose contents are not yet
+verified for 5.0. Note that the install pipeline and most of its steps are resolved
+from the integration catalog at `main`, and the run receives the tenant's image-push
+credential, so record the resolved revisions with the evidence; "reviewed" here means
+the revision you inspected, not a pinned one.
+Inspect the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
 `pick-cluster-params`, `provision-cluster` and `deploy-operator`: the selected bundle
 digest/channel must be the approved one and `deploy-operator` must have executed
 successfully. Use the provisioned cluster's `oc get clusterversion version -o json`

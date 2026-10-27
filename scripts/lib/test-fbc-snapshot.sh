@@ -74,6 +74,40 @@ assert_eq "explicit ref is used" \
   "$(cat "$TMP/url")" \
   "https://raw.githubusercontent.com/stolostron/submariner-operator-fbc/$REV/catalog-5-0/bundles/bundle-v0.24.1.yaml"
 
+echo "=== fbc_revision_on_main Tests ==="
+
+# Separate stub for the GitHub compare call: it reads curl's stdin config, records it, and
+# rejects any request carrying an Authorization header when STUB_REJECT_TOKEN=1 (a stale token).
+mkdir "$TMP/bin2"
+cat > "$TMP/bin2/curl" <<'STUB'
+#!/bin/bash
+cfg=$(cat)
+printf '%s\n' "$cfg" >> "$STUB_CFG_FILE"
+printf '%s\n' "$*" >> "$STUB_ARGV_FILE"
+if [ "${STUB_REJECT_TOKEN:-}" = 1 ] && [[ "$cfg" == *Authorization* ]]; then exit 22; fi
+printf '{"base_commit":{"sha":"%s"},"merge_base_commit":{"sha":"%s"},"status":"ahead"}' "$STUB_SHA" "$STUB_SHA"
+STUB
+chmod +x "$TMP/bin2/curl"
+# No ambient credentials: `gh auth token` must not reach the developer's real login.
+printf '#!/bin/bash\nexit 1\n' > "$TMP/bin2/gh"
+chmod +x "$TMP/bin2/gh"
+REV2=$(printf 'c%.0s' {1..40})
+on_main() { # $1=token; prints "<rc>|<auth requests>|<token in argv?>"
+  : > "$TMP/cfg"; : > "$TMP/argv"
+  local rc=0
+  ( PATH="$TMP/bin2:$PATH" GITHUB_TOKEN="$1" STUB_SHA="$REV2" STUB_CFG_FILE="$TMP/cfg" STUB_ARGV_FILE="$TMP/argv" \
+    bash -c 'source "$0"; declare -A _FBC_MERGED_REVISIONS=(); fbc_revision_on_main "$1"' "$SCRIPT_DIR/fbc-snapshot.sh" "$REV2" ) || rc=$?
+  local leaked=0
+  [ -z "$1" ] || leaked=$(grep -c -F -- "$1" "$TMP/argv" || true)
+  echo "$rc|$(grep -c Authorization "$TMP/cfg" || true)|$leaked"
+}
+assert_eq "valid token is sent via stdin config, never argv" "$(on_main sekrit-token)" "0|1|0"
+assert_eq "no token -> anonymous request succeeds" "$(on_main '')" "0|0|0"
+assert_eq "stale token is retried once anonymously" \
+  "$(STUB_REJECT_TOKEN=1 on_main sekrit-token)" "0|1|0"
+assert_eq "malformed revision -> rc 1" \
+  "$( ( source "$SCRIPT_DIR/fbc-snapshot.sh"; fbc_revision_on_main nothex ) >/dev/null 2>&1; echo $? )" "1"
+
 echo "=== fbc_tests_passed Tests ==="
 
 tests_json() { # $1=standard status $2=operator status
@@ -112,7 +146,8 @@ for mutation in \
   '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[1].completionTime = "" | tojson)' \
   '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[1].completionTime = 123 | tojson)' \
   '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[0].scenario = .[1].scenario | tojson)' \
-  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[0].scenario = "unrelated" | tojson)'; do
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | .[0].scenario = "unrelated" | tojson)' \
+  '.metadata.annotations["test.appstudio.openshift.io/status"] |= (fromjson | . + [.[1]] | tojson)'; do
   assert_eq "reject $mutation" "$(passes "$(jq -c "$mutation" <<< "$snapshot")")" reject
 done
 markers=$(tests_json BuildPLRInProgress BuildPLRInProgress)
