@@ -6,6 +6,16 @@ Use the [onboarding workflow][onboarding] for mechanics. Keep one candidate
 record linked from ACM-48200: bundle/channel, source SHA, push build, snapshot,
 image, lifecycle reference, test results, release identities and QE approval.
 
+**Terms.** The *candidate build* is the one push build of the 5.0 catalog being
+qualified, and the *candidate record* is the ACM-48200 notes that identify it. A
+rebuild creates a new candidate build and a new record. The OCP update channel is
+always written `candidate-5.0`, never just "candidate". ITS means integration test
+scenario; PaC means Pipelines as Code; IIB means index image build.
+
+Name these owners in ACM-48200 now, because later sections depend on them: the
+reviewer for the cluster-profile change, the owner of the Pyxis FBC opt-in, and the
+QE approver.
+
 The initial candidate is Submariner **0.24.1**, channel **stable-0.24**, for
 OCP **5.0**. [FBC PR #81][catalog] merged the catalog and tooling;
 [FBC PR #82][pipelines] merged the four-platform build (`amd64`, `arm64`,
@@ -38,7 +48,7 @@ observations when executing the plan.
 
 [Release-data !23786][tenant] merged both tenant resources and admissions.
 Live account ownership, credential bindings and stage/prod admission matching
-are verified. Keep autorelease disabled.
+were verified on October 26. Keep autorelease disabled.
 
 The tenant follow-up removing the entire `CHANNEL_NAME` parameter from the 5.0
 operator scenario (release-data !24109) has merged and reconciled, and the
@@ -65,6 +75,11 @@ parallel. Build readiness and installation have separate gates.
 
 ## 2. Build and identify the candidate
 
+**Required for release:** every build must include the `fbc-inject-lifecycle-oci-ta`
+task. Snapshots built without it, such as the Pipelines as Code (PaC) push snapshots
+from `main` before fbc #86 merges, need a rebuild before a production release. The
+0.23.4 stage replacement builds of October 12 already include it.
+
 Before merging the candidate source, record whether all intended bundle and
 operand digests can be pulled from production or need approved 0.24 stage
 mirrors. Verify mappings and pull access if mirrors are needed. The install
@@ -74,7 +89,7 @@ failed before any bundle or operand pull, so pull behavior is unobserved. Both
 5.0 catalog bundles are `registry.redhat.io` digests and the mirrors use
 `AllowContactingSource`; record the actual pull behavior of the installing run
 rather than assuming it. Any change to `images-mirror-set.yaml` triggers new
-builds of every FBC pipeline, including 5-0, and so replaces the candidate.
+builds of every FBC pipeline, including 5-0, and so replaces the candidate build.
 
 Build PipelineRuns are short-lived. The push run for `13b7416`
 (`submariner-fbc-5-0-on-push-lcghf`) and its operator-test run were already gone
@@ -85,41 +100,40 @@ quay, but the helper needs the build's live resolved spec, and retained
 check/image evidence alone cannot satisfy it. Treat `13b7416` as unverifiable
 unless a reviewed Tekton Results (or equivalent) path recovers its run.
 
-Several task pins are marked with an `expires_on` date in Conforma's legacy
-trusted-task list (checked October 26): in the merged 5.0 pipelines `init` on
-2026-11-16, and `git-clone-oci-ta`, `build-image-index` (an 11-18 record also
-exists) and `fbc-inject-lifecycle-oci-ta` on 2026-11-22; until fbc #86 merges, the
-4.x pipelines have earlier dates, from 2026-10-30. These dates do not block release under today's
-policy: the `fbc-standard` and `fbc-stage` policies load `policy-data`, which has
-`trusted_task_rules_enabled: true`, and when rules data is present the policy
-checks task versions against allow and deny rules and does not consult the expiry
-list. If `trusted_task_rules_enabled` were false or the rules empty, the policy would
-fall back to the expiry list, which is the one way these dates start to matter. The
-policy references float (`:konflux`, `:latest`), so re-read that flag and the deny
-rules before each release, and treat a refresh as a hedge: take the current
-non-expiring digests from Conforma's trusted-task data
-(`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`), not from this plan,
-in a standalone FBC change. Merging it starts a 5.0 push build, so time it with the
-qualifying build below, or accept that an earlier build is only a placeholder. What
-policy does require of every build today is the `fbc-inject-lifecycle-oci-ta`
-task; snapshots built without it, such as the PaC push snapshots from `main` before
-fbc #86 merges, need a rebuild before a production release. (The 0.23.4 stage
-replacement builds of October 12 already include it.)
+**Task-pin expiry dates are a hedge, not a deadline.** Conforma's legacy
+trusted-task list marks several pins with an `expires_on` date (checked October 26):
+`init` on 2026-11-16 and `git-clone-oci-ta`, `build-image-index` (an 11-18 record
+also exists) and `fbc-inject-lifecycle-oci-ta` on 2026-11-22 in the merged 5.0
+pipelines, and from 2026-10-30 in the 4.x pipelines until fbc #86 merges. They do
+not block release under today's policy: `fbc-standard` and `fbc-stage` load
+`policy-data`, which has `trusted_task_rules_enabled: true`, and when rules data is
+present the policy checks task versions against allow and deny rules and does not
+consult the expiry list. If that flag were false or the rules empty, the policy
+would fall back to the list, which is the one way the dates start to matter. The
+policy references float (`:konflux`, `:latest`), so re-read the flag and the deny
+rules before each release.
 
-The candidate is the push build recorded in the candidate record: `13b7416`
-only if it is recovered as above, otherwise the first replacement build that
-meets these conditions. A replacement is qualifying only if its PipelineRun,
-TaskRuns and lifecycle artifact stay retrievable until `verify-live`. Capture
-them, with logs and the lifecycle artifact digest, immediately after it
-completes. Start that qualifying build only when every install prerequisite is
-met (cluster-profile access merged and either `stable-5.0` has nodes or a
-reviewed candidate-channel test approved; before that its operator test fails the
-same way), capture the run at once, and do the scenario rerun and `verify-live`
-the same day, or first establish a Tekton Results path. A rebuild needs a new
-commit to `main` that touches the 5.0 build files. It creates a new source SHA,
-snapshot, image and lifecycle artifact, so it replaces the candidate record
-(source SHA, snapshot, image, lifecycle digest and `FBC_EXPECTED_COMMIT`) and must
-pass every gate again.
+To refresh the pins anyway, take the current non-expiring digests from Conforma's
+trusted-task data (`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`), not
+from this plan, in a standalone FBC change. Merging it starts a 5.0 push build, so
+time it with the candidate build below; an earlier build is not the candidate build.
+
+**Getting the candidate build.** The candidate build is the build recorded in the
+candidate record: `13b7416` only if its run is recovered as above, otherwise the
+first build made by these steps.
+
+1. Confirm the prerequisites: the cluster-profile change is merged, `stable-5.0` has
+   nodes or an approved test using the `candidate-5.0` OCP channel is ready (before
+   that the operator test fails the same way), and #120 is merged.
+2. Merge a commit to `main` that touches the 5.0 build files. A rebuild needs such a
+   commit; a retest comment on a pushed commit does not count, because its snapshot
+   is not labelled as a push event.
+3. Capture the push PipelineRun, TaskRuns, logs and the lifecycle artifact digest
+   immediately after the build completes.
+4. Rerun the scenario on that push snapshot, then run `verify-live`, the same day.
+   If that is not possible, first establish a Tekton Results path.
+5. Record the new candidate record (source SHA, snapshot, image, lifecycle digest and
+   `FBC_EXPECTED_COMMIT`). Each rebuild replaces it, and every gate repeats.
 
 FBC PR #82 has merged and its gating checks passed at the merged head.
 Verify all four platforms, effective build arguments, OCP base annotations,
@@ -129,7 +143,12 @@ Retain resolved task/image identities and the policy used by the build.
 Obtain `lifecycle.json` from the candidate push build's digest-pinned lifecycle
 `SOURCE_ARTIFACT`. Check TaskRun ownership, successful injection `TEST_OUTPUT`
 and resolved task/image pins; review the lifecycle contents and retain the
-artifact digest and file SHA256. Do not extract the reference from the catalog
+artifact digest and file SHA256. Review the contents against the catalog: the
+reference taken from the `13b7416` build lists versions 0.13 to 0.20 and 0.22 but
+none for 0.23 or 0.24, the only versions the 5.0 catalog ships, while the verifier
+checks only the schema, the package and a non-empty version list. Record any such
+gap as an open lifecycle-data issue ([OPGM-364][lifecycle]) or require an entry for
+each bundle in the catalog. Do not extract the reference from the catalog
 image under test. Reference provenance and support policy are manual review
 inputs, not claims established by the content verifier.
 
@@ -149,8 +168,8 @@ the PR-event `TestPassed` skips every install task, so it proves nothing here.
 The reviewed upstream pipeline requests `stable`;
 recheck `stable-5.0` (its graph had no nodes on October 26) rather than
 assuming GA makes it available. If earlier
-testing is needed, separately review a temporary candidate-channel pipeline
-and tenant resolver revision, selecting an approved exact prerelease with a
+testing is needed, separately review a temporary pipeline copy that requests the
+`candidate-5.0` OCP channel, and a tenant resolver revision, selecting an approved exact prerelease with a
 removal plan. Verify the observed cluster version matches that selection.
 Tenant `CHANNEL_NAME` selects the OLM channel, not the OCP release channel.
 
@@ -224,7 +243,7 @@ index for the approved bundle digest and intended channel. A printed URL or
 version-named catalog file alone is insufficient. Confirm production bundle
 and operand pulls resolve without stage mirrors. Only then add `5-0` to
 `scripts/lib/fbc-scope.sh` through review and complete the normal QE/tracker
-closeout. Retain release, snapshot/IIB and lifecycle evidence for
+closeout. Retain release, snapshot, IIB (index image build) and lifecycle evidence for
 [OPGM-364][lifecycle]; check its criteria before closure. Compatibility changes
 under [OPGM-261][compatibility] remain separate work.
 
@@ -234,8 +253,8 @@ If a stage Release fails policy or QE rejects the artifacts, do not edit the
 candidate record in place: fix the cause, build again, and restart sections 2 to 4
 with a new record. A failed or mistaken production Release does not by itself
 change `scripts/lib/fbc-scope.sh`; leave `5-0` out of it until the v5.0 index is
-verified, and treat a published bad bundle as a new release problem (a replacement
-bundle) rather than something this plan reverses. If OCP 5.0 GA slips, nothing here
+verified, and treat a published bad bundle as a new release problem (a new bundle
+version) rather than something this plan reverses. If OCP 5.0 GA slips, nothing here
 expires: hold at the last completed gate and rerun the checks in the order above
 when the install path becomes usable.
 
