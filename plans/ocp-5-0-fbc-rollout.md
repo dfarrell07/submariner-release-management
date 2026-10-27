@@ -93,15 +93,18 @@ exists) and `fbc-inject-lifecycle-oci-ta` on 2026-11-22; until fbc #86 merges, t
 policy: the `fbc-standard` and `fbc-stage` policies load `policy-data`, which has
 `trusted_task_rules_enabled: true`, and when rules data is present the policy
 checks task versions against allow and deny rules and does not consult the expiry
-list. The policy references float (`:konflux`, `:latest`), so re-read the deny
+list. If `trusted_task_rules_enabled` were false or the rules empty, the policy would
+fall back to the expiry list, which is the one way these dates start to matter. The
+policy references float (`:konflux`, `:latest`), so re-read that flag and the deny
 rules before each release, and treat a refresh as a hedge: take the current
 non-expiring digests from Conforma's trusted-task data
 (`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`), not from this plan,
 in a standalone FBC change. Merging it starts a 5.0 push build, so time it with the
 qualifying build below, or accept that an earlier build is only a placeholder. What
 policy does require of every build today is the `fbc-inject-lifecycle-oci-ta`
-task; snapshots built before the task was added, such as the 0.23.4 stage builds,
-need a rebuild before a production release.
+task; snapshots built without it, such as the PaC push snapshots from `main` before
+fbc #86 merges, need a rebuild before a production release. (The 0.23.4 stage
+replacement builds of October 12 already include it.)
 
 The candidate is the push build recorded in the candidate record: `13b7416`
 only if it is recovered as above, otherwise the first replacement build that
