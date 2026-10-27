@@ -41,7 +41,7 @@ the tracker has been updated to match the October 12 cluster results.
 | 0.24.1, ACM-40644 | Parent In Progress; all 15 subtasks terminal. Exact production bundle tag resolves with version v0.24.1; seven index probes time out and recorded component Release CRs are NotFound | Bundle publication is confirmed. Recover catalog/QE/release evidence for actual 4.16–4.22 scope before authorized closeout; missing retained CRs and timed-out probes are not proof of absence |
 | 0.22.2, ACM-45070 | Retained candidate snapshot passes aggregate integration with warnings; its bundle CSV/version is 0.22.2, but embedded operand identity remains unreconciled. EC and bundle SHAs remain In Progress; stage onward New | Verify source/operand mapping before accepting this candidate or updating parent artifacts. Give the two additional test items their own disposition |
 | Lifecycle publication, OPGM-364 | In Progress at the October 8 read; status answer posted as comment 18829498, publication still pending | Reconcile tenant resources, merge lifecycle injection and record release/catalog proof under the rollout plan’s existing lifecycle-only scope. The posted answer does not complete the release work |
-| Task trust maintenance | October 7 current data retains three #82 pins expiring October 30 and lifecycle injection October 31; deprecated-image-check now expires November 6 | Re-read current allowlist and deny rules; keep any repo-wide refresh separate. Expiry is not the demonstrated cause of today's FBC failures. Current figures: see the [rollout plan](ocp-5-0-fbc-rollout.md) section 2 |
+| Task trust maintenance | Several task pins carry `expires_on` dates in the legacy trusted-task list; current policy uses version rules, so they are a hedge. See the [rollout plan](ocp-5-0-fbc-rollout.md) section 2 | Re-read current allowlist and deny rules before a release; keep any repo-wide refresh separate. Expiry is not the demonstrated cause of today's FBC failures |
 
 The October 7/8 authenticated `submariner-tenant` reads found the registry secret unlinked from both runner credential lists and OCP 5 Application, Component and build account absent.
 The October 7/8 namespace read returned zero PipelineRuns and 741 retained snapshots (the earlier read returned 746); all six documented FBC failure associations remain present.
@@ -83,7 +83,7 @@ All four inspected release-data checkouts are clean. Cached main is `8c18efee295
 `submariner-fbc-5-0-20261026-144157-000` passed the build, but the optional operator scenario ended `TestFail`:
 `submariner-tenant` is not yet an owner of cluster profile `aws-konflux-prod`
 ([openshift/release #87176](https://github.com/openshift/release/pull/87176)), and `stable-5.0` has no releases.
-Four of its task pins expire between 2026-11-16 (`init`) and 2026-11-22; see section 2 of the rollout plan. The build and test PipelineRuns
+Several of its task pins carry expiry dates in the legacy trusted-task list, which current policy does not consult; see section 2 of the rollout plan. The build and test PipelineRuns
 are already pruned from the cluster.
 
 Catalog/tooling PRs #76 and #81 are merged. The September implementation records are historical local evidence, not a current statement that no catalog or PR exists.

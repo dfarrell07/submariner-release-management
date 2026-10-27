@@ -85,36 +85,38 @@ quay, but the helper needs the build's live resolved spec, and retained
 check/image evidence alone cannot satisfy it. Treat `13b7416` as unverifiable
 unless a reviewed Tekton Results (or equivalent) path recovers its run.
 
-Several task pins in the merged 5.0 pipelines are marked with an `expires_on` date
-in Conforma's trusted-task data (checked October 26): `init` on 2026-11-16, and
-`git-clone-oci-ta`, `build-image-index` (an 11-18 record also exists) and
-`fbc-inject-lifecycle-oci-ta` on 2026-11-22. A build using an expired pin
-fails the trusted-task check if the release policy uses this data, so the
-`13b7416` build may not be releasable past 2026-11-16. A replacement build is
-therefore expected, not optional. Bump the pins in a standalone FBC change (4.x
-pipelines have their own expiring pins, some as early as 2026-10-30), taking the
-current non-expiring digests from Conforma's trusted-task data
-(`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`) rather than
-copying digests from this plan. Merge it before 2026-11-16 regardless of
-install-path readiness, to keep the 5.0 pipeline releasable. Merging it starts
-a 5.0 push build, which is a placeholder rather than the qualifying build unless
-the gates below can be met for it.
+Several task pins are marked with an `expires_on` date in Conforma's legacy
+trusted-task list (checked October 26): in the merged 5.0 pipelines `init` on
+2026-11-16, and `git-clone-oci-ta`, `build-image-index` (an 11-18 record also
+exists) and `fbc-inject-lifecycle-oci-ta` on 2026-11-22; the 4.x pipelines have
+earlier dates, from 2026-10-30. These dates do not block release under today's
+policy: the `fbc-standard` and `fbc-stage` policies load `policy-data`, which has
+`trusted_task_rules_enabled: true`, and when rules data is present the policy
+checks task versions against allow and deny rules and does not consult the expiry
+list. The policy references float (`:konflux`, `:latest`), so re-read the deny
+rules before each release, and treat a refresh as a hedge: take the current
+non-expiring digests from Conforma's trusted-task data
+(`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`), not from this plan,
+in a standalone FBC change. Merging it starts a 5.0 push build, so time it with the
+qualifying build below, or accept that an earlier build is only a placeholder. What
+policy does require of every build today is the `fbc-inject-lifecycle-oci-ta`
+task; snapshots built before the task was added, such as the 0.23.4 stage builds,
+need a rebuild before a production release.
 
 The candidate is the push build recorded in the candidate record: `13b7416`
 only if it is recovered as above, otherwise the first replacement build that
 meets these conditions. A replacement is qualifying only if its PipelineRun,
 TaskRuns and lifecycle artifact stay retrievable until `verify-live`. Capture
 them, with logs and the lifecycle artifact digest, immediately after it
-completes. If they are pruned before installation and `verify-live` finish,
-build again once the install path is ready (cluster-profile access merged and
-either `stable-5.0` has nodes or a reviewed candidate-channel test approved);
-before that, its operator test fails the same way. Start that qualifying build
-only when every install prerequisite is met, capture the run at once, and do the
-scenario rerun and `verify-live` the same day, or first establish a Tekton
-Results path. A rebuild needs a new commit to `main` that touches the 5.0
-build files. It creates a new source SHA, snapshot, image and lifecycle
-artifact, so it replaces the candidate record (source SHA, snapshot, image,
-lifecycle digest and `FBC_EXPECTED_COMMIT`) and must pass every gate again.
+completes. Start that qualifying build only when every install prerequisite is
+met (cluster-profile access merged and either `stable-5.0` has nodes or a
+reviewed candidate-channel test approved; before that its operator test fails the
+same way), capture the run at once, and do the scenario rerun and `verify-live`
+the same day, or first establish a Tekton Results path. A rebuild needs a new
+commit to `main` that touches the 5.0 build files. It creates a new source SHA,
+snapshot, image and lifecycle artifact, so it replaces the candidate record
+(source SHA, snapshot, image, lifecycle digest and `FBC_EXPECTED_COMMIT`) and must
+pass every gate again.
 
 FBC PR #82 has merged and its gating checks passed at the merged head.
 Verify all four platforms, effective build arguments, OCP base annotations,
@@ -154,13 +156,20 @@ For the upstream path, inspect `get-unreleased-bundle`, `pick-cluster-params`,
 `provision-cluster` and `deploy-operator`. Record the bundle digest/channel,
 installed CSV and the cluster's observed **5.0.x** version from test artifacts.
 PR-event skips, empty-result push no-ops and fallback 4.x clusters do not
-satisfy this gate.
+satisfy this gate. The install task also pushes its workspace (gathered cluster
+resources, CSV and InstallPlan dumps) to `<OCI_REF>:<source-sha>-<taskrun-uid>` in
+the FBC component's quay repository, which outlives the pruned run; pull it after
+a run that reaches that step and look for the cluster version. Its contents are
+not yet verified for 5.0.
 If no eligible unreleased bundle remains, use a separately reviewed explicit
 bundle/channel test; rerunning the unchanged selection is insufficient.
 
 Prepare a separate tenant follow-up, including regenerated manifests, making
 the live 5.0 operator scenario required (`optional: "false"`) before final
 verification; review and reconcile it when the installation path is usable.
+Making it required does not by itself add assurance: a push run that selects no
+unreleased bundle also ends `TestPassed` without installing, so the evidence above
+is still what proves installation.
 Reuse a completed `TestPassed` run only if its candidate and test
 definition are unchanged and the installation evidence above is present.
 Otherwise, after existing tests finish, rerun the scenario on the recorded
@@ -180,7 +189,11 @@ platforms, alongside the actual installation evidence above.
 ## 4. Stage the pinned candidate and hand it to QE
 
 Follow [stage creation][stage], scoped to `0.24.1` and `--ocp 5.0`. Pin both
-`FBC_EXPECTED_COMMIT` and `FBC_EXPECTED_SNAPSHOTS` to the recorded candidate.
+`FBC_EXPECTED_COMMIT` and `FBC_EXPECTED_SNAPSHOTS` to the recorded candidate:
+the commit is the 40-character SHA, and the snapshots are a JSON map keyed by the
+hyphenated OCP ID, for example
+`FBC_EXPECTED_SNAPSHOTS='{"5-0":"submariner-fbc-5-0-<timestamp>"}'`. Production
+creation does not read either pin.
 Inspect the generated Release's exact name, plan and snapshot; use that file
 for [application][apply] and [completion checks][check], not an mtime lookup.
 
@@ -195,7 +208,9 @@ wait for approval of those artifacts before production.
 ## 5. Publish the approved snapshot and activate scope
 
 Follow [production creation][prod], still scoped to `0.24.1` and OCP 5.0.
-Confirm production bundle availability and required Pyxis FBC opt-in. The helper
+Confirm production bundle availability and required Pyxis FBC opt-in; this
+repository has no procedure for the opt-in, so name its owner and the way to
+confirm it before the production Release. The helper
 selects the latest version-matched stage YAML; it does not establish QE approval.
 Check that its selected stage record and the generated production Release's
 snapshot are exactly the recorded QE-approved candidate before application.
@@ -209,6 +224,17 @@ and operand pulls resolve without stage mirrors. Only then add `5-0` to
 closeout. Retain release, snapshot/IIB and lifecycle evidence for
 [OPGM-364][lifecycle]; check its criteria before closure. Compatibility changes
 under [OPGM-261][compatibility] remain separate work.
+
+## Failure and rollback
+
+If a stage Release fails policy or QE rejects the artifacts, do not edit the
+candidate record in place: fix the cause, build again, and restart sections 2 to 4
+with a new record. A failed or mistaken production Release does not by itself
+change `scripts/lib/fbc-scope.sh`; leave `5-0` out of it until the v5.0 index is
+verified, and treat a published bad bundle as a new release problem (a replacement
+bundle) rather than something this plan reverses. If OCP 5.0 GA slips, nothing here
+expires: hold at the last completed gate and rerun the checks in the order above
+when the install path becomes usable.
 
 [delivery]: https://redhat.atlassian.net/browse/ACM-48200
 [catalog]: https://github.com/stolostron/submariner-operator-fbc/pull/81
