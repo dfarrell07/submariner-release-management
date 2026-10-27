@@ -166,7 +166,14 @@ skill's explicit target-base test and Konflux build provide the OCP-base evidenc
 
 `--phase verify --workspace ... --min-supported-sub ...` checks local artifacts.
 It explicitly reports deployment, multiarch build, and runtime status as unverified.
-After deployment, run the read-only live checks with the expected merged SHA:
+After deployment, run the read-only live checks with the expected merged SHA.
+Run from the release-management repo root, logged in to the Konflux cluster
+(`oc login --web https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443/`, with
+access to `submariner-tenant`), with `gh` authenticated and `skopeo` installed; the
+lifecycle recipe below also needs `oras` and pull access to
+`quay.io/redhat-user-workloads/submariner-tenant`. The check reads the build's live
+PipelineRun and TaskRuns, which are pruned within hours, so run it and save the
+lifecycle artifact soon after the build completes.
 
 ```bash
 ./scripts/add-fbc-ocp-version.sh 5.0 --phase verify-live \
@@ -191,6 +198,22 @@ the expected push PipelineRun, succeeded, reports successful injection in
 and the reference file's SHA256 with the rollout evidence. Do not create the
 reference by extracting it from the catalog image being verified: that would only
 compare the image with itself.
+
+To find the artifact, take the push PipelineRun name from the snapshot's
+`appstudio.openshift.io/build-pipelinerun` label and read the lifecycle TaskRun's
+results while it still exists:
+
+```bash
+PLR=<push PipelineRun name>
+oc get taskrun -n submariner-tenant \
+  -l "tekton.dev/pipelineRun=$PLR,tekton.dev/pipelineTask=fbc-inject-lifecycle" \
+  -o jsonpath='{range .items[*].status.results[*]}{.name}={.value}{"\n"}{end}'
+```
+
+This prints the `SOURCE_ARTIFACT` and `TEST_OUTPUT` results. If the TaskRun is gone, the
+`<source-sha>.lifecycle` tag in the FBC component's quay repository holds the same
+single-layer artifact, but the TaskRun ownership and `TEST_OUTPUT` checks above can no
+longer be made.
 
 The pinned artifact utility stores a gzip tar **blob**, identified as
 `oci:<repository>@sha256:<archive-digest>` ([archive creation][ta-create],
@@ -275,16 +298,27 @@ cause, for example `konflux cluster "kflux-prd-rh02" and tenant
 (`EphemeralClusterValidationFailure`). Fix ownership first; the OCP release
 check below only matters after it.
 The upstream pipeline requests the OCP `stable` channel for the fragment's
-version, which gets its first release (x.y.0) on GA day. Check
-`https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-5.0&arch=multi`.
-While it has no nodes, provisioning fails: rerun the scenario after GA. If a
-release is needed sooner, point the ITS at a temporary pipeline copy that
-requests `candidate`, and remove it at GA.
-Provisioning and deployment run only on push events, so rerun the scenario
-on the recorded push snapshot rather than a PR snapshot, whose pass skips all
-of it; a new push build would replace the candidate. The test and build PipelineRuns are
+version. Check
+`https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-5.0&arch=multi`;
+while it has no nodes, provisioning fails, so rerun the scenario once it has them
+rather than assuming GA day makes one available. To test earlier, use a separately
+reviewed temporary pipeline copy that requests `candidate` with an approved exact
+prerelease, verify the observed cluster version matches, and remove the copy
+afterwards.
+Provisioning and deployment run only on push events. Rerun the scenario on the
+push snapshot named in your candidate record (the one build you are qualifying),
+never on a PR snapshot, whose `TestPassed` skips every install task. A new push
+build creates a new snapshot and replaces the candidate record. The test and build PipelineRuns are
 pruned within hours, so save the `provision-cluster` step log and the claim
 status from the Konflux UI before they disappear.
+The install task also pushes its workspace (the gathered cluster resources and the
+CSV and InstallPlan dumps) to `<OCI_REF>:<source-sha>-<taskrun-uid>` in the FBC
+component's quay repository, which outlives the pruned run; pull it after a run that
+reaches that step and look for cluster-version evidence, whose contents are not yet
+verified for 5.0. Note that the install pipeline and most of its steps are resolved
+from the integration catalog at `main`, and the run receives the tenant's image-push
+credential, so record the resolved revisions with the evidence; "reviewed" here means
+the revision you inspected, not a pinned one.
 Inspect the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
 `pick-cluster-params`, `provision-cluster` and `deploy-operator`: the selected bundle
 digest/channel must be the approved one and `deploy-operator` must have executed
