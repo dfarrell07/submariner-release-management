@@ -25,14 +25,15 @@ inputs and complete preparation and image testing. This does not establish
 product compatibility or require changing the bundle's compatibility metadata.
 
 To resolve the stream, compare with the ACM release that ships it (Submariner
-0.N pairs with ACM 2.(N-7); ACM 5.0 follows 2.17). ART's FBC targets are
+0.N pairs with ACM 2.(N-7); for example, ACM 2.17 is in the v5.0 index and its
+submariner-addon subscribes to `stable-0.24`). ART's FBC targets are
 `OCP_TARGET_VERSIONS` in `group.yml` on the `acm-<X.Y>` branch of
 [ocp-build-data](https://github.com/openshift-eng/ocp-build-data), and that
 ACM branch's submariner-addon `defaultCatalogChannel` is the channel it subscribes
 to. Include a stream only where its ACM release targets the OCP version, and keep
 that channel present. Check the production index too, for example
-`registry.redhat.io/redhat/redhat-operator-index:v5.0`: ACM packages there and
-missing `submariner` show a gap for the addon.
+`registry.redhat.io/redhat/redhat-operator-index:v5.0`. If the ACM packages are in
+that index but `submariner` is not, the addon has a gap.
 
 The plan reports the local base commits and explicitly does not claim remote
 freshness. Fetch both repositories before preparation. A failed fetch blocks
@@ -211,9 +212,17 @@ oc get taskrun -n submariner-tenant \
 ```
 
 This prints the `SOURCE_ARTIFACT` and `TEST_OUTPUT` results. If the TaskRun is gone, the
-`<source-sha>.lifecycle` tag in the FBC component's quay repository holds the same
-single-layer artifact, but the TaskRun ownership and `TEST_OUTPUT` checks above can no
-longer be made.
+`<source-sha>.lifecycle` tag in the FBC component's quay repository holds a
+single-layer artifact; its layer digest is the blob digest for the recipe below:
+
+```bash
+skopeo inspect --raw docker://quay.io/redhat-user-workloads/submariner-tenant/submariner-fbc-5-0:<source-sha>.lifecycle |
+  jq -r '.layers[0].digest'
+```
+
+Treat that as review evidence only: it cannot show that the artifact came from the
+candidate build's lifecycle TaskRun, so the ownership and `TEST_OUTPUT` checks above
+can no longer be made and the build stays unverified.
 
 The pinned artifact utility stores a gzip tar **blob**, identified as
 `oci:<repository>@sha256:<archive-digest>` ([archive creation][ta-create],
@@ -252,8 +261,8 @@ TaskRun evidence, review the reference, then pass its path to
 `--expected-lifecycle`. Authenticated extraction from a qualifying 5.0
 build remains to be verified when that build exists.
 
-[ta-create]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/create-oci.sh#L72
-[ta-use]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/use-oci.sh#L71
+[ta-create]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/create-oci.sh#L82-L93
+[ta-use]: https://github.com/konflux-ci/build-trusted-artifacts/blob/215356989cc461d435a3147819f0637b29357702/use-oci.sh#L82-L83
 
 The verifier checks the reference's Submariner schema/package, records its SHA256,
 and requires the exact reference bytes on all four platforms. Every other file
@@ -302,11 +311,12 @@ version. Check
 `https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-5.0&arch=multi`;
 while it has no nodes, provisioning fails, so rerun the scenario once it has them
 rather than assuming GA day makes one available. To test earlier, use a separately
-reviewed temporary pipeline copy that requests `candidate` with an approved exact
-prerelease, verify the observed cluster version matches, and remove the copy
+reviewed temporary pipeline copy that requests the `candidate-5.0` OCP channel with
+an approved exact prerelease, verify the observed cluster version matches, and remove the copy
 afterwards.
 Provisioning and deployment run only on push events. Rerun the scenario on the
-push snapshot named in your candidate record (the one build you are qualifying),
+push snapshot named in your candidate record (the notes that identify the one build
+you are qualifying; see the [rollout runbook](../../plans/ocp-5-0-fbc-rollout.md)),
 never on a PR snapshot, whose `TestPassed` skips every install task. A new push
 build creates a new snapshot and replaces the candidate record. The test and build PipelineRuns are
 pruned within hours, so save the `provision-cluster` step log and the claim
