@@ -1,183 +1,276 @@
-<!-- markdownlint-disable MD013 -->
+# Submariner FBC rollout to OCP 5.0
 
-# OCP 5.0 FBC rollout plan
+Reviewed October 26, 2026. Tracking: [ACM-48200][delivery]. Release management
+owns the automated installation test; QE follows the normal stage handoff.
+Use the [onboarding workflow][onboarding] for mechanics. Keep one candidate
+record linked from ACM-48200: bundle/channel, source SHA, push build, snapshot,
+image, lifecycle reference, test results, release identities and QE approval.
 
-Reviewed 2026-10-06; heads, published checks and clean configuration drafts rechecked 2026-10-07. Lifecycle target, prerequisites and posting verified 2026-10-08.
-Use the [current work map](current-work.md) and [builder branch inventory](art-builder-migration.md) for concurrent builder, PQC, addon and release work. Consolidates the planning document from
-[FBC PR #82](https://github.com/stolostron/submariner-operator-fbc/pull/82), head
-`1e8b3c26137b49db60a0d93853f144990770f304`. The pipeline implementation remains in that PR.
-This document supports the proposed OCP onboarding story in the [tracking plan](agentic-sdlc-jira-updates.md).
-It records review gates; it does not authorize pushes, merge requests, cluster changes, provisioning or releases.
+**Terms.** The *candidate build* is the one push build of the 5.0 catalog being
+qualified, and the *candidate record* is the ACM-48200 notes that identify it. A
+rebuild creates a new candidate build and a new record. The OCP update channel is
+always written `candidate-5.0`, never just "candidate". ITS means integration test
+scenario; PaC means Pipelines as Code; IIB means index image build.
 
-[Current FBC failure recovery](fbc-failure-recovery.md) takes priority: restore the existing 4.x release tests, then address #82's missing-account prerequisite.
+Name these owners in ACM-48200 now, because later sections depend on them: the
+reviewer for the cluster-profile change, the owner of the Pyxis FBC opt-in, and the
+QE approver.
 
-## Evidence and current boundaries
+The initial candidate is Submariner **0.24.1**, channel **stable-0.24**, for
+OCP **5.0**. [FBC PR #81][catalog] merged the catalog and tooling;
+[FBC PR #82][pipelines] merged the four-platform build (`amd64`, `arm64`,
+`ppc64le`, `s390x`) using the OCP 5 RHEL9 registry base and lifecycle injection.
+Confirm the intended bundle digest against the approved component release
+before qualification. Product compatibility and lifecycle-support changes
+remain separate.
 
-| Area | Checked result | Remaining gate |
-| --- | --- | --- |
-| Catalog/tooling | FBC #76 and #81 merged; current FBC main is `2e6b489e65620738d68504d9158418fe463e2073` | Confirm provisional inputs against product policy and runtime compatibility |
-| Pipelines | #82 remains open; two pipeline files and a snapshot-verification doc change | Rebase onto current main, reconcile task pins and pass checks at the exact head |
-| PR failure | GitHub's published Konflux check reports `init` / `PodCreationFailed`: `build-pipeline-submariner-fbc-5-0` not found | October 7 authenticated read confirms absent build account, Application and Component; reconcile configuration first |
-| Tenant/admission | Local drafts inspected; cached base is `8c18efee295889f5d86b03d16930a2f11977fd58` from September 18 | Refresh GitLab main, review two separate changes and verify live reconciliation |
-| Registry access | October 7 authenticated read confirms the registry Secret exists but is absent from both integration-runner credential lists | Validate credential usability/field ownership, then separately authorized repair and verified-snapshot rerun |
-| Installation | Source inspection establishes conditional execution, not a successful OCP 5 install | Record actual cluster version, selected bundle/channel and successful installation/QE |
-| Release | Existing RPA drafts use generic OCP-version index templates | Confirm live matching, release mode, publishing decisions and target-index membership |
+Status as of October 26, 2026. Tenant resources and admissions have reconciled.
+FBC PR #82 merged as `13b7416`; its push build produced snapshot
+`submariner-fbc-5-0-20261026-144157-000` and image digest
+`sha256:6bd0ce2161ac…` (the [PR build][pr-build] for head `897c64a` had already passed on all four platforms).
+The [cluster-profile PR][profile] and [helper PR #120][helper] are still open.
 
-The October 7 authenticated read checked `submariner-tenant`. The 5.0 Application, Component and build account are absent;
-the existing Docker-config Secret remains unlinked to the integration runner. No PipelineRuns are retained; the [work map](current-work.md#release-recovery-and-time-sensitive-work) owns the current snapshot total.
-The six exact failed 4.x [snapshot/scenario associations](fbc-failure-recovery.md#retained-snapshot-and-scenario-identities) are recovered;
-re-read their identities and verify intended catalog content before reruns. Credential usability and controller ownership remain unverified.
-The refreshed GitLab main read still fails DNS. The published failed PipelineRun is no longer retained; its GitHub check preserves the missing-account error, corroborated by the current tenant read.
-The original plan's cluster findings remain dated observations. Native image/E2E validation is recorded in
-[implementation status](ocp-5-implementation-status.md); those runs were not repeated during this consolidation.
-The September 24 status document describes an earlier state, including before #81 merged.
+The optional operator scenario now creates its PipelineRun: the tenant fix
+removing `CHANNEL_NAME` (release-data !24109) is deployed, and the first push
+run completed `get-unreleased-bundle` (channel `stable-0.24`, the 0.24.1 bundle) and
+`pick-cluster-params` (OCP 5.0, amd64). `provision-cluster` then failed
+validation: `konflux cluster "kflux-prd-rh02" and tenant "submariner-tenant"
+don't own the cluster profile "aws-konflux-prod"`
+(`EphemeralClusterValidationFailure`). The task kept polling the
+`InitializationFailed` phase for its full 2-hour timeout and exited 255, so the
+scenario ended `TestFail`. That is a profile-ownership failure, resolved only by
+the cluster-profile PR; it is not installation evidence and says nothing yet
+about the OCP release. The `stable-5.0` update graph still has no nodes
+(`candidate-5.0` has releases, for example `5.0.0-rc.7`). Refresh these
+observations when executing the plan.
 
-The catalog on current FBC main uses provisional minimum Submariner stream **0.24**, default channel **stable-0.24**,
-and bundles **0.24.0 / 0.24.1**. The unchanged bundle compatibility declaration reported in the implementation record is `v4.15-v4.19`.
-Catalog validation and a native OCP-base image test establish packaging behavior, not operator compatibility on OCP 5.
-OPGM-364’s requested progress answer was posted October 8 as comment `18829498`; the issue remains In Progress and lifecycle publication remains pending. No program status label or workflow transition was assigned.
-OPGM-364 requires publication of existing valid lifecycle data without new OpenShift 5 / 5.0 compatibility statements; team IIB/catalog proof is an allowed alternative to public-index membership. The program’s October 7 parent guidance separately requires a fully supported 4.22/5.0 version at GA. Lifecycle publication alone does not establish that support qualification.
+## 1. Reconcile tenant resources and admissions
 
-## 1. Refresh and reconcile configuration
+[Release-data !23786][tenant] merged both tenant resources and admissions.
+Live account ownership, credential bindings and stage/prod admission matching
+were verified on October 26. Keep autorelease disabled.
 
-Inspect the existing worktrees before changing them. The checked tenant draft ends at `47eda9c5b11c6f57fb7a4f7fb9be2e0fd42be588`
-(two commits after its cached base); the separate admission draft ends at `860aa737d0` (one commit after that base).
-The tenant draft includes a workflow-document rewrite as well as generated resources. Separate that rewrite from the immediate CI repair;
-the configuration-only scope is 16 files and seven new resources. The two-file admission draft serves later release matching,
-not build-account provisioning. The [recovery plan](fbc-failure-recovery.md#release-data-merge-request-scope) records the three distinct MR scopes.
-Do not regenerate, reset or overwrite an existing draft solely because a fresh helper run is available.
+The tenant follow-up removing the entire `CHANNEL_NAME` parameter from the 5.0
+operator scenario (release-data !24109) has merged and reconciled, and the
+first push run confirmed it: the scenario now creates its PipelineRun instead
+of failing admission. Reviewed integration-service source converts an empty ITS
+value to JSON `null`; server controls reproduced the same admission error for
+null. Omission uses the upstream pipeline's empty-string default and preserves
+catalog-default selection. Removing only the value is insufficient. Keep this
+shape in any regenerated manifest.
 
-1. Fetch current release-data main when access is available and reconcile each draft with it. Cached configuration cannot prove current policy or deployment state.
-2. Keep tenant infrastructure and managed admissions in separate merge requests. Follow release-data's AGENTS.md, direct-project branch policy and current CODEOWNERS;
-   validate with full `tox`, tenant regeneration and `tox -e tenants-config-test` where applicable. Record an unrelated baseline failure separately from new failures.
-3. Verify the generated Application, Component, ImageRepository, two ITS objects and two manual ReleasePlans. Validate both RPA additions against current constraints,
-   origin, policy, service account, destinations and release-plan matching. Do not infer that historical approval coverage or policy remains sufficient.
-4. After authorized merge, verify reconciliation rather than relying on elapsed time: tenant changes reconcile through ArgoCD; managed resources apply through release-data CI.
-   Check the build service account and image-push secret as well as the resource identities above. Do not publish secret values.
-5. Reuse the existing PaC Repository for this source repository only after verifying its current configuration. If an onboarding PR appears, reconcile it with #82's pair.
+For any new build, recheck the 5.0 Application, Component, ImageRepository,
+build-account ownership and image-push secret bindings. Check the registry
+credential binding on `konflux-integration-runner` and confirm authenticated
+pulls in the eventual test. ServiceAccount existence alone is insufficient.
+Reconcile any bot-generated pipeline PR with #82 rather than merging two
+competing pipeline definitions.
 
-The draft's operator ITS selects an empty `CHANNEL_NAME` (package default), the image-push secret's `.dockerconfigjson` key, and the
-[0.2 PipelineRun wrapper](https://github.com/konflux-ci/tekton-integration-catalog/blob/24ed4b2be4ff378d2d688b7bc380e47ef99a3eba/pipelineruns/deploy-fbc-operator/0.2/deploy-fbc-operator-run.yaml).
-That wrapper resolves the **0.3 pipeline**; the directory version is not the executed pipeline version.
-Both resolver revisions are `main`, so record the actual resolved source at execution time. A dated source check does not pin future runs.
+Release qualification needs the recorded candidate push build below. Both
+stage/prod ReleasePlans must remain matched before live verification and
+release.
 
-## 2. Establish registry access and determine whether installation will run
+Progress #120 review, cluster-profile access and OCP 5 release availability in
+parallel. Build readiness and installation have separate gates.
 
-The [private-registry documentation](https://konflux-ci.dev/docs/testing/integration/accessing-private-repositories/) requires credentials for additional registries
-such as `registry.redhat.io` to be linked to `konflux-integration-runner`. Component-image credentials are linked automatically.
-A credential passed for OCI artifact storage does not by itself establish authentication for the production-index render.
+## 2. Build and identify the candidate
 
-The earlier A11 read records a tenant registry Secret that was not linked to that runner on October 1. Its presence/type does not prove usable credentials; verify the current binding and registry access first.
-If the maintainer chooses the documented manual repair and authorizes the live write, the proposed command is:
+**Required for release:** every build must include the `fbc-inject-lifecycle-oci-ta`
+task. Snapshots built without it, such as the Pipelines as Code (PaC) push snapshots
+from `main` before fbc #86 merges, need a rebuild before a production release. The
+0.23.4 stage replacement builds of October 12 already include it.
 
-```bash
-oc secrets link konflux-integration-runner submariner-konflux-registry-redhat-io -n submariner-tenant
-```
+Before merging the candidate source, record whether all intended bundle and
+operand digests can be pulled from production or need approved 0.24 stage
+mirrors. Verify mappings and pull access if mirrors are needed. The install
+pipeline reads `.tekton/images-mirror-set.yaml` at that SHA; the current file
+targets 0.23 only. The first push run was given that 0.23 mirror set, but it
+failed before any bundle or operand pull, so pull behavior is unobserved. Both
+5.0 catalog bundles are `registry.redhat.io` digests and the mirrors use
+`AllowContactingSource`; record the actual pull behavior of the installing run
+rather than assuming it. Any change to `images-mirror-set.yaml` triggers new
+builds of every FBC pipeline, including 5-0, and so replaces the candidate build.
 
-The corresponding `oc secrets unlink` can remove that link; save the original binding so rollback restores the actual prior state.
-For a declarative fix, check controller/GitOps ownership and merging behavior before applying a ServiceAccount manifest.
-Restoring credentials may remove the observed render failure; it does not prove an install or explain why older runs passed.
-Use archived successful-run logs to establish earlier authentication and executed tasks.
+Build PipelineRuns are short-lived. The push run for `13b7416`
+(`submariner-fbc-5-0-on-push-lcghf`) and its operator-test run were already gone
+from the cluster a few hours after they finished, before any of this evidence
+could be captured. The snapshot, its recorded image digest and the lifecycle
+artifact tag `13b7416f64ac909538ac5ec818ffcad7491f17ae.lifecycle` remain in
+quay, but the helper needs the build's live resolved spec, and retained
+check/image evidence alone cannot satisfy it. Treat `13b7416` as unverifiable
+unless a reviewed Tekton Results (or equivalent) path recovers its run.
 
-The inspected [bundle helper](https://github.com/konflux-ci/tekton-integration-catalog/blob/24ed4b2be4ff378d2d688b7bc380e47ef99a3eba/stepactions/bundles/get-unreleased-bundle/0.1/get-unreleased-bundle.yaml)
-uses konflux-test **v1.4.48**, pinned image digest `sha256:9b815268fb2bf10b5d745518da1c6568944f15816efe51adc192972b42a6e74d`.
-Its image revision and matching Git tag resolve to
-[`5f33b66974c024e0e3b2d809de88297e9806f9a0`](https://github.com/konflux-ci/konflux-test/blob/5f33b66974c024e0e3b2d809de88297e9806f9a0/test/utils.sh).
-The helper compares bundle image pullspecs in the fragment with those in the production index selected from the fragment's target OCP version.
-For this catalog that target is `registry.redhat.io/redhat/redhat-operator-index:v5.0`.
+**Task-pin expiry dates are a hedge, not a deadline.** Conforma's legacy
+trusted-task list marks several pins with an `expires_on` date (checked October 26):
+`init` on 2026-11-16 and `git-clone-oci-ta`, `build-image-index` (an 11-18 record
+also exists) and `fbc-inject-lifecycle-oci-ta` on 2026-11-22 in the merged 5.0
+pipelines, and from 2026-10-30 in the 4.x pipelines until fbc #86 merges. They do
+not block release under today's policy: `fbc-standard` and `fbc-stage` load
+`policy-data`, which has `trusted_task_rules_enabled: true`, and when rules data is
+present the policy checks task versions against allow and deny rules and does not
+consult the expiry list. If that flag were false or the rules empty, the policy
+would fall back to the list, which is the one way the dates start to matter. The
+policy references float (`:konflux`, `:latest`), so re-read the flag and the deny
+rules before each release.
 
-**Release in a 4.x index does not prove membership in the 5.0 index.** The original plan's claim that the two released bundles necessarily make
-5.0 a no-op was unsupported. Read the matching index and helper results before deciding whether this push will provision a cluster.
-Registry authentication and current index contents were not verified here.
+To refresh the pins anyway, take the current non-expiring digests from Conforma's
+trusted-task data (`quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles`), not
+from this plan, in a standalone FBC change. Merging it starts a 5.0 push build, so
+time it with the candidate build below; an earlier build is not the candidate build.
 
-The inspected [0.3 pipeline](https://github.com/konflux-ci/tekton-integration-catalog/blob/24ed4b2be4ff378d2d688b7bc380e47ef99a3eba/pipelines/deploy-fbc-operator/0.3/deploy-fbc-operator.yaml)
-skips discovery/provisioning/installation for PR events. On push, later install tasks depend on a returned bundle; an empty result permits a no-op pass.
-Record the resolved TaskRuns and returned bundle/channel. A green PR check or aggregate ITS status cannot establish installation coverage.
-The cached 4.x `CHANNEL_NAME=stable` does not match the catalog's versioned channels; that configuration supplies no installation evidence.
-Do not claim that every historical 4.x run skipped installation without its archived logs.
+**Getting the candidate build.** The candidate build is the build recorded in the
+candidate record: `13b7416` only if its run is recovered as above, otherwise the
+first build made by these steps.
 
-Before any provisioning, confirm access to the configured OpenShift CI profile (the 0.3 default is `aws-konflux-prod`).
-The [migration guide](https://github.com/konflux-ci/tekton-integration-catalog/blob/24ed4b2be4ff378d2d688b7bc380e47ef99a3eba/pipelines/deploy-fbc-operator/0.3/MIGRATION.md)
-requires shared-profile access and recommends 0.3 for new users. The 0.1/0.2 EaaS path is a deprecated, unverified fallback for OCP 5;
-using it requires a separate reviewed decision and actual cluster-version evidence. Access should be resolved before the first push that may select a bundle,
-rather than deferred until a newly built bundle is added. `KONFLUX_UI_URL` only changes log links.
+1. Confirm the prerequisites: the cluster-profile change is merged, `stable-5.0` has
+   nodes or an approved test using the `candidate-5.0` OCP channel is ready (before
+   that the operator test fails the same way), and #120 is merged.
+2. Merge a commit to `main` that touches the 5.0 build files. A rebuild needs such a
+   commit; a retest comment on a pushed commit does not count, because its snapshot
+   is not labelled as a push event.
+3. Capture the push PipelineRun, TaskRuns, logs and the lifecycle artifact digest
+   immediately after the build completes.
+4. Rerun the scenario on that push snapshot, then run `verify-live`, the same day.
+   If that is not possible, first establish a Tekton Results path.
+5. Record the new candidate record (source SHA, snapshot, image, lifecycle digest and
+   `FBC_EXPECTED_COMMIT`). Each rebuild replaces it, and every gate repeats.
 
-## 3. Reconcile #82 and verify its build
+FBC PR #82 has merged and its gating checks passed at the merged head.
+Verify all four platforms, effective build arguments, OCP base annotations,
+catalog validation and lifecycle-task execution using the onboarding workflow.
+Retain resolved task/image identities and the policy used by the build.
 
-The published failure identifies the missing service account as the immediate cause; it does not establish that no later pipeline defect exists.
-Reconcile configuration first, then review/rebase #82 and rerun the build through a supported PaC trigger.
-Posting `/retest` or pushing a trigger commit is a separate external action requiring authorization.
+Obtain `lifecycle.json` from the candidate push build's digest-pinned lifecycle
+`SOURCE_ARTIFACT`. Check TaskRun ownership, successful injection `TEST_OUTPUT`
+and resolved task/image pins; review the lifecycle contents and retain the
+artifact digest and file SHA256. Review the contents against the catalog: the
+reference taken from the `13b7416` build lists versions 0.13 to 0.20 and 0.22 but
+none for 0.23 or 0.24, the only versions the 5.0 catalog ships, while the verifier
+checks only the schema, the package and a non-empty version list. Record any such
+gap as an open lifecycle-data issue ([OPGM-364][lifecycle]) or require an entry for
+each bundle in the catalog. Do not extract the reference from the catalog
+image under test. Reference provenance and support policy are manual review
+inputs, not claims established by the content verifier.
 
-Compare both pipelines with their reviewed predecessor: `catalog-5-0` input, the OCP 5.0 RHEL9 registry base, matching service account,
-event-specific tags and CEL filters, lifecycle task ordering/result forwarding, and all four platforms.
-Existing local lifecycle injection and native-image reports are supporting evidence; require the actual Konflux run as well.
+Merge #120 with the reviewed fixes for omitted default-channel parameters,
+required operator-test labels and exact source/reference content verification
+before using `verify-live`. Use its merged helper and updated workflow with
+`--expected-lifecycle` pointing to the reviewed candidate push reference.
 
-The October 7 refresh finds all **12 unique task refs** from the push/PR pair in current acceptable-bundles data. Five matching entries expire; the earlier October 6 artifact recorded four:
+## 3. Qualify installation and catalog contents
 
-| Task | Pinned digest prefix | Allowlist expiry (UTC) |
-| --- | --- | --- |
-| fbc-fips-check-oci-ta | `736177074f49` | 2026-10-30 00:00 |
-| run-opm-command-oci-ta | `edc7d8263a73` | 2026-10-30 00:00 |
-| validate-fbc | `4b635b529a29` | 2026-10-30 00:00 |
-| fbc-inject-lifecycle-oci-ta | `a80834195fca` | 2026-10-31 00:00 |
-| deprecated-image-check | `0ccc688a77e9` | 2026-11-06 00:00 |
+Actual provisioning requires [cluster-profile access][profile] and an available
+requested OCP release, checked in that order because the profile check fails
+first: without access the claim is rejected within a second
+(`don't own the cluster profile "aws-konflux-prod"`) yet the task polls for its
+full 2-hour timeout before exiting 255. Provisioning runs only on push events;
+the PR-event `TestPassed` skips every install task, so it proves nothing here.
+The reviewed upstream pipeline requests `stable`;
+recheck `stable-5.0` (its graph had no nodes on October 26) rather than
+assuming GA makes it available. If earlier
+testing is needed, separately review a temporary pipeline copy that requests the
+`candidate-5.0` OCP channel, and a tenant resolver revision, selecting an approved exact prerelease with a
+removal plan. Verify the observed cluster version matches that selection.
+Tenant `CHANNEL_NAME` selects the OLM channel, not the OCP release channel.
 
-The lifecycle pin is therefore **not non-expiring**, contrary to #82's existing description. Refresh task trust and deny-rule checks before merging/running;
-allowlist membership alone is not a complete Enterprise Contract verdict. Keep a repo-wide task bump separately reviewable if it touches 4.x pipelines.
-The refreshed source artifact is `quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles@sha256:5c50ac7864a2e7c30e211278f4d7a6d718b9061df904059d216b06927053ea34`,
-with YAML layer `sha256:8d02b6b687936335df2ff6b53e0db6f28eb27c182e08855c758e95e0c2037a3f`. To reproduce this dated read:
+Require successful intended-bundle selection, provisioning and deployment.
+For the upstream path, inspect `get-unreleased-bundle`, `pick-cluster-params`,
+`provision-cluster` and `deploy-operator`. Record the bundle digest/channel,
+installed CSV and the cluster's observed **5.0.x** version from test artifacts.
+PR-event skips, empty-result push no-ops and fallback 4.x clusters do not
+satisfy this gate. The install task also pushes its workspace (gathered cluster
+resources, CSV and InstallPlan dumps) to `<OCI_REF>:<source-sha>-<taskrun-uid>` in
+the FBC component's quay repository, which outlives the pruned run; pull it after
+a run that reaches that step and look for the cluster version. Its contents are
+not yet verified for 5.0.
+If no eligible unreleased bundle remains, use a separately reviewed explicit
+bundle/channel test; rerunning the unchanged selection is insufficient.
 
-```bash
-oras blob fetch quay.io/konflux-ci/tekton-catalog/data-acceptable-bundles@sha256:8d02b6b687936335df2ff6b53e0db6f28eb27c182e08855c758e95e0c2037a3f --output /path/to/task-trust.yaml
-```
+Prepare a separate tenant follow-up, including regenerated manifests, making
+the live 5.0 operator scenario required (`optional: "false"`) before final
+verification; review and reconcile it when the installation path is usable.
+Making it required does not by itself add assurance: a push run that selects no
+unreleased bundle also ends `TestPassed` without installing, so the evidence above
+is still what proves installation.
+Reuse a completed `TestPassed` run only if its candidate and test
+definition are unchanged and the installation evidence above is present.
+Otherwise, after existing tests finish, rerun the scenario on the recorded
+push snapshot (not a new build, and never a PR-event snapshot, which skips
+installation) using [Konflux instructions][rerun]; confirm its snapshot/scenario identities and
+successful completion. Retain resolved wrapper/pipeline/StepAction revisions
+and image digests; their Git resolver chain follows `main`.
 
-Read effective rulesets and current-head checks with app IDs. The inspected rules require six Actions contexts (app 15368) and DCO (app 1861);
-GitHub's published checks satisfy those contexts at the inspected #82 head, while its Konflux check fails. Require that build to pass too.
-Recheck after rebase: strict rules require the branch to be current with main. A legacy protection 404 does not remove effective ruleset requirements.
+Then run the merged helper's live verification for the recorded source SHA and
+reviewed lifecycle reference. Require its reported snapshot/image and that
+snapshot's linked build PipelineRun to match the candidate record. Stop on
+mismatch. A replacement must pass the build and installation gates with its
+own lifecycle and test evidence. Require matched admissions, account bindings,
+completed successful tests and exact source/reference content on all four
+platforms, alongside the actual installation evidence above.
 
-After authorized merge, retain the original merged-main push PipelineRun, exact source SHA, resulting snapshot and image digest.
-Verify the four-platform index and every platform's catalog contents and OCP base annotation, with validation and gRPC serving against the native base.
-Use the [canonical onboarding workflow](../.agents/workflows/add-fbc-ocp-version.md):
+## 4. Stage the pinned candidate and hand it to QE
 
-```bash
-./scripts/add-fbc-ocp-version.sh 5.0 --phase verify-live --expected-commit <40-character-merged-sha>
-```
+Follow [stage creation][stage], scoped to `0.24.1` and `--ocp 5.0`. Pin both
+`FBC_EXPECTED_COMMIT` and `FBC_EXPECTED_SNAPSHOTS` to the recorded candidate:
+the commit is the 40-character SHA, and the snapshots are a JSON map keyed by the
+hyphenated OCP ID, for example
+`FBC_EXPECTED_SNAPSHOTS='{"5-0":"submariner-fbc-5-0-<timestamp>"}'`. Production
+creation does not read either pin.
+Inspect the generated Release's exact name, plan and snapshot; use that file
+for [application][apply] and [completion checks][check], not an mtime lookup.
 
-This read-only check verifies configuration/build evidence; successful installation and QE still need their own evidence.
-To rerun integration tests for an existing snapshot, follow the
-[snapshot-label procedure](https://konflux-ci.dev/docs/testing/integration/rerunning/), verify the referenced snapshot/scenario, and retain the new run results.
-A build retest does not substitute for rerunning the selected snapshot's integration tests.
+Require the exact stage Release to finish `Released=True/Succeeded` with no
+policy violations and no production-index publication. Follow the
+[QE handoff][qe] for the released fragment and intended bundle/channel, using
+the verified mirrors if needed. Compare any URL-helper result with that exact
+Release, snapshot and fragment; a latest-successful lookup can select another
+candidate. Record these identities and artifact digests in the QE handoff, and
+wait for approval of those artifacts before production.
 
-## 4. Installation, stage, production and activation
+## 5. Publish the approved snapshot and activate scope
 
-1. Confirm the approved minimum stream, bundle digest and channel. If the generic ITS returns no bundle, use the explicit-bundle QE procedure:
-   point a CatalogSource at the built fragment, install through an OLM Subscription, and configure image mirrors when needed.
-   Retain actual cluster `status.desired.version` from `oc get clusterversion version -o json`, installed CSV and bundle/image digest.
-   If using 0.3, retain successful `pick-cluster-params`, `provision-cluster` and `deploy-operator` evidence for that bundle/channel.
-2. Verify current live RP/RPA matching and approved stage/prod index destinations, including any pre-GA routing decision. Cached ACM/MCE examples or
-   a reachable `v5.0` tag do not prove the required destination is publishing. Do not change release mode to bypass that review.
-3. Inspect the **resolved production release pipeline/tasks**. The cached RPA selects release-service-catalog `production`; the October 6 source check pinned
-   it to `9bfb0b2588a07e765fccef05e2919e4a44ff4401`, rather than the repository's default `development` branch.
-   The inspected version task accepts `v5.0` from the base annotation. That syntax check does not establish target-index readiness.
-4. Confirm current bundle-repository Pyxis opt-in and the release's actual publishing decisions. Past 4.x releases do not establish today's flag.
-   The inspected [parameter task](https://github.com/konflux-ci/release-service-catalog/blob/9bfb0b2588a07e765fccef05e2919e4a44ff4401/tasks/managed/prepare-fbc-parameters/prepare-fbc-parameters.yaml)
-   can succeed for an opted-out standard-production component while disabling publishing/signing/overwrite. Staging intentionally disables those actions;
-   pre-GA/hotfix uses different decisions. Read `Must Publish Index` and verify the intended resulting index, not just `Release succeeded`.
-5. Stage the selected snapshot and complete QE on the approved OCP 5 cluster. Production must reuse the exact QE-approved stage snapshot.
-   Releases are separate authorized operations; this plan does not apply Release resources.
-6. Check the approved bundle version with `./scripts/get-fbc-urls.sh <approved-X.Y.Z> --ocp 5.0 --prod-index`, then compare its exact image digest by direct index inspection.
-   The explicit OCP filter is required because the default scope excludes 5.0.
-   Only after configuration, build, installation, QE and release evidence pass should a reviewed change activate `5-0` in `scripts/lib/fbc-scope.sh`.
-   Its current default scope remains OCP 4.16–4.22. Explicit OCP syntax support does not establish general OCP 5 support.
+Follow [production creation][prod], still scoped to `0.24.1` and OCP 5.0.
+Confirm production bundle availability and required Pyxis FBC opt-in; this
+repository has no procedure for the opt-in, so name its owner and the way to
+confirm it before the production Release. The helper
+selects the latest version-matched stage YAML; it does not establish QE approval.
+Check that its selected stage record and the generated production Release's
+snapshot are exactly the recorded QE-approved candidate before application.
+If they differ, stop and reconcile rather than releasing the newer candidate.
 
-## Review decisions and ownership of follow-up work
+Verify the exact production Release succeeds, then inspect the actual v5.0
+index for the approved bundle digest and intended channel. A printed URL or
+version-named catalog file alone is insufficient. Confirm production bundle
+and operand pulls resolve without stage mirrors. Only then add `5-0` to
+`scripts/lib/fbc-scope.sh` through review and complete the normal QE/tracker
+closeout. Retain release, snapshot, IIB (index image build) and lifecycle evidence for
+[OPGM-364][lifecycle]; check its criteria before closure. Compatibility changes
+under [OPGM-261][compatibility] remain separate work.
 
-* Release-data: refresh/reconcile the tenant and admission drafts, identify reviewers through current CODEOWNERS, and choose the registry-binding repair.
-* FBC #82: keep the pipeline pair and snapshot-loop documentation together; replace its duplicate planning file with a pointer after this consolidation is accepted.
-  Update its description's expired-trust claim at the same time. Do not close #82 or move its executable pipelines into this repository.
-* Installation/QE: confirm cluster-profile access, target-index bundle membership, approved bundle/channel and runtime support policy before provisioning.
-* Separate maintenance: 4.x channel selection and EaaS migration, expiring task pins across the repo, and the previously reported 0.24.0 image-label mismatch.
-  The image-label mismatch was not rechecked; verify it before proposing a fix.
+## Failure and rollback
 
-The story payloads should link this plan as evidence for ongoing onboarding work. None of these gates is a new Jira story automatically,
-and none of the dated findings should be promoted to a current successful rollout without its recorded evidence.
+If a stage Release fails policy or QE rejects the artifacts, do not edit the
+candidate record in place: fix the cause, build again, and restart sections 2 to 4
+with a new record. A failed or mistaken production Release does not by itself
+change `scripts/lib/fbc-scope.sh`; leave `5-0` out of it until the v5.0 index is
+verified, and treat a published bad bundle as a new release problem (a new bundle
+version) rather than something this plan reverses. If OCP 5.0 GA slips, nothing here
+expires: hold at the last completed gate and rerun the checks in the order above
+when the install path becomes usable.
+
+[delivery]: https://redhat.atlassian.net/browse/ACM-48200
+[catalog]: https://github.com/stolostron/submariner-operator-fbc/pull/81
+[pipelines]: https://github.com/stolostron/submariner-operator-fbc/pull/82
+[pr-build]: https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/pipelinerun/submariner-fbc-5-0-on-pull-request-npbx4
+[profile]: https://github.com/openshift/release/pull/87176
+[helper]: https://github.com/stolostron/submariner-release-management/pull/120
+[tenant]: https://gitlab.cee.redhat.com/releng/konflux-release-data/-/merge_requests/23786
+[rerun]: https://konflux-ci.dev/docs/testing/integration/rerunning/
+[lifecycle]: https://redhat.atlassian.net/browse/OPGM-364
+[compatibility]: https://redhat.atlassian.net/browse/OPGM-261
+[onboarding]: ../.agents/workflows/add-fbc-ocp-version.md
+[stage]: ../.agents/workflows/create-fbc-stage-release.md
+[apply]: ../.agents/workflows/apply-fbc-releases.md
+[check]: ../.agents/workflows/check-fbc-releases.md
+[qe]: ../.agents/workflows/share-with-qe.md
+[prod]: ../.agents/workflows/create-fbc-prod-release.md
