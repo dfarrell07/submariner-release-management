@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Create a Jira release tracker for a Submariner release
 # Creates a parent Task with 15-18 Sub-task children (one per workflow step)
 set -euo pipefail

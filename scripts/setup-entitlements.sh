@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Set up the Red Hat entitlements and registry login rpm-lockfile-update needs.
 #
 # Usage: setup-entitlements.sh [--check] [--force]

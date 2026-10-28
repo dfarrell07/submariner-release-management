@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Update FBC catalog with bundle from Konflux snapshot
 #
 # Usage: fbc-catalog-update.sh <version> [--snapshot <name>] [--replace <old-version>]

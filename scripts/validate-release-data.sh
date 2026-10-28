@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Validate Release CR data formats
 
 set -euo pipefail

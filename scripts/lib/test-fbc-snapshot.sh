@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for fbc-snapshot.sh (fbc_catalog_bundle_digest, fbc_tests_passed).
 # Run: ./scripts/lib/test-fbc-snapshot.sh
 #

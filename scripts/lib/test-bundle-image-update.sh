@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for bundle-image-update.sh.
 # Run: ./scripts/lib/test-bundle-image-update.sh
 #

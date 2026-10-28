@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Shared helper: check a repo's .tekton/ task bundle refs against the Enterprise
 # Contract trusted-task DENY rules.
 #

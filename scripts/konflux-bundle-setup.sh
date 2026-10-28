@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Automate Konflux bundle setup on new release branches
 #
 # Usage: konflux-bundle-setup.sh [version]

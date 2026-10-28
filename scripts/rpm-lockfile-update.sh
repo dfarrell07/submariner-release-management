@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Update RPM lockfiles across Submariner repositories
 #
 # Usage: rpm-lockfile-update.sh [branch] [repo|component]

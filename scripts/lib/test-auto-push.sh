@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Exercise the real RPM command producer and conductor consumer; no network writes.
 # shellcheck disable=SC2034  # Globals are read by sourced functions/subprocess stubs.
 set -euo pipefail

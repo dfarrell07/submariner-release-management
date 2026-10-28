@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tracker-vs-reality drift detection for release-status.sh.
 #
 # The conductor's find_next_step skips any step the Jira tracker marks complete,

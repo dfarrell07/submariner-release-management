@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Create component release (stage or prod)
 #
 # Usage: create-component-release.sh <version> [stage|prod]

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Verify FBC release readiness (combined snapshot + component SHA verification)
 #
 # Usage: verify-fbc-release.sh <version>

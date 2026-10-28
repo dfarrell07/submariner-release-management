@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Check Submariner release status across all workflow steps
 
 set -euo pipefail

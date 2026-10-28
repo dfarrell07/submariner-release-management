@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Create FBC releases for all OCP versions (stage or prod)
 #
 # Usage: create-fbc-releases.sh <version> [stage|prod]

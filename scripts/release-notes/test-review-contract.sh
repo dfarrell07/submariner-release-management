@@ -1,11 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Offline tests for the host-neutral release-note review contract.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REVIEW_SCRIPT="$SCRIPT_DIR/review.sh"
-TEST_ROOT=$(mktemp -d)
+TEST_ROOT=$(cd "$(mktemp -d)" && pwd -P) # canonical: macOS /var is a symlink to /private/var
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 while IFS= read -r git_env; do

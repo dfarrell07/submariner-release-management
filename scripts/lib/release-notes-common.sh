@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Shared library for release notes workflow
 # Used by: collect.sh, prepare.sh, auto-apply.sh
 set -euo pipefail

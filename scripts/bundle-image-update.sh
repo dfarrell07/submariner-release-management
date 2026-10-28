@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Update bundle component image SHAs from Konflux snapshots
 #
 # Usage: bundle-image-update.sh [X.Y|X.Y.Z] [--snapshot name]

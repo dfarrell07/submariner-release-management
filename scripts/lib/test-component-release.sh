@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for create-component-release.sh's bundle-freshness gate.
 # Run: ./scripts/lib/test-component-release.sh
 #

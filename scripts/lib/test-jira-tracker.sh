@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for scripts/lib/jira-tracker.sh
 # Run: make test-tracker
 set -euo pipefail

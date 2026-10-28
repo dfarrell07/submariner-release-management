@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Integration tests for run_conductor main loop
 # Exercises the real dispatch loop with stubbed scripts and Jira calls.
 # Run: ./scripts/lib/test-conductor-integration.sh

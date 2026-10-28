@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for the signal-killed job detection in parallel-jobs.sh.
 # A job registered in jobs.txt but missing its .exit file (killed before
 # writing it) must be treated as failed — wait_parallel_jobs must return 1.

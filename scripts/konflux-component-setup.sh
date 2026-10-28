@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Automate Konflux component setup on new release branches
 #
 # Usage: konflux-component-setup.sh [repo] [component] [version]

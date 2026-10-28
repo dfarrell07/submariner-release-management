@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Add a user to the Submariner tenant RBAC in konflux-release-data.
 
 set -euo pipefail

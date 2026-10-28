@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Validate bundle CSV image SHAs match snapshot component SHAs
 
 set -euo pipefail

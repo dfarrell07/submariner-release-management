@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Full identities are used in paths and resource names: 4-22, 5-0.
 [ -n "${_OCP_VERSION_SOURCED:-}" ] && return 0
 _OCP_VERSION_SOURCED=1

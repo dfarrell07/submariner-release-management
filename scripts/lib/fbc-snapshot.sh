@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Read a complete Snapshot from stdin. Require finished aggregate conditions and
 # completed results for both configured scenarios. Retained BuildPLRInProgress
 # markers are only usable with completion evidence and a successful aggregate verdict.

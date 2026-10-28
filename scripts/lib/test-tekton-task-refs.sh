@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for tekton-task-refs-update.sh.
 # Run: ./scripts/lib/test-tekton-task-refs.sh
 #

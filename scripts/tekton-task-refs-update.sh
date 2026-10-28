@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Bump Tekton task references across Submariner Konflux repos
 #
 # Usage: tekton-task-refs-update.sh <version> [repo]

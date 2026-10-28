@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Confirm whether a full Submariner version (X.Y.Z) shipped to the prod
 # operator-bundle registry, robust to the post-0.22 tag scheme.
 #

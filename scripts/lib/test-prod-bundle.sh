@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for prod-bundle.sh.
 # Run: ./scripts/lib/test-prod-bundle.sh
 #

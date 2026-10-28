@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Helpers for the team entitlement bundle: the shared Red Hat org ID and
 # activation key, sealed with GnuPG symmetric encryption (AES-256, iterated
 # and salted SHA-512 key derivation, integrity-protected) and committed as

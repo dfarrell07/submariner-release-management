@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Configure Konflux for new Submariner version (Y-stream releases)
 #
 # Usage: configure-downstream.sh <version>

@@ -79,6 +79,16 @@ acli jira auth login --token
 acli jira auth status
 ```
 
+## macOS
+
+Scripts need Homebrew bash and GNU tools; `make` puts them on `PATH`.
+
+```bash
+brew install bash coreutils findutils gnu-sed grep gnupg jq yq
+```
+
+The RPM lockfile steps (`setup-entitlements`, `rpm-lockfile-update`) need `subscription-manager` and are Linux only.
+
 ## Claude Skills
 
 ```bash

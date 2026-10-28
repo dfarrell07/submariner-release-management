@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Autorelease conductor: find the next ready release step and run it
 #
 # Usage: autorelease.sh <version> [--complete STEP | --refresh STEP | --close]

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Static compatibility contract for the shared Claude and Codex skills.
 set -u
 

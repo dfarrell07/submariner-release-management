@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for deny-rules.sh (EC trusted-task deny-rule scan + moved-catalog rewrite).
 # Run: ./scripts/lib/test-deny-rules.sh
 #
