@@ -27,6 +27,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/entitlement-bundle.sh
 source "$SCRIPT_DIR/lib/entitlement-bundle.sh"
+# shellcheck source=lib/linux-vm.sh
+source "$SCRIPT_DIR/lib/linux-vm.sh"
 
 readonly ENTITLEMENT_DIR="${ENTITLEMENT_DIR:-/etc/pki/entitlement}"
 readonly CONSUMER_DIR="${CONSUMER_DIR:-/etc/pki/consumer}"
@@ -225,6 +227,7 @@ registry_login() {
 }
 
 main() {
+  linux_vm_reexec "$0" "$@"
   local check=false force=false arg
   for arg in "$@"; do
     case "$arg" in

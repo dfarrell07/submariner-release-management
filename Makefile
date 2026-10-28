@@ -1,4 +1,4 @@
-.PHONY: help test test-scripts test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update setup-entitlements check-entitlements seal-entitlements test-setup-entitlements tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-parallel test-parse-ec-log test-deny-rules test-version-bump test-skills test-release-root test-add-team-member test-release-note-review
+.PHONY: help test test-scripts linux-vm-setup linux-vm-check test-linux-vm test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update setup-entitlements check-entitlements seal-entitlements test-setup-entitlements tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-parallel test-parse-ec-log test-deny-rules test-version-bump test-skills test-release-root test-add-team-member test-release-note-review
 
 # macOS: scripts need bash 4+ and GNU tools (sed -i, grep -P, date -d, find -printf).
 ifeq ($(shell uname -s),Darwin)
@@ -50,6 +50,8 @@ help:
 	@echo "                           Example: make rpm-lockfile-update"
 	@echo "                           Example: make rpm-lockfile-update COMPONENT=gateway"
 	@echo "                           Example: make rpm-lockfile-update BRANCH=0.21 COMPONENT=gateway"
+	@echo "  make linux-vm-setup    - macOS: create the Linux VM for the RPM lockfile steps (brew install lima)"
+	@echo "  make linux-vm-check    - macOS: verify the VM (tools, mounts, podman)"
 	@echo "  make setup-entitlements - Guided one-time setup for RPM entitlements + registry login (FORCE=1 to re-register)"
 	@echo "  make check-entitlements - Check that setup is done (no changes made)"
 	@echo "  make seal-entitlements  - (key holder) Seal the shared credentials into secrets/entitlements.asc"
@@ -154,6 +156,15 @@ update-version-labels:
 
 rpm-lockfile-update:
 	./scripts/rpm-lockfile-update.sh $(BRANCH) $(if $(REPO),$(REPO),$(COMPONENT))
+
+linux-vm-setup:
+	./scripts/linux-vm.sh setup
+
+linux-vm-check:
+	./scripts/linux-vm.sh check
+
+test-linux-vm:
+	./scripts/lib/test-linux-vm.sh
 
 setup-entitlements:
 	./scripts/setup-entitlements.sh $(if $(FORCE),--force,)
@@ -275,7 +286,7 @@ test-release-root:
 test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-scripts
 
 # Script and unit tests only (no linters); also run on macOS in CI
-test-scripts: test-fbc-onboarding test-skills test-release-root test-add-team-member test-release-note-review test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-tracker test-parallel test-parse-ec-log test-deny-rules test-version-bump test-setup-entitlements
+test-scripts: test-linux-vm test-fbc-onboarding test-skills test-release-root test-add-team-member test-release-note-review test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-tracker test-parallel test-parse-ec-log test-deny-rules test-version-bump test-setup-entitlements
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

@@ -34,6 +34,8 @@ make rpm-lockfile-update BRANCH=0.21 COMPONENT=gateway  # Explicit branch
 
 **Requirements:** Red Hat entitlements and `registry.redhat.io` login (one-time: `make setup-entitlements`), `gh auth login`, Bash 4.0+
 
+On macOS, run `make linux-vm-setup` once first; the script then re-runs itself in that VM.
+
 ## Inputs and execution
 
 The branch and repository/component filter are optional. Preserve exactly the

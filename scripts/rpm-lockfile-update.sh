@@ -12,6 +12,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh"
+# shellcheck source=lib/linux-vm.sh
+source "$SCRIPT_DIR/lib/linux-vm.sh"
 
 # Constants
 readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
@@ -352,6 +354,7 @@ print_summary() {
 }
 
 main() {
+  linux_vm_reexec "$0" "$@"
   check_prerequisites
   parse_arguments "$@"
 
