@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Verify component release readiness
 #
 # Usage: verify-component-release.sh <version>

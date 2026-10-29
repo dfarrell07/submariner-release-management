@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Bump Tekton task versions and SHAs across all Submariner component repos.
 #
 # For each repo: queries Quay for the latest available version of every task
@@ -63,9 +63,16 @@ check_prerequisites() {
   command -v jq   &>/dev/null || missing+=("jq")
   command -v oras &>/dev/null || missing+=("oras")
   command -v yq   &>/dev/null || missing+=("yq")
-  command -v flock &>/dev/null || missing+=("flock")
+  command -v perl &>/dev/null || missing+=("perl")
   [ "${#missing[@]}" -gt 0 ] && die "Missing required tools: ${missing[*]}"
-  echo "✓ Prerequisites verified: git, curl, jq, oras, yq, flock"
+  echo "✓ Prerequisites verified: git, curl, jq, oras, yq, perl"
+}
+
+# try_lock_fd FD: non-blocking exclusive lock on an open descriptor. flock(1) is
+# missing on macOS; perl's flock on the inherited descriptor locks the same open
+# file description, so the lock is released when this process exits.
+try_lock_fd() {
+  perl -MFcntl=:flock -e 'open(my $fh, ">&=", $ARGV[0]) or exit 2; flock($fh, LOCK_EX | LOCK_NB) or exit 1' "$1"
 }
 
 # ── Globals ────────────────────────────────────────────────────────────────────
@@ -247,7 +254,7 @@ update_repo() {
     REPOS_FAILED+=("$REPO:lock-open-failed")
     echo ""; return
   fi
-  if ! flock -n "$LOCK_FD"; then
+  if ! try_lock_fd "$LOCK_FD"; then
     echo "  ✗ Another task-version bump is already updating this repository" >&2
     REPOS_FAILED+=("$REPO:busy")
     echo ""; return

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Seal the team's shared Red Hat credentials into secrets/entitlements.asc.
 #
 # Usage: seal-entitlements.sh [--new-password]

@@ -1,0 +1,31 @@
+---
+name: macOS
+
+'on':
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions: {}
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install GNU tools
+        run: brew install bash coreutils findutils gnu-sed grep gnupg jq yq
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Python tools
+        run: pip install pyyaml yamllint
+
+      - name: Run script tests
+        run: make -k test-scripts

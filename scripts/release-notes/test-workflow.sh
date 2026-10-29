@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test script to verify add-release-notes workflow correctness
 # Usage: ./scripts/release-notes/test-workflow.sh [VERSION]
 set -euo pipefail

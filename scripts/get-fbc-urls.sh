@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Get FBC catalog URLs for QE sharing
 #
 # Usage: get-fbc-urls.sh <version> [--ocp 4.XX] [--raw-url] [--prod-index]

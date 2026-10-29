@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Generate single FBC Release YAML
 #
 # Usage: generate-fbc-release.sh <ocp-version> <version> <snapshot-name> <release-type> <release-date>

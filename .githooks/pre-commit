@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Pre-commit hook: Run make test before allowing commit
 
 # Tests use disposable repositories and linked worktrees. Do not let Git's

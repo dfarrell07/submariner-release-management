@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Prepare an evidence bundle for one release-note issue.
 # Args: ISSUE_KEY VERSION STAGE_YAML OUTPUT_FILE DECISION_FILE
 set -euo pipefail

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Parse a downloaded Konflux EC (Enterprise Contract) log file and extract
 # actionable signal: failing rules, affected task names, and whether a task
 # version bump can fix the failures.

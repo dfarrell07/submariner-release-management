@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Add release notes to component stage release YAML
 #
 # Usage: add-release-notes.sh <version> [--stage-yaml PATH]

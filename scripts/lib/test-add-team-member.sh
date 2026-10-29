@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Exercise add-team-member against disposable konflux-release-data repositories.
 
 set -euo pipefail

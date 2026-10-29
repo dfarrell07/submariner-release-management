@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Shared helper: run background jobs and collect their exit codes/stderr.
 #
 # Sourced by verify-fbc-release.sh and get-fbc-urls.sh, which both fan out

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Exercise branch restoration against disposable repositories, never real releases.
 # shellcheck disable=SC2034  # Globals are read by the sourced implementation.
 set -euo pipefail

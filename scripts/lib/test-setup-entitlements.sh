@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for setup-entitlements.sh (stubbed sudo/subscription-manager/podman)
 # Run: ./scripts/lib/test-setup-entitlements.sh
 set -euo pipefail
@@ -37,6 +37,10 @@ new_sandbox() {
   export ENTITLEMENT_BUNDLE="$SB/bundle.asc"
   unset XDG_CONFIG_HOME ENTITLEMENT_PASSWORD CURL_CODE SM_FAIL_UNREGISTER
   unset RH_ORG RH_ACTIVATION_KEY RH_REGISTRY_USER RH_REGISTRY_PASSWORD SM_FAIL SM_NO_CERTS
+  cat > "$SB/bin/uname" <<'STUB'
+#!/bin/bash
+if [ "${1:-}" = -s ]; then echo Linux; else exec /usr/bin/uname "$@"; fi
+STUB
   cat > "$SB/bin/sudo" <<'STUB'
 #!/bin/bash
 exec "$@"

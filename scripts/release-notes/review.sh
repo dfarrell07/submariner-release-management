@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Prepare host-agent release-note reviews and apply validated decisions.
 
 set -euo pipefail

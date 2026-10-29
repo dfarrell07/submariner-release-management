@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for fbc-scope.sh.
 # Run: ./scripts/lib/test-fbc-scope.sh
 #

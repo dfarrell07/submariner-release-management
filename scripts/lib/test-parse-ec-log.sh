@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for parse-ec-log.sh
 # Run: ./scripts/lib/test-parse-ec-log.sh
 set -euo pipefail

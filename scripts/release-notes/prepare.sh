@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Phase 2: Filter and group release notes data
 # Input: ${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}
 # Output: ${RELEASE_NOTES_TOPICS:-/tmp/release-notes-topics.json}

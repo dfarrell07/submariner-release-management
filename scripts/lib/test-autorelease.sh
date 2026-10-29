@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for autorelease DAG walk logic (sources the REAL find_next_step)
 # Run: ./scripts/lib/test-autorelease.sh
 # shellcheck disable=SC2034  # step_statuses is read by find_next_step as a global

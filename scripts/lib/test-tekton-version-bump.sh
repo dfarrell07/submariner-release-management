@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for tekton-task-version-bump.sh: the EC deny-rule handling in update_repo,
 # the summary, and the EC-log diagnosis text.
 # Run: ./scripts/lib/test-tekton-version-bump.sh
@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _TEST_SCRIPT_DIR="$SCRIPT_DIR"
-for tool in jq yq flock; do
+for tool in jq yq perl; do
   command -v "$tool" >/dev/null || { echo "SKIP: $tool not installed"; exit 0; }
 done
 

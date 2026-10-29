@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Shared library for Jira release tracker operations
 # Used by: create-release-tracker.sh, release-status.sh, and release workflow scripts
 #

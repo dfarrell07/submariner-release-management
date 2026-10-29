@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Phase 1: Collect raw release notes data from Jira and filesystem
 # Output: ${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}
 set -euo pipefail

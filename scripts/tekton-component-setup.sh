@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Fan-out wrapper: run konflux-component-setup.sh for all 8 Submariner components
 #
 # Usage: tekton-component-setup.sh <version>

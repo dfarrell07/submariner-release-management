@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Exact release records take precedence over the historical date heuristic.
 [ -n "${_FBC_SCOPE_SOURCED:-}" ] && return 0
 _FBC_SCOPE_SOURCED=1

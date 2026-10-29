@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Validate Release CR required fields and structure
 
 set -euo pipefail

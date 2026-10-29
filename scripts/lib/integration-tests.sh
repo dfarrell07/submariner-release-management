@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Read a complete Snapshot and report its enterprise-contract result. A retained
 # marker is only usable with completion evidence and a successful aggregate verdict.
 ec_status_from_snapshot() {

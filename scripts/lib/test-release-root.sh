@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Verify repository-owned release delegates do not depend on the caller's cwd.
 
 set -euo pipefail

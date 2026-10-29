@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Shared git utilities for Submariner release scripts.
 
 # Detect the fork remote name for a repo: find the remote whose URL contains

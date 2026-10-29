@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Phase 3: Auto-apply ALL filtered issues to stage YAML
 # Input: ${RELEASE_NOTES_TOPICS:-/tmp/release-notes-topics.json}, ${RELEASE_NOTES_DATA:-/tmp/release-notes-data.json}
 # Output: Updated stage YAML + git commit

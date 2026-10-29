@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Generate single component Release YAML
 #
 # Usage: generate-component-release.sh <version> <snapshot> <release-type> <release-date>

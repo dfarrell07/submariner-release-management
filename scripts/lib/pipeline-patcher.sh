@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Shared helper: download and verify the konflux-pipeline-patcher script.
 #
 # Sourced by konflux-component-setup.sh and konflux-bundle-setup.sh, which both

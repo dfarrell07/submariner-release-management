@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Update Konflux Dockerfile version labels across Submariner repositories
 #
 # Usage: update-version-labels.sh <version> [repo]

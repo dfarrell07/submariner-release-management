@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tests for tracker-drift.sh.
 # Run: ./scripts/lib/test-tracker-drift.sh
 #

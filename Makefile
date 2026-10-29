@@ -1,4 +1,14 @@
-.PHONY: help test test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update setup-entitlements check-entitlements seal-entitlements test-setup-entitlements tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-parallel test-parse-ec-log test-deny-rules test-version-bump test-skills test-release-root test-add-team-member test-release-note-review
+.PHONY: help test test-scripts test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update setup-entitlements check-entitlements seal-entitlements test-setup-entitlements tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-parallel test-parse-ec-log test-deny-rules test-version-bump test-skills test-release-root test-add-team-member test-release-note-review
+
+# macOS: scripts need bash 4+ and GNU tools (sed -i, grep -P, date -d, find -printf).
+ifeq ($(shell uname -s),Darwin)
+BREW_PREFIX := $(shell brew --prefix 2>/dev/null)
+ifneq ($(BREW_PREFIX),)
+ifeq (,$(findstring gnubin,$(PATH)))
+export PATH := $(BREW_PREFIX)/opt/bash/bin:$(BREW_PREFIX)/opt/coreutils/libexec/gnubin:$(BREW_PREFIX)/opt/findutils/libexec/gnubin:$(BREW_PREFIX)/opt/gnu-sed/libexec/gnubin:$(BREW_PREFIX)/opt/grep/libexec/gnubin:$(PATH)
+endif
+endif
+endif
 
 .DEFAULT_GOAL := help
 
@@ -262,7 +272,10 @@ test-release-note-review:
 test-release-root:
 	./scripts/lib/test-release-root.sh
 
-test: test-fbc-onboarding validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-skills test-release-root test-add-team-member test-release-note-review test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-tracker test-parallel test-parse-ec-log test-deny-rules test-version-bump test-setup-entitlements
+test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-scripts
+
+# Script and unit tests only (no linters); also run on macOS in CI
+test-scripts: test-fbc-onboarding test-skills test-release-root test-add-team-member test-release-note-review test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-tracker test-parallel test-parse-ec-log test-deny-rules test-version-bump test-setup-entitlements
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

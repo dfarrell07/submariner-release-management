@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Real disposable repositories; only external work and selected failures are fake.
 # shellcheck disable=SC2034  # Globals are consumed by the sourced scripts.
 set -euo pipefail
@@ -173,18 +173,19 @@ version_bump_lock_case() (
     source "$RELEASE_SCRIPTS/tekton-task-version-bump.sh"
     repo_path() { printf '%s\n' "$repo_dir"; }
     VERSION=0.25.1 MAJOR_MINOR=0.25
-    PATCHER_SCRIPT='sleep 1; printf "task: v2\\n" > .tekton/pipe.yaml'
+    PATCHER_SCRIPT='touch .git/lock-held; sleep 1; printf "task: v2\\n" > .tekton/pipe.yaml'
     update_repo testcomp
   ) >"$first_log" 2>&1 &
   local first_pid=$!
 
-  local lock_file="$repo_dir/.git/tekton-task-version-bump.lock"
+  # The patcher runs only after the lock is held, so its marker proves the lock is taken
+  local lock_held="$repo_dir/.git/lock-held"
   local attempts=0
-  while [ ! -e "$lock_file" ] && [ "$attempts" -lt 100 ]; do
+  while [ ! -e "$lock_held" ] && [ "$attempts" -lt 250 ]; do
     sleep 0.02
     attempts=$((attempts + 1))
   done
-  [ -e "$lock_file" ] || { echo 'FAIL: first update did not acquire lock' >&2; exit 1; }
+  [ -e "$lock_held" ] || { echo 'FAIL: first update did not acquire lock' >&2; exit 1; }
 
   # shellcheck source=/dev/null
   source "$RELEASE_SCRIPTS/tekton-task-version-bump.sh"
