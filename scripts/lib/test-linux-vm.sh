@@ -92,6 +92,7 @@ assert_contains "starts the VM first" "$CALLS" $'CALL\nstart\n--tty=false\nsubma
 assert_contains "runs from the repo root" "$CALLS" $'CALL\nshell\n--workdir\n'"$ROOT"$'\nsubmariner-release\n'
 assert_contains "script path and arguments reach the VM intact" "$CALLS" \
   "$ROOT/scripts/rpm-lockfile-update.sh"$'\n0.24\ntwo words\n--flag'
+assert_contains "script runs via bash, not the mount's exec bit" "$CALLS" $'\nbash\n'"$ROOT/scripts/rpm-lockfile-update.sh"$'\n'
 assert_contains "SUBMARINER_BASE defaults from the host HOME" "$CALLS" "SUBMARINER_BASE=$HOME/go/src/submariner-io"
 assert_contains "gh token forwarded" "$CALLS" "GH_TOKEN=tok-123"
 assert_contains "entitlement settings forwarded" "$CALLS" "RH_ORG=123"
@@ -163,10 +164,49 @@ OUT=$(cd "$SB" && "$VM" setup 2>&1) && RC=0 || RC=$?
 assert_eq "not logged in to gh: fails" "$RC" "1"
 assert_contains "not logged in to gh: says how to fix it" "$OUT" "gh auth login"
 
+echo "=== the probes that run in the VM ==="
+guest_checks() ( # run GUEST_CHECKS here, as the VM would, against stubs and a fake entitlement dir
+  # shellcheck source=../linux-vm.sh
+  source "$VM"
+  mkdir -p "$SB/base" "$SB/ent"
+  for t in git podman gpg subscription-manager; do [ -e "$SB/bin/$t" ] || printf '#!/bin/bash\n%s\n' "${STUB_BODY:-exit 0}" > "$SB/bin/$t"; done
+  chmod +x "$SB/bin/"*
+  ENTITLEMENT_DIR="$SB/ent" bash -c "$GUEST_CHECKS" _ "$SB/base" 2>&1
+)
+new_sandbox
+OUT=$(guest_checks) && RC=0 || RC=$?
+assert_eq "healthy VM: all probes pass" "$RC" "0"
+assert_contains "script on the mount is executed" "$OUT" "can be executed"
+assert_not_contains "before registration: no entitlement probe" "$OUT" "entitlement files"
+printf 'CERT\n' > "$SB/ent/1.pem"; printf -- '-----BEGIN RSA PRIVATE KEY-----\nSECRETKEY\n' > "$SB/ent/1-key.pem"
+OUT=$(guest_checks) && RC=0 || RC=$?
+assert_contains "readable entitlements pass" "$OUT" "✓ entitlement files are readable"
+assert_not_contains "a passing probe never prints key material" "$OUT" "SECRETKEY"
+if [ "$(id -u)" != 0 ]; then
+  printf 'CERT\n' > "$SB/ent/2.pem"; printf -- 'SECRETKEY2\n' > "$SB/ent/2-key.pem"; chmod 000 "$SB/ent/2-key.pem"
+  OUT=$(guest_checks) && RC=0 || RC=$?
+  assert_eq "unreadable entitlement fails the check" "$RC" "1"
+  assert_contains "names the unreadable file" "$OUT" "cannot read $SB/ent/2-key.pem"
+  assert_not_contains "a failing probe never prints key material" "$OUT" "SECRETKEY"
+  chmod 600 "$SB/ent/2-key.pem"
+else
+  echo "  - SKIPPED unreadable-entitlement checks (running as root, which can read anything)"
+fi
+new_sandbox
+STUB_BODY='echo TOKEN-ON-STDOUT; echo "boom on stderr" >&2; exit 1'; OUT=$(guest_checks) && RC=0 || RC=$?
+assert_eq "failing probe fails the check" "$RC" "1"
+assert_contains "shows the probe's stderr" "$OUT" "boom on stderr"
+assert_not_contains "never shows a probe's stdout" "$OUT" "TOKEN-ON-STDOUT"
+unset STUB_BODY
+
 echo "=== linux-vm.sh check / usage ==="
 new_sandbox
 OUT=$("$VM" check 2>&1) && RC=0 || RC=$?
 assert_eq "passing probes: check succeeds" "$RC" "0"
+CALLS=$(cat "$LIMA_LOG")
+assert_contains "check probes executing a script on the mount" "$CALLS" ".vm-exec-probe"
+assert_contains "check probes a container writing to the mount" "$CALLS" ".vm-write-probe"
+assert_contains "check shows the real error of a failed probe" "$CALLS" 'head -5'
 new_sandbox; export LIMA_CHECK_RC=1
 OUT=$("$VM" check 2>&1) && RC=0 || RC=$?
 assert_eq "a failing probe fails check" "$RC" "1"

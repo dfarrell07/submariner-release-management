@@ -71,6 +71,7 @@ inject_git_failures() {
     fi
     if [ "$scenario:$verb" = post-stash-status-fails:status ] &&
        [ "$(command git rev-parse refs/stash)" != "$older_stash" ]; then return 1; fi
+    if [ "$scenario:$verb" = lockfile-status-fails:status ] && [[ "$*" == *rpm-lockfiles* ]]; then return 1; fi
     case "$scenario:$verb:$option" in
       stash-fails:stash:push|pop-fails:stash:pop|status-fails:status:*) return 1 ;;
       stash-ref-fails:rev-parse:--verify) return 1 ;;
@@ -269,39 +270,89 @@ rpm_case() (
   local repo_dir="$SUBMARINER_BASE/submariner"
   setup_repo
   git checkout -qb devel
-  printf '#!/bin/bash\ncase "$RPM_TEST_MODE" in noop*) exit 0 ;; esac\nprintf "updated lockfile\\n" > .rpm-lockfiles/gateway/rpms.lock.yaml\n[ "$RPM_TEST_MODE" != updater-fails ]\n' \
-    > .rpm-lockfiles/update-lockfile.sh
+  cat > .rpm-lockfiles/update-lockfile.sh <<'FIXTURE'
+#!/bin/bash
+echo "$*" >> "$RPM_TEST_CALLS"
+case "$RPM_TEST_MODE" in
+  noop*) exit 0 ;;
+  cdn-refused) echo "Error: Status code: 403 for https://cdn.redhat.com/x"; exit 1 ;;
+  updater-fails) echo "Error: no such package foo-1.403.2 (sha256:ab4031cd)" ;; # looks like 403, is not a refusal
+esac
+printf "updated lockfile\n" > .rpm-lockfiles/gateway/rpms.lock.yaml
+if [ "$RPM_TEST_MODE" = all-components ]; then
+  printf "updated nettest lockfile\n" > .rpm-lockfiles/nettest/rpms.lock.yaml
+  echo scratch > .rpm-lockfiles/gateway/scratch # not a lockfile: must never be committed
+fi
+[ "$RPM_TEST_MODE" != updater-fails ]
+FIXTURE
   git add .rpm-lockfiles/update-lockfile.sh
   git commit -qm 'Fixture updater'
   git update-ref refs/remotes/origin/devel HEAD
+  case "$scenario" in
+    tracked|noop-tracked)
+      # Real release branches already track their own copy of the updater.
+      git checkout -q release-0.25
+      printf '#!/bin/bash\n# release branch copy\n' > .rpm-lockfiles/update-lockfile.sh
+      git add .rpm-lockfiles/update-lockfile.sh
+      git commit -qm 'Release updater'
+      ;;
+    all-components)
+      git checkout -q release-0.25
+      mkdir -p .rpm-lockfiles/nettest
+      printf 'baseline nettest lockfile\n' > .rpm-lockfiles/nettest/rpms.lock.yaml
+      git add .rpm-lockfiles/nettest
+      git commit -qm 'Second component'
+      ;;
+    new-lockfile)
+      # A component whose lockfile is generated for the first time.
+      git checkout -q release-0.25
+      git rm -q .rpm-lockfiles/gateway/rpms.lock.yaml
+      mkdir -p .rpm-lockfiles/gateway
+      printf 'packages: []\n' > .rpm-lockfiles/gateway/rpms.in.yaml
+      git add .rpm-lockfiles/gateway/rpms.in.yaml
+      git commit -qm 'No lockfile yet'
+      ;;
+  esac
   git checkout -q original
   case "$scenario" in
     dirty) dirty_work ;;
     detached) git checkout -q --detach ;;
   esac
-  export RPM_TEST_MODE="$scenario"
+  export RPM_TEST_MODE="$scenario" RPM_TEST_CALLS="$SUBMARINER_BASE/updater-calls"
+  export TMPDIR="$SUBMARINER_BASE/tmp"
+  mkdir -p "$TMPDIR"
   # shellcheck source=../rpm-lockfile-update.sh
   source "$RELEASE_SCRIPTS/rpm-lockfile-update.sh"
   BRANCH=release-0.25 VERSION=0.25.1 COMPONENT_FILTER=gateway
+  [ "$scenario" != all-components ] || COMPONENT_FILTER=all
   inject_git_failures
-  update_lockfiles
+  update_lockfiles 2> "$SUBMARINER_BASE/stderr"
   assert_eq 'original commit preserved' "$(command git rev-parse original)" "$original_sha"
   local branch
   branch=$(command git rev-parse --abbrev-ref HEAD)
   case "$scenario" in
-    normal|detached|noop)
+    normal|detached|noop|tracked|noop-tracked|new-lockfile)
       expected_branch=original
       [ "$scenario" = detached ] && expected_branch=HEAD
       assert_eq 'original branch restored' "$branch" "$expected_branch"
       assert_eq 'no failures' "${#REPOS_FAILED[@]}" 0
       assert_eq 'worktree clean' "$(command git status --porcelain --untracked-files=all)" ''
-      if [ "$scenario" = noop ]; then
+      if [ "$scenario" = noop ] || [ "$scenario" = noop-tracked ]; then
         assert_eq 'no-op recorded' "${REPOS_SKIPPED[0]:-}" gateway:no-changes
       else
         assert_eq 'update recorded' "${#REPOS_UPDATED[@]}" 1
       fi
+      case "$scenario" in
+        tracked|noop-tracked)
+          assert_eq 'tracked updater untouched' "$(command git show release-0.25:.rpm-lockfiles/update-lockfile.sh | tail -1)" '# release branch copy' ;;
+      esac
+      case "$scenario" in
+        tracked|new-lockfile)
+          assert_eq 'only the lockfile is committed' \
+            "$(command git diff --name-only release-0.25 update-rpm-lockfiles-0.25.1)" .rpm-lockfiles/gateway/rpms.lock.yaml ;;
+      esac
       ;;
-    dirty|status-fails|checkout-fails)
+    dirty|status-fails|checkout-fails|copy-fails|cdn-refused)
       assert_eq 'original branch untouched' "$branch" original
       assert_eq 'failure recorded' "${#REPOS_FAILED[@]}" 1
       if [ "$scenario" = dirty ]; then assert_work_restored; fi
@@ -310,16 +361,50 @@ rpm_case() (
       assert_eq 'unfinished work stays on fix branch' "$branch" update-rpm-lockfiles-0.25.1
       assert_eq 'failure recorded' "${#REPOS_FAILED[@]}" 1
       case "$scenario" in
+        lockfile-status-fails) assert_eq 'recorded as status-failed' "${REPOS_FAILED[0]:-}" gateway:status-failed ;;
+        all-components)
+          # the commit happens, then the scratch file blocks restoring the original branch
+          assert_eq 'both lockfiles committed, nothing else' \
+            "$(command git diff --name-only release-0.25 update-rpm-lockfiles-0.25.1 | tr '\n' ' ')" \
+            '.rpm-lockfiles/gateway/rpms.lock.yaml .rpm-lockfiles/nettest/rpms.lock.yaml '
+          assert_eq 'update recorded' "${#REPOS_UPDATED[@]}" 1
+          assert_eq 'restore reported' "${REPOS_FAILED[0]##*:}" restore-failed ;;
+      esac
+      case "$scenario" in
         updater-fails|stage-fails|commit-fails)
           assert_eq 'partial edits preserved' "$(< .rpm-lockfiles/gateway/rpms.lock.yaml)" 'updated lockfile' ;;
         hook-artifact) assert_eq 'hook output preserved' "$(< artifact)" 'hook artifact' ;;
       esac
       ;;
   esac
+  calls=0; [ ! -e "$RPM_TEST_CALLS" ] || calls=$(wc -l < "$RPM_TEST_CALLS")
+  case "$scenario" in
+    cdn-refused)
+      assert_eq 'a refused download is not retried' "$calls" 1
+      assert_eq 'refusal tells the user what to do' "$(grep -c 'make setup-entitlements FORCE=1' "$SUBMARINER_BASE/stderr")" 1 ;;
+    updater-fails)
+      assert_eq 'a failed update is not retried' "$calls" 1
+      assert_eq 'no refusal hint for an unrelated failure' "$(grep -c 'FORCE=1' "$SUBMARINER_BASE/stderr")" 0 ;;
+    normal) assert_eq 'component reaches the updater' "$(head -1 "$RPM_TEST_CALLS")" 'update-rpm-lockfiles-0.25.1 gateway' ;;
+  esac
+  assert_eq 'no temp files left behind' "$(find "$TMPDIR" -type f | wc -l | tr -d ' ')" 0
   get_gh_user() { printf 'test-user\n'; }
   summary_rc=0
   print_summary >/dev/null || summary_rc=$?
   if [ "${#REPOS_FAILED[@]}" -gt 0 ]; then assert_eq 'summary fails' "$summary_rc" 1; fi
+)
+
+refusal_pattern_case() (
+  # shellcheck source=../rpm-lockfile-update.sh
+  source "$RELEASE_SCRIPTS/rpm-lockfile-update.sh"
+  for line in 'error: Status code: 403 for https://cdn.redhat.com/x/repomd.xml (IP: 1.2.3.4)' 'HTTP/1.1 403 Forbidden'; do
+    printf '%s\n' "$line" | grep -qE "$CDN_REFUSAL_PATTERN" || { echo "should match: $line" >&2; exit 1; }
+  done
+  for line in 'Failed to download metadata for repo x: Curl error (6): Could not resolve host: cdn.redhat.com' \
+              'Cannot download repomd.xml: All mirrors were tried' 'Status code: 404 for https://cdn.redhat.com/x' \
+              'no such package foo-1.403.2 (sha256:ab4031cd)'; do
+    ! printf '%s\n' "$line" | grep -qE "$CDN_REFUSAL_PATTERN" || { echo "should not match: $line" >&2; exit 1; }
+  done
 )
 
 bundle_case() (
@@ -391,11 +476,14 @@ for scenario in normal restore-fails pop-fails conflict; do
   echo "  ✓ cve main / $scenario"
   PASS=$((PASS + 1))
 done
-for scenario in normal noop detached dirty status-fails checkout-fails copy-fails updater-fails stage-fails commit-fails restore-fails noop-restore-fails hook-artifact; do
+for scenario in normal noop tracked noop-tracked new-lockfile all-components cdn-refused lockfile-status-fails detached dirty status-fails checkout-fails copy-fails updater-fails stage-fails commit-fails restore-fails noop-restore-fails hook-artifact; do
   run_logged rpm_case "$scenario"
   echo "  ✓ rpm / $scenario"
   PASS=$((PASS + 1))
 done
+run_logged refusal_pattern_case
+echo "  ✓ rpm / refusal hint pattern"
+PASS=$((PASS + 1))
 for scenario in normal dirty untracked status-fails restore-fails; do
   run_logged bundle_case "$scenario"
   echo "  ✓ bundle / $scenario"

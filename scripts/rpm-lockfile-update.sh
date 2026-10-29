@@ -19,6 +19,8 @@ source "$SCRIPT_DIR/lib/linux-vm.sh"
 readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
 readonly COMPONENT_PATTERN="^(gateway|globalnet|route-agent|nettest)$"
 readonly FILTER_PATTERN="^(submariner|shipyard|gateway|globalnet|route-agent|nettest|all)$"
+# An HTTP 403 from Red Hat's CDN, as dnf reports it. Network failures print other messages.
+readonly CDN_REFUSAL_PATTERN='Status code: 403|403 Forbidden'
 readonly COMMIT_MSG="Regenerate RPM lockfiles for %s
 
 Updated lockfiles to resolve latest package versions."
@@ -199,53 +201,65 @@ update_lockfiles() {
     git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1 || \
       { REPOS_FAILED+=("$DISPLAY_NAME:branch-create-failed"); continue; }
 
-    git show "origin/devel:.rpm-lockfiles/update-lockfile.sh" > .rpm-lockfiles/update-lockfile.sh 2>/dev/null || {
+    # Run devel's updater from a temp file outside the repo, with bash. Release branches already
+    # track their own update-lockfile.sh, so writing devel's copy into the tree (and deleting it
+    # afterwards) leaves the checkout dirty and blocks restoring the original branch. Using bash
+    # also avoids depending on the exec bit, which the Linux VM's mounts may not honor.
+    local UPDATER
+    UPDATER=$(mktemp "${TMPDIR:-/tmp}/update-lockfile.XXXXXX") || \
+      { REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed"); restore_clean_ref "$ORIGINAL_REF" || true; continue; }
+    git show "origin/devel:.rpm-lockfiles/update-lockfile.sh" > "$UPDATER" 2>/dev/null || {
       echo "❌ Failed to copy update-lockfile.sh from origin/devel"
       echo "   Run: git fetch origin devel"
+      rm -f "$UPDATER"
       REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed")
       restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
       continue
     }
 
-    chmod +x .rpm-lockfiles/update-lockfile.sh
-
     # Fix UBI version mismatch: devel script may use ubi10 but release branches use RHEL 9 repos.
     # Detect from repo files and patch the script to match.
     if grep -q 'ubi9\|rhel9' .rpm-lockfiles/*/submariner-rhel-*.repo 2>/dev/null && \
-       grep -q 'ubi10' .rpm-lockfiles/update-lockfile.sh; then
-      sed -i 's|registry.access.redhat.com/ubi10/ubi:latest|registry.access.redhat.com/ubi9/ubi:latest|g' \
-        .rpm-lockfiles/update-lockfile.sh
+       grep -q 'ubi10' "$UPDATER"; then
+      sed -i 's|registry.access.redhat.com/ubi10/ubi:latest|registry.access.redhat.com/ubi9/ubi:latest|g' "$UPDATER"
       echo "    (patched update-lockfile.sh: ubi10 → ubi9 to match branch repo files)"
     fi
 
     set +e  # Disable errexit to capture exit code and cleanup
-    local LOCKFILE_PATTERN _lockfile_log
+    local LOCKFILE_PATTERN LOCKFILE_CHANGES _lockfile_log
+    local -a UPDATER_ARGS=("$FIX_BRANCH")
     _lockfile_log=$(mktemp)
     if [[ "$COMPONENT_FILTER" =~ $COMPONENT_PATTERN ]]; then
       LOCKFILE_PATTERN=".rpm-lockfiles/$COMPONENT_FILTER/rpms.lock.yaml"
-      echo "Running: .rpm-lockfiles/update-lockfile.sh $FIX_BRANCH $COMPONENT_FILTER"
-      echo ""
-      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" "$COMPONENT_FILTER" > "$_lockfile_log" 2>&1
+      UPDATER_ARGS+=("$COMPONENT_FILTER")
     else
       LOCKFILE_PATTERN=".rpm-lockfiles/*/rpms.lock.yaml"
-      echo "Running: .rpm-lockfiles/update-lockfile.sh $FIX_BRANCH"
-      echo ""
-      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" > "$_lockfile_log" 2>&1
     fi
+    echo "Running: update-lockfile.sh (from origin/devel) ${UPDATER_ARGS[*]}"
+    echo ""
+    bash "$UPDATER" "${UPDATER_ARGS[@]}" > "$_lockfile_log" 2>&1
     local LOCKFILE_EXIT=$?
     # Show status lines and "No sources" warnings; suppress dnf/pip/skopeo setup noise
     # and update-lockfile.sh's own manual-use "To commit/To push" instructions.
     grep -E '^(--- |WARNING:rpm_lockfile: No sources)' "$_lockfile_log" || true
     # On failure, dump the full log so the problem is diagnosable.
     [ "$LOCKFILE_EXIT" -ne 0 ] && cat "$_lockfile_log" >&2
+    if [ "$LOCKFILE_EXIT" -ne 0 ] && grep -qE "$CDN_REFUSAL_PATTERN" "$_lockfile_log"; then
+      echo "❌ Red Hat's CDN answered a download with HTTP 403. With a valid entitlement, a stale registration is a likely cause." >&2
+      echo "   Re-register, then re-run:  make setup-entitlements FORCE=1   (run it on the host; on macOS it executes in the VM)" >&2
+    fi
     rm -f "$_lockfile_log"
     set -e
-    rm -f .rpm-lockfiles/update-lockfile.sh
+    rm -f "$UPDATER"
 
-    if [ $LOCKFILE_EXIT -ne 0 ]; then
+    if [ "$LOCKFILE_EXIT" -ne 0 ]; then
       REPOS_FAILED+=("$DISPLAY_NAME:update-script-failed")
       restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
-    elif git diff --quiet $LOCKFILE_PATTERN 2>/dev/null; then
+    elif ! LOCKFILE_CHANGES=$(git status --porcelain --untracked-files=all -- "$LOCKFILE_PATTERN"); then
+      # git diff would miss a lockfile generated for the first time (untracked)
+      REPOS_FAILED+=("$DISPLAY_NAME:status-failed")
+      restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
+    elif [ -z "$LOCKFILE_CHANGES" ]; then
       if ! restore_clean_ref "$ORIGINAL_REF"; then
         REPOS_FAILED+=("$DISPLAY_NAME:restore-failed")
         continue
@@ -255,8 +269,7 @@ update_lockfiles() {
       fi
       REPOS_SKIPPED+=("$DISPLAY_NAME:no-changes")
     else
-      # shellcheck disable=SC2086
-      git add $LOCKFILE_PATTERN || {
+      git add -- "$LOCKFILE_PATTERN" || {
         REPOS_FAILED+=("$DISPLAY_NAME:stage-failed")
         restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
         continue

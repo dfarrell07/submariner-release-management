@@ -38,11 +38,24 @@ cmd_setup() {
 
 readonly GUEST_CHECKS='
 ok=0
-chk() { if "${@:2}" >/dev/null 2>&1; then echo "  ✓ $1"; else echo "  ✗ $1"; ok=1; fi; }
+chk() {
+  # Keep only stderr: stdout may hold certificate or key material, which must never reach the terminal
+  local err
+  if err=$("${@:2}" 2>&1 >/dev/null); then echo "  ✓ $1"
+  else echo "  ✗ $1"; [ -z "$err" ] || printf "%s\n" "$err" | head -5 | sed "s/^/      /"; ok=1; fi
+}
 for t in git podman gh gpg subscription-manager; do chk "$t installed" command -v "$t"; done
 chk "$1 is writable" test -w "$1"
-chk "podman runs a container with a :z volume on the mount" \
-  podman run --rm -v "$1:/probe:z" registry.access.redhat.com/ubi9/ubi-minimal true
+# A noexec mount is one way a script written onto the repos fails with "permission denied"
+chk "files on $1 can be executed" bash -c '"'"'t=$(mktemp "$1/.vm-exec-probe.XXXXXX") && printf "#!/bin/sh\ntrue\n" > "$t" && chmod +x "$t" && "$t"; r=$?; rm -f "$t"; exit $r'"'"' _ "$1"
+# Present only after setup-entitlements; the updater copies these as the VM user
+ent="${ENTITLEMENT_DIR:-/etc/pki/entitlement}"
+if ls "$ent"/*.pem >/dev/null 2>&1; then
+  chk "entitlement files are readable" bash -c '"'"'for f in "$@"; do [ -r "$f" ] || { echo "cannot read $f" >&2; exit 1; }; done'"'"' _ "$ent"/*.pem
+fi
+# The updater runs a container that writes the lockfiles into the mounted repo
+chk "podman can write to a :z volume on the mount" \
+  podman run --rm -v "$1:/probe:z" registry.access.redhat.com/ubi9/ubi-minimal sh -c "touch /probe/.vm-write-probe && rm -f /probe/.vm-write-probe"
 exit $ok
 '
 
@@ -53,9 +66,11 @@ cmd_check() {
   "$LIMACTL" shell "$LINUX_VM_NAME" -- bash -c "$GUEST_CHECKS" _ "$base"
 }
 
-case "${1:-}" in
-  setup) cmd_setup ;;
-  check) cmd_check ;;
-  -h | --help | "") sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; [ -n "${1:-}" ] ;;
-  *) echo "Unknown command: $1 (see --help)" >&2; exit 2 ;;
-esac
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "${1:-}" in
+    setup) cmd_setup ;;
+    check) cmd_check ;;
+    -h | --help | "") sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; [ -n "${1:-}" ] ;;
+    *) echo "Unknown command: $1 (see --help)" >&2; exit 2 ;;
+  esac
+fi
