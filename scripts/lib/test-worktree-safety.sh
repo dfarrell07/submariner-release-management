@@ -71,6 +71,7 @@ inject_git_failures() {
     fi
     if [ "$scenario:$verb" = post-stash-status-fails:status ] &&
        [ "$(command git rev-parse refs/stash)" != "$older_stash" ]; then return 1; fi
+    if [ "$scenario:$verb" = lockfile-status-fails:status ] && [[ "$*" == *rpm-lockfiles* ]]; then return 1; fi
     case "$scenario:$verb:$option" in
       stash-fails:stash:push|pop-fails:stash:pop|status-fails:status:*) return 1 ;;
       stash-ref-fails:rev-parse:--verify) return 1 ;;
@@ -263,53 +264,178 @@ cve_case() (
   esac
 )
 
+rpm_prerequisites_case() (
+  # shellcheck source=../rpm-lockfile-update.sh
+  source "$RELEASE_SCRIPTS/rpm-lockfile-update.sh"
+  SCRIPT_DIR="$TEST_ROOT/rpm-prerequisites"
+  mkdir -p "$SCRIPT_DIR"
+  export RPM_PREREQUISITE_MARKER="$SCRIPT_DIR/checked"
+  printf '#!/bin/bash\nprintf checked > "$RPM_PREREQUISITE_MARKER"\n' > "$SCRIPT_DIR/setup-entitlements.sh"
+  chmod 600 "$SCRIPT_DIR/setup-entitlements.sh"
+  podman() { :; }; gh() { :; }; skopeo() { :; }; jq() { :; }
+  check_prerequisites
+  assert_eq 'non-executable prerequisite runs through bash' "$(cat "$RPM_PREREQUISITE_MARKER")" checked
+)
+
 rpm_case() (
   local scenario="$1"
   SUBMARINER_BASE="$TEST_ROOT/rpm-$scenario"
   local repo_dir="$SUBMARINER_BASE/submariner"
   setup_repo
   git checkout -qb devel
-  printf '#!/bin/bash\ncase "$RPM_TEST_MODE" in noop*) exit 0 ;; esac\nprintf "updated lockfile\\n" > .rpm-lockfiles/gateway/rpms.lock.yaml\n[ "$RPM_TEST_MODE" != updater-fails ]\n' \
-    > .rpm-lockfiles/update-lockfile.sh
+  cat > .rpm-lockfiles/update-lockfile.sh <<'FIXTURE'
+#!/bin/bash
+# registry.access.redhat.com/ubi10/ubi:latest
+echo "$*" >> "$RPM_TEST_CALLS"
+case "$RPM_TEST_MODE" in
+  noop*) exit 0 ;;
+  cdn-refused) echo "Error: Status code: 403 for https://cdn.redhat.com/x"; exit 1 ;;
+  updater-fails) echo "Error: no such package foo-1.403.2 (sha256:ab4031cd)" ;; # looks like 403, is not a refusal
+esac
+printf "updated lockfile\n" > .rpm-lockfiles/gateway/rpms.lock.yaml
+if [ "$RPM_TEST_MODE" = all-components ]; then
+  printf "updated nettest lockfile\n" > .rpm-lockfiles/nettest/rpms.lock.yaml
+  echo scratch > .rpm-lockfiles/gateway/scratch # not a lockfile: must never be committed
+  mkdir -p .rpm-lockfiles/gateway/cache
+  echo nested > .rpm-lockfiles/gateway/cache/rpms.lock.yaml # outside the component lockfile scope
+fi
+[ "$RPM_TEST_MODE" != updater-fails ]
+FIXTURE
   git add .rpm-lockfiles/update-lockfile.sh
   git commit -qm 'Fixture updater'
   git update-ref refs/remotes/origin/devel HEAD
+  case "$scenario" in
+    remote-repair)
+      # Simulate a fetched review correction whose local branch was deleted.
+      local remote_before bare_repo="$SUBMARINER_BASE/fork.git"
+      git clone -q --bare "$repo_dir" "$bare_repo"
+      git remote add origin "$bare_repo"
+      git checkout -qb update-rpm-lockfiles-0.25.1 release-0.25
+      printf 'review correction\n' > remote-correction
+      git add remote-correction; git commit -qm 'Pending review correction'
+      git push -q origin update-rpm-lockfiles-0.25.1
+      remote_before=$(git rev-parse HEAD)
+      git checkout -q original
+      git branch -D update-rpm-lockfiles-0.25.1 >/dev/null
+      git fetch -q origin
+      ;;
+    tracked|noop-tracked)
+      # Real release branches already track their own copy of the updater.
+      git checkout -q release-0.25
+      printf '#!/bin/bash\n# release branch copy\n' > .rpm-lockfiles/update-lockfile.sh
+      git add .rpm-lockfiles/update-lockfile.sh
+      git commit -qm 'Release updater'
+      ;;
+    all-components)
+      git checkout -q release-0.25
+      mkdir -p .rpm-lockfiles/nettest
+      printf 'baseline nettest lockfile\n' > .rpm-lockfiles/nettest/rpms.lock.yaml
+      git add .rpm-lockfiles/nettest
+      git commit -qm 'Second component'
+      ;;
+    patch-fails)
+      git checkout -q release-0.25
+      printf 'rhel9\n' > .rpm-lockfiles/gateway/submariner-rhel-9.repo
+      git add .rpm-lockfiles/gateway/submariner-rhel-9.repo
+      git commit -qm 'RHEL 9 repository'
+      ;;
+    new-lockfile)
+      # A component whose lockfile is generated for the first time.
+      git checkout -q release-0.25
+      git rm -q .rpm-lockfiles/gateway/rpms.lock.yaml
+      mkdir -p .rpm-lockfiles/gateway
+      printf 'packages: []\n' > .rpm-lockfiles/gateway/rpms.in.yaml
+      git add .rpm-lockfiles/gateway/rpms.in.yaml
+      git commit -qm 'No lockfile yet'
+      ;;
+    ignored-tracked)
+      git checkout -q release-0.25
+      printf 'upstream pipeline\n' > .tekton/private.yaml
+      git add .tekton/private.yaml
+      git commit -qm 'Tracked only on release'
+      ;;
+  esac
   git checkout -q original
+  if [[ "$scenario" == ignored-* ]]; then
+    printf '.tekton/private.yaml\n' > .gitignore
+    git add .gitignore
+    git commit -qm 'Ignore local experiment on original'
+    original_sha=$(git rev-parse HEAD)
+    printf 'private local experiment\n' > .tekton/private.yaml
+  fi
   case "$scenario" in
     dirty) dirty_work ;;
     detached) git checkout -q --detach ;;
   esac
-  export RPM_TEST_MODE="$scenario"
+  export RPM_TEST_MODE="$scenario" RPM_TEST_CALLS="$SUBMARINER_BASE/updater-calls"
+  export TMPDIR="$SUBMARINER_BASE/tmp"
+  mkdir -p "$TMPDIR"
   # shellcheck source=../rpm-lockfile-update.sh
   source "$RELEASE_SCRIPTS/rpm-lockfile-update.sh"
   BRANCH=release-0.25 VERSION=0.25.1 COMPONENT_FILTER=gateway
   skopeo() { echo 'real skopeo reached' >&2; return 1; }  # the fixture has no pinned base
+  [ "$scenario" != all-components ] || COMPONENT_FILTER=all
   inject_git_failures
-  update_lockfiles
+  mktemp() {
+    case "$scenario:${1:-}" in
+      updater-temp-fails:*update-lockfile*|log-temp-fails:) return 1 ;;
+    esac
+    command mktemp "$@"
+  }
+  sed() {
+    [ "$scenario" != patch-fails ] || return 1
+    command sed "$@"
+  }
+  update_lockfiles 2> "$SUBMARINER_BASE/stderr"
   assert_eq 'original commit preserved' "$(command git rev-parse original)" "$original_sha"
   local branch
   branch=$(command git rev-parse --abbrev-ref HEAD)
   case "$scenario" in
-    normal|detached|noop)
+    normal|detached|noop|tracked|noop-tracked|new-lockfile|remote-repair|push-log-fails)
       expected_branch=original
       [ "$scenario" = detached ] && expected_branch=HEAD
       assert_eq 'original branch restored' "$branch" "$expected_branch"
       assert_eq 'no failures' "${#REPOS_FAILED[@]}" 0
       assert_eq 'worktree clean' "$(command git status --porcelain --untracked-files=all)" ''
-      if [ "$scenario" = noop ]; then
+      if [ "$scenario" = noop ] || [ "$scenario" = noop-tracked ]; then
         assert_eq 'no-op recorded' "${REPOS_SKIPPED[0]:-}" gateway:no-changes
       else
         assert_eq 'update recorded' "${#REPOS_UPDATED[@]}" 1
       fi
+      case "$scenario" in
+        tracked|noop-tracked)
+          assert_eq 'tracked updater untouched' "$(command git show release-0.25:.rpm-lockfiles/update-lockfile.sh | tail -1)" '# release branch copy' ;;
+      esac
+      case "$scenario" in
+        tracked|new-lockfile)
+          assert_eq 'only the lockfile is committed' \
+            "$(command git diff --name-only release-0.25 update-rpm-lockfiles-0.25.1)" .rpm-lockfiles/gateway/rpms.lock.yaml ;;
+      esac
       ;;
-    dirty|status-fails|checkout-fails)
+    dirty|status-fails|checkout-fails|copy-fails|cdn-refused|patch-fails|updater-temp-fails|log-temp-fails|ignored-tracked|ignored-exposed)
       assert_eq 'original branch untouched' "$branch" original
       assert_eq 'failure recorded' "${#REPOS_FAILED[@]}" 1
       if [ "$scenario" = dirty ]; then assert_work_restored; fi
+      if [[ "$scenario" == ignored-* ]]; then
+        assert_eq 'RPM preserves ignored local file' "$(< .tekton/private.yaml)" 'private local experiment'
+        assert_eq 'RPM does not run updater on unsafe checkout' "$([ -f "$RPM_TEST_CALLS" ] && echo yes || echo no)" no
+        assert_eq 'RPM does not create repair commit' "${#REPOS_UPDATED[@]}" 0
+        assert_eq 'RPM removes unused repair branch' "$(command git branch --list update-rpm-lockfiles-0.25.1)" ''
+      fi
       ;;
     *)
       assert_eq 'unfinished work stays on fix branch' "$branch" update-rpm-lockfiles-0.25.1
       assert_eq 'failure recorded' "${#REPOS_FAILED[@]}" 1
+      case "$scenario" in
+        lockfile-status-fails) assert_eq 'recorded as status-failed' "${REPOS_FAILED[0]:-}" gateway:status-failed ;;
+        all-components)
+          # the commit happens, then the scratch file blocks restoring the original branch
+          assert_eq 'both lockfiles committed, nothing else' \
+            "$(command git diff --name-only release-0.25 update-rpm-lockfiles-0.25.1 | tr '\n' ' ')" \
+            '.rpm-lockfiles/gateway/rpms.lock.yaml .rpm-lockfiles/nettest/rpms.lock.yaml '
+          assert_eq 'update recorded' "${#REPOS_UPDATED[@]}" 1
+          assert_eq 'restore reported' "${REPOS_FAILED[0]##*:}" restore-failed ;;
+      esac
       case "$scenario" in
         updater-fails|stage-fails|commit-fails)
           assert_eq 'partial edits preserved' "$(< .rpm-lockfiles/gateway/rpms.lock.yaml)" 'updated lockfile' ;;
@@ -317,10 +443,41 @@ rpm_case() (
       esac
       ;;
   esac
+  case "$scenario" in
+    patch-fails|updater-temp-fails|log-temp-fails)
+      assert_eq 'preparation failure recorded' "${REPOS_FAILED[0]:-}" gateway:script-copy-failed
+      assert_eq 'updater never ran after preparation failure' "$([ -e "$RPM_TEST_CALLS" ] && echo yes || echo no)" no ;;
+    cdn-refused)
+      assert_eq 'refusal tells the user what to do' "$(grep -c 'make setup-entitlements FORCE=1' "$SUBMARINER_BASE/stderr")" 1 ;;
+    updater-fails)
+      assert_eq 'no refusal hint for an unrelated failure' "$(grep -c 'FORCE=1' "$SUBMARINER_BASE/stderr")" 0 ;;
+    normal) assert_eq 'component reaches the updater' "$(head -1 "$RPM_TEST_CALLS")" 'update-rpm-lockfiles-0.25.1 gateway' ;;
+  esac
+  assert_eq 'no temp files left behind' "$(find "$TMPDIR" -type f | wc -l | tr -d ' ')" 0
   get_gh_user() { printf 'test-user\n'; }
+  if [ "$scenario" = remote-repair ]; then
+    AUTORELEASE_PUSH_LOG="$SUBMARINER_BASE/push-commands"
+    export RPM_PUSH_GH_MARKER="$SUBMARINER_BASE/gh-called"
+    gh() { echo called >> "$RPM_PUSH_GH_MARKER"; return 99; }
+    export -f gh
+  fi
+  if [ "$scenario" = push-log-fails ]; then
+    AUTORELEASE_PUSH_LOG="$SUBMARINER_BASE/missing-directory/push.log"
+  fi
   summary_rc=0
   print_summary >/dev/null || summary_rc=$?
   if [ "${#REPOS_FAILED[@]}" -gt 0 ]; then assert_eq 'summary fails' "$summary_rc" 1; fi
+  if [ "$scenario" = push-log-fails ]; then
+    assert_eq 'pending command log failure is reported' "$summary_rc" 1
+  fi
+  if [ "$scenario" = remote-repair ]; then
+    local push_rc=0
+    bash -euo pipefail "$AUTORELEASE_PUSH_LOG" > "$SUBMARINER_BASE/push-output" 2>&1 || push_rc=$?
+    assert_eq 'divergent remote RPM correction blocks publication' "$push_rc" 1
+    assert_eq 'remote RPM correction survives' \
+      "$(command git --git-dir="$bare_repo" rev-parse refs/heads/update-rpm-lockfiles-0.25.1)" "$remote_before"
+    assert_eq 'rejected RPM push never reaches GitHub' "$(test -f "$RPM_PUSH_GH_MARKER" && echo called || true)" ''
+  fi
 )
 
 bundle_case() (
@@ -392,7 +549,10 @@ for scenario in normal restore-fails pop-fails conflict; do
   echo "  ✓ cve main / $scenario"
   PASS=$((PASS + 1))
 done
-for scenario in normal noop detached dirty status-fails checkout-fails copy-fails updater-fails stage-fails commit-fails restore-fails noop-restore-fails hook-artifact; do
+run_logged rpm_prerequisites_case
+echo "  ✓ rpm / non-executable prerequisites"
+PASS=$((PASS + 1))
+for scenario in normal noop tracked noop-tracked new-lockfile remote-repair push-log-fails all-components cdn-refused lockfile-status-fails detached dirty status-fails checkout-fails copy-fails patch-fails updater-temp-fails log-temp-fails updater-fails stage-fails commit-fails restore-fails noop-restore-fails hook-artifact ignored-tracked ignored-exposed; do
   run_logged rpm_case "$scenario"
   echo "  ✓ rpm / $scenario"
   PASS=$((PASS + 1))

@@ -101,8 +101,13 @@ make rpm-lockfile-update BRANCH=0.25
 ```
 
 The VM mounts this repo and `SUBMARINER_BASE` at the host paths. Prompts, logs and the saved team password are in the VM
-(`limactl shell submariner-release`). Jira tracker updates and `AUTORELEASE_PUSH_LOG` are not available there. To change
-`SUBMARINER_BASE`, run `limactl shell submariner-release sudo subscription-manager unregister`,
+(`limactl shell submariner-release`). `make linux-vm-check` also checks that a container can write to the mounted repos.
+Jira tracker updates and `AUTORELEASE_PUSH_LOG` are not available there.
+
+If downloads fail with HTTP 403 or `make check-entitlements` prints "Entitlement grants no RHEL repository access",
+the registration may be stale: run `make setup-entitlements FORCE=1`.
+
+To change `SUBMARINER_BASE`, run `limactl shell submariner-release sudo subscription-manager unregister`,
 `limactl delete -f submariner-release`, then `make linux-vm-setup`.
 
 `rpm-lockfile-update` also refreshes digest-pinned base images, which needs `skopeo` and `jq`. A VM created before they

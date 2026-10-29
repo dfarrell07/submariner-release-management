@@ -92,6 +92,7 @@ assert_contains "starts the VM first" "$CALLS" $'CALL\nstart\n--tty=false\nsubma
 assert_contains "runs from the repo root" "$CALLS" $'CALL\nshell\n--workdir\n'"$ROOT"$'\nsubmariner-release\n'
 assert_contains "script path and arguments reach the VM intact" "$CALLS" \
   "$ROOT/scripts/rpm-lockfile-update.sh"$'\n0.24\ntwo words\n--flag'
+assert_contains "script runs via bash, not the mount's exec bit" "$CALLS" $'\nbash\n'"$ROOT/scripts/rpm-lockfile-update.sh"$'\n'
 assert_contains "SUBMARINER_BASE defaults from the host HOME" "$CALLS" "SUBMARINER_BASE=$HOME/go/src/submariner-io"
 assert_contains "gh token forwarded" "$CALLS" "GH_TOKEN=tok-123"
 assert_contains "entitlement settings forwarded" "$CALLS" "RH_ORG=123"
@@ -162,6 +163,74 @@ new_sandbox; export GH_AUTH_RC=1
 OUT=$(cd "$SB" && "$VM" setup 2>&1) && RC=0 || RC=$?
 assert_eq "not logged in to gh: fails" "$RC" "1"
 assert_contains "not logged in to gh: says how to fix it" "$OUT" "gh auth login"
+
+echo "=== macOS host hands off before Bash 4 globals ==="
+new_sandbox
+LIMA_SHELL_RC=23
+# A stock macOS Bash 3.2 rejects associative arrays. Fail that declaration even
+# on Linux so the real entry point must reach the VM before declaring one.
+OUT=$(/bin/bash -c '
+  declare() { [ "${1:-}" != -A ] || { echo "host rejected associative array" >&2; return 64; }; builtin declare "$@"; }
+  export -f declare
+  exec /bin/bash "$@"
+' _ "$ROOT/scripts/rpm-lockfile-update.sh" 0.24 2>&1) && RC=0 || RC=$?
+assert_eq "RPM entry point hands off before unsupported host declarations" "$RC" 23
+assert_not_contains "no associative array is declared on the host" "$OUT" "host rejected associative array"
+
+echo "=== the probes that run in the VM ==="
+guest_checks() ( # run GUEST_CHECKS here, as the VM would, against stubs and a fake entitlement dir
+  # shellcheck source=../linux-vm.sh
+  source "$VM"
+  mkdir -p "$SB/base" "$SB/ent"
+  for t in git podman gpg subscription-manager skopeo jq; do [ -e "$SB/bin/$t" ] || printf '#!/bin/bash\n%s\n' "${STUB_BODY:-exit 0}" > "$SB/bin/$t"; done
+  chmod +x "$SB/bin/"*
+  ENTITLEMENT_DIR="$SB/ent" bash -c "$GUEST_CHECKS" _ "$SB/base" 2>&1
+)
+new_sandbox
+OUT=$(guest_checks) && RC=0 || RC=$?
+assert_eq "healthy VM: all probes pass" "$RC" "0"
+assert_not_contains "before registration: no entitlement probe" "$OUT" "entitlement files"
+printf 'CERT\n' > "$SB/ent/1.pem"; printf -- '-----BEGIN RSA PRIVATE KEY-----\nSECRETKEY\n' > "$SB/ent/1-key.pem"
+OUT=$(guest_checks) && RC=0 || RC=$?
+assert_contains "readable entitlements pass" "$OUT" "✓ entitlement files are readable"
+assert_not_contains "a passing probe never prints key material" "$OUT" "SECRETKEY"
+if [ "$(id -u)" != 0 ]; then
+  printf 'CERT\n' > "$SB/ent/2.pem"; printf -- 'SECRETKEY2\n' > "$SB/ent/2-key.pem"; chmod 000 "$SB/ent/2-key.pem"
+  OUT=$(guest_checks) && RC=0 || RC=$?
+  assert_eq "unreadable entitlement fails the check" "$RC" "1"
+  assert_contains "names the unreadable file" "$OUT" "cannot read $SB/ent/2-key.pem"
+  assert_not_contains "a failing probe never prints key material" "$OUT" "SECRETKEY"
+  chmod 600 "$SB/ent/2-key.pem"
+  chmod 000 "$SB/ent"
+  OUT=$(guest_checks) && RC=0 || RC=$?
+  assert_eq "inaccessible entitlement directory fails the check" "$RC" "1"
+  assert_contains "identifies inaccessible entitlement directory" "$OUT" "✗ entitlement directory is readable and searchable"
+  chmod 700 "$SB/ent"
+else
+  echo "  - SKIPPED unreadable-entitlement checks (running as root, which can read anything)"
+fi
+new_sandbox
+mkdir -p "$SB/base"
+printf 'existing user file\n' > "$SB/base/.vm-write-probe"
+cat > "$SB/bin/podman" <<'STUB'
+#!/bin/bash
+# Execute the actual write probe against the host sandbox instead of a container mount.
+while [ "$1" != -v ]; do shift; done
+mount=${2%:/probe:z}
+while [ "$1" != -c ]; do shift; done
+probe=${2//\/probe/$mount}
+exec bash -c "$probe"
+STUB
+OUT=$(guest_checks) && RC=0 || RC=$?
+assert_eq "container write probe succeeds" "$RC" "0"
+assert_eq "container write probe preserves an existing file" "$(cat "$SB/base/.vm-write-probe")" 'existing user file'
+assert_eq "container write probe cleans up its temporary file" "$(find "$SB/base" -type f | wc -l | tr -d ' ')" "1"
+new_sandbox
+STUB_BODY='echo TOKEN-ON-STDOUT; echo "boom on stderr" >&2; exit 1'; OUT=$(guest_checks) && RC=0 || RC=$?
+assert_eq "failing probe fails the check" "$RC" "1"
+assert_contains "shows the probe's stderr" "$OUT" "boom on stderr"
+assert_not_contains "never shows a probe's stdout" "$OUT" "TOKEN-ON-STDOUT"
+unset STUB_BODY
 
 echo "=== linux-vm.sh check / usage ==="
 new_sandbox

@@ -24,6 +24,22 @@ get_gh_user() {
   gh api user --jq '.login' 2>/dev/null || true
 }
 
+# Run immediately after switching a previously clean/stashed worktree, before
+# editing anything. Different ignore rules can expose local files left by stash.
+check_checkout_clean() {
+  local worktree_status
+  if ! worktree_status=$(git status --porcelain --untracked-files=all); then
+    echo "Cannot inspect the switched worktree in $PWD; no repairs were attempted." >&2
+    return 1
+  fi
+  if [ -n "$worktree_status" ]; then
+    echo "Local files became visible after switching branches in $PWD; no repairs were attempted." >&2
+    printf '%s\n' "$worktree_status" >&2
+    echo "Move these files outside the checkout before retrying." >&2
+    return 1
+  fi
+}
+
 # Refuse to carry unfinished work onto another branch. Run in the target repo.
 restore_clean_ref() {
   local original_ref="$1" worktree_status
@@ -75,12 +91,17 @@ stash_worktree() {
 # edits, restore the original ref, then restore exactly the saved index/worktree.
 # Never pop onto the wrong branch or conceal a restore failure. Stashes remain
 # available for manual recovery on failure; no branch is deleted in that case.
+# Pass "safe" as the fifth argument when local or tool edits must be preserved.
 restore_stashed_worktree() {
   local repo_path="$1" original_ref="$2" drop_branch="${3:-}" stash_ref="${4:-}"
   local stash_idx
-  if ! git -C "$repo_path" checkout -f "$original_ref" >/dev/null; then
+  local -a checkout_options=(-f)
+  # A normal checkout preserves newly exposed files and unfinished child edits.
+  [ "${5:-}" != safe ] || checkout_options=(--quiet --no-overwrite-ignore)
+  if ! git -C "$repo_path" checkout "${checkout_options[@]}" "$original_ref" >/dev/null; then
     echo "Failed to restore $original_ref in $repo_path; saved stash: ${stash_ref:-none}." >&2
-    echo "Restore the branch before applying the stash with --index." >&2
+    echo "Inspect git status and move conflicting local files outside the checkout before restoring the branch." >&2
+    [ -z "$stash_ref" ] || echo "Then apply the saved stash with --index." >&2
     return 1
   fi
   if [ -n "$stash_ref" ]; then
