@@ -87,7 +87,23 @@ Scripts need Homebrew bash and GNU tools; `make` puts them on `PATH`.
 brew install bash coreutils findutils gnu-sed grep gnupg jq yq
 ```
 
-The RPM lockfile steps (`setup-entitlements`, `rpm-lockfile-update`) need `subscription-manager` and are Linux only.
+### RPM lockfiles on macOS
+
+`setup-entitlements` and `rpm-lockfile-update` need `subscription-manager`, so they re-run themselves in a Linux VM
+([Lima](https://lima-vm.io) 2.0+). Needs `brew install lima gh`, `gh auth login`, git `user.name`/`user.email`, and the
+Submariner repos in `SUBMARINER_BASE` (default `~/go/src/submariner-io`).
+
+```bash
+make linux-vm-setup      # once; first boot takes minutes
+make linux-vm-check
+make setup-entitlements  # once
+make rpm-lockfile-update BRANCH=0.25
+```
+
+The VM mounts this repo and `SUBMARINER_BASE` at the host paths. Prompts, logs and the saved team password are in the VM
+(`limactl shell submariner-release`). Jira tracker updates and `AUTORELEASE_PUSH_LOG` are not available there. To change
+`SUBMARINER_BASE`, run `limactl shell submariner-release sudo subscription-manager unregister`,
+`limactl delete -f submariner-release`, then `make linux-vm-setup`.
 
 ## Claude Skills
 

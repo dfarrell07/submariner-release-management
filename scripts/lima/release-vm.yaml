@@ -1,0 +1,18 @@
+---
+# Linux VM for the RPM lockfile steps, which need subscription-manager and
+# /etc/pki/entitlement (macOS has neither). scripts/linux-vm.sh adds the mounts.
+minimumLimaVersion: 2.0.0
+base: template://fedora
+cpus: 4
+memory: 4GiB
+disk: 30GiB
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      dnf install -y git podman gh gnupg2 subscription-manager
+      git config --system safe.directory '*'
+      # podman's :z relabel cannot work on mounted host files
+      setenforce 0 || true
+      sed -i 's/^SELINUX=.*/SELINUX=permissive/' /etc/selinux/config
