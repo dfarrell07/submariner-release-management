@@ -19,7 +19,7 @@ assert_eq() {
   else echo "  ✗ $1 (got: '$2', want: '$3')"; FAIL=$((FAIL + 1)); fi
 }
 assert_contains() {
-  if printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✓ $1"; PASS=$((PASS + 1))
+  if grep -qF -- "$3" <<< "$2"; then echo "  ✓ $1"; PASS=$((PASS + 1))
   else echo "  ✗ $1 (missing: '$3')"; FAIL=$((FAIL + 1)); fi
 }
 
@@ -34,9 +34,9 @@ _GS_OUT='{}'; _GS_RC=0
 oc() {
   echo x >>"$CLUSTER_SPY"
   case "$3" in
-    snap-rebuilt)   echo "quay.io/rh/submariner-bundle-0-99@sha256:aaaa1111" ;;
-    snap-stale)     echo "quay.io/rh/submariner-bundle-0-99@sha256:bbbb2222" ;;
-    snap-unrelated) echo "quay.io/rh/submariner-bundle-0-99@sha256:bbbb2222" ;;
+    snap-rebuilt)   echo "quay.io/rh/submariner-bundle-0-99@sha256:aaaa111100000000000000000000000000000000000000000000000000000000" ;;
+    snap-stale)     echo "quay.io/rh/submariner-bundle-0-99@sha256:bbbb222200000000000000000000000000000000000000000000000000000000" ;;
+    snap-unrelated) echo "quay.io/rh/submariner-bundle-0-99@sha256:bbbb222200000000000000000000000000000000000000000000000000000000" ;;
     *) echo "" ;;   # unknown / garbage-collected snapshot → no image
   esac
 }
@@ -58,7 +58,7 @@ VERSION="0.99.1"; RELEASE_TYPE="stage"; TRACKER="ACM-1"; SNAPSHOT_NAME="snap-reb
 
 echo "=== _bundle_digest Tests ==="
 
-assert_eq "digest extracted from image" "$(_bundle_digest snap-rebuilt submariner-bundle-0-99)" "sha256:aaaa1111"
+assert_eq "digest extracted from image" "$(_bundle_digest snap-rebuilt submariner-bundle-0-99)" "sha256:aaaa111100000000000000000000000000000000000000000000000000000000"
 assert_eq "digest empty for unknown snapshot" "$(_bundle_digest snap-gone submariner-bundle-0-99)" ""
 
 echo ""
@@ -127,7 +127,7 @@ assert_contains "unreadable digest → skip notice" "$GATE_OUT" "could not read 
 assert_eq "gate is strictly read-only (no update_step)" "$(wc -c <"$WRITE_SPY")" "0"
 
 assert_lacks() {
-  if printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✗ $1 (found: '$3')"; FAIL=$((FAIL + 1))
+  if grep -qF -- "$3" <<< "$2"; then echo "  ✗ $1 (found: '$3')"; FAIL=$((FAIL + 1))
   else echo "  ✓ $1"; PASS=$((PASS + 1)); fi
 }
 
@@ -165,14 +165,14 @@ R=registry.redhat.io/rhacm2
 cat >"$FIX/good.csv" <<CSV
 spec:
   relatedImages:
-  - {name: submariner-operator, image: $R/submariner-rhel9-operator@sha256:a1}
-  - {name: submariner-gateway, image: $R/submariner-gateway-rhel9@sha256:a2}
-  - {name: submariner-routeagent, image: $R/submariner-route-agent-rhel9@sha256:a3}
-  - {name: submariner-globalnet, image: $R/submariner-globalnet-rhel9@sha256:a4}
-  - {name: submariner-lighthouse-agent, image: $R/lighthouse-agent-rhel9@sha256:a5}
-  - {name: submariner-lighthouse-coredns, image: $R/lighthouse-coredns-rhel9@sha256:a6}
-  - {name: submariner-nettest, image: $R/nettest-rhel9@sha256:a7}
-  - {name: submariner-metrics-proxy, image: $R/nettest-rhel9@sha256:a7}
+  - {name: submariner-operator, image: $R/submariner-rhel9-operator@sha256:a100000000000000000000000000000000000000000000000000000000000000}
+  - {name: submariner-gateway, image: $R/submariner-gateway-rhel9@sha256:a200000000000000000000000000000000000000000000000000000000000000}
+  - {name: submariner-routeagent, image: $R/submariner-route-agent-rhel9@sha256:a300000000000000000000000000000000000000000000000000000000000000}
+  - {name: submariner-globalnet, image: $R/submariner-globalnet-rhel9@sha256:a400000000000000000000000000000000000000000000000000000000000000}
+  - {name: submariner-lighthouse-agent, image: $R/lighthouse-agent-rhel9@sha256:a500000000000000000000000000000000000000000000000000000000000000}
+  - {name: submariner-lighthouse-coredns, image: $R/lighthouse-coredns-rhel9@sha256:a600000000000000000000000000000000000000000000000000000000000000}
+  - {name: submariner-nettest, image: $R/nettest-rhel9@sha256:a700000000000000000000000000000000000000000000000000000000000000}
+  - {name: submariner-metrics-proxy, image: $R/nettest-rhel9@sha256:a700000000000000000000000000000000000000000000000000000000000000}
 CSV
 export FAKE_CSV="$FIX/good.csv"
 
@@ -182,17 +182,20 @@ snaps() {
   local spec n op b t i=0
   for spec in "$@"; do
     IFS=: read -r n op b t <<<"$spec"
+    printf -v op '%-64s' "$op"; op="${op// /0}"
+    printf -v b '%-64s' "$b"; b="${b// /0}"
     jq -n --arg n "submariner-0-99-$n" --arg ts "2026-01-01T00:00:$((50 - i))Z" \
       --arg op "$op" --arg b "$b" --arg t "$t" --arg q quay.io/rh '
       {metadata: {name: $n, creationTimestamp: $ts,
          labels: {"pac.test.appstudio.openshift.io/event-type": "push"},
          annotations: {"test.appstudio.openshift.io/status":
-           ([{scenario: "enterprise-contract", status: $t}] | tojson)}},
-       spec: {components: ([
+           ([{scenario: "enterprise-contract", status: $t, completionTime:"2026-01-01T01:00:00Z"}] | tojson)}},
+       status:{conditions:[{type:"AppStudioIntegrationStatus",status:"True",reason:"Finished"},{type:"AppStudioTestSucceeded",status:"True",reason:"Passed"}]},
+       spec: {application:"submariner-0-99",components: ([
          ["submariner-operator", $op], ["submariner-gateway", "a2"], ["submariner-route-agent", "a3"],
          ["submariner-globalnet", "a4"], ["lighthouse-agent", "a5"], ["lighthouse-coredns", "a6"],
          ["nettest", "a7"], ["subctl", "a8"], ["submariner-bundle", $b]]
-         | map({name: "\(.[0])-0-99", containerImage: "\($q)/\(.[0])-0-99@sha256:\(.[1])"}))}}'
+         | map({name: "\(.[0])-0-99", containerImage: "\($q)/\(.[0])-0-99@sha256:\(.[1] + ("0" * (64 - (.[1] | length))))"}))}}'
     i=$((i + 1))
   done | jq -s '{items: .}' >"$FAKE_SNAPSHOTS"
 }
@@ -209,7 +212,7 @@ echo "=== validate-bundle-images.sh --snapshot Tests ==="
 snaps snap:a1:b1:TestPassed
 run_validator --snapshot submariner-0-99-snap
 assert_eq "digests match → rc 0" "$VAL_RC" "0"
-for edit in 's/sha256:a1/sha256:ee/' '/submariner-gateway/d' '/metrics-proxy/s/a7/ee/' 's/@sha256:a2/:v0.99/' 'd'; do
+for edit in 's/sha256:a100000000000000000000000000000000000000000000000000000000000000/sha256:ee00000000000000000000000000000000000000000000000000000000000000/' '/submariner-gateway/d' '/metrics-proxy/s/a7/ee/' 's/@sha256:a200000000000000000000000000000000000000000000000000000000000000/:v0.99/' 'd'; do
   sed "$edit" "$FIX/good.csv" >"$FIX/variant.csv"
   FAKE_CSV="$FIX/variant.csv" run_validator --snapshot submariner-0-99-snap
   assert_eq "CSV edit '$edit' → rc 1" "$VAL_RC" "1"

@@ -126,7 +126,9 @@ exit 0
 FIXTURE
     git add -A
     git commit -qm 'Fixture updater'
-    git update-ref refs/remotes/origin/devel HEAD
+    git init -q --bare "$dir-origin.git"
+    git remote add origin "$dir-origin.git"
+    git push -q origin devel release-0.25
     git checkout -q original
   )
 }

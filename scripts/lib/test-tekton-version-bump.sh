@@ -38,11 +38,11 @@ assert_eq() {
   else echo "  ✗ $1 (got: '$2', want: '$3')"; FAIL=$((FAIL + 1)); fi
 }
 assert_contains() {
-  if printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✓ $1"; PASS=$((PASS + 1))
+  if grep -qF -- "$3" <<< "$2"; then echo "  ✓ $1"; PASS=$((PASS + 1))
   else echo "  ✗ $1 (missing: '$3')"; FAIL=$((FAIL + 1)); fi
 }
 assert_not_contains() {
-  if ! printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✓ $1"; PASS=$((PASS + 1))
+  if ! grep -qF -- "$3" <<< "$2"; then echo "  ✓ $1"; PASS=$((PASS + 1))
   else echo "  ✗ $1 (unexpectedly found: '$3')"; FAIL=$((FAIL + 1)); fi
 }
 
@@ -197,6 +197,10 @@ assert_eq "exactly one labeled command (FBC has none)" "$(printf '%s\n' "$SUMMAR
 echo ""
 echo "=== ec_log_diagnosis: deny rule is not blamed on a stale log ==="
 DENY_MSG='Untrusted version of PipelineTask \"rpms-signature-scan\" (Task \"rpms-signature-scan\") was included in build chain comprised of: rpms-signature-scan. The denial reason is: deny_rule\n  - oci://quay.io/konflux-ci/konflux-vanguard/*\nMessages:\n  - Tasks under konflux-vanguard are no longer trusted. Use the equivalent from quay.io/konflux-ci/tekton-catalog instead.\n'
+# Large real diagnostic output must not lose classifications to grep's early
+# exit under pipefail. Keep enough text after DENY_REASONS to fill a pipe.
+deny_padding=$(printf '%131072s' '')
+DENY_MSG+="${deny_padding// /x}"
 cat > "$HOME/Downloads/submariner-enterprise-fixture-verify.log" <<EOF
 STEP-REPORT-JSON
 {"success": false, "components": [{"name": "widget-0-99", "containerImage": "quay.io/example/widget@sha256:abc", "source": {"git": {"revision": "1111111111111111111111111111111111111111"}}, "success": false, "violations": [{"msg": "$DENY_MSG", "metadata": {"code": "trusted_task.trusted", "term": "rpms-signature-scan"}}]}]}

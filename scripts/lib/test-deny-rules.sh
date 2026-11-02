@@ -18,11 +18,11 @@ assert_eq() {
   else echo "  ✗ $1"; echo "    got:  '$2'"; echo "    want: '$3'"; FAIL=$((FAIL + 1)); fi
 }
 assert_contains() {
-  if printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✓ $1"; PASS=$((PASS + 1))
+  if grep -qF -- "$3" <<< "$2"; then echo "  ✓ $1"; PASS=$((PASS + 1))
   else echo "  ✗ $1 (missing: '$3')"; FAIL=$((FAIL + 1)); fi
 }
 assert_not_contains() {
-  if ! printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✓ $1"; PASS=$((PASS + 1))
+  if ! grep -qF -- "$3" <<< "$2"; then echo "  ✓ $1"; PASS=$((PASS + 1))
   else echo "  ✗ $1 (unexpectedly found: '$3')"; FAIL=$((FAIL + 1)); fi
 }
 
@@ -205,6 +205,19 @@ mk_repo "$TMP/m3" "quay.io/konflux-ci/tekton-catalog/task-buildah:0.8"
 OUT=$(run "deny_rules_rewrite_moved $TMP/m3")
 assert_eq "minimum-version denial is not rewritten"  "$OUT" ""
 assert_contains "ref unchanged"                      "$(cat "$TMP/m3/.tekton/pipe.yaml")" "task-buildah:0.8@$DIGEST"
+
+# Reject malformed/unsupported rule data rather than silently omitting a denial.
+for bad_case in wrong-group missing-pattern unsupported-version malformed-date; do
+  case "$bad_case" in
+    wrong-group) bad='{"deny":{"g":{}}}' ;;
+    missing-pattern) bad='{"deny":{"g":[{}]}}' ;;
+    unsupported-version) bad='{"deny":{"g":[{"pattern":"oci://quay.io/task","versions":[">=1"]}]}}' ;;
+    malformed-date) bad='{"deny":{"g":[{"pattern":"oci://quay.io/task","effective_on":"tomorrow"}]}}' ;;
+  esac
+  printf '%s' "$bad" | jq '{rule_data:{trusted_task_rules:.}}' > "$TMP/bad.json"
+  RC=0; (DENY_RULES_FILE="$TMP/bad.json"; source "$LIB"; deny_rules_load) >/dev/null 2>&1 || RC=$?
+  assert_eq "$bad_case: rejected as unchecked" "$RC" 1
+done
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then

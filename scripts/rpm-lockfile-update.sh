@@ -17,6 +17,11 @@ source "$SCRIPT_DIR/lib/linux-vm.sh"
 # shellcheck source=lib/pinned-base.sh
 source "$SCRIPT_DIR/lib/pinned-base.sh"
 
+# macOS ships Bash 3.2: enter the Linux VM before declaring Bash 4 arrays.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  linux_vm_reexec "$0" "$@"
+fi
+
 # Constants
 readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
 readonly COMPONENT_PATTERN="^(gateway|globalnet|route-agent|nettest)$"
@@ -62,7 +67,7 @@ check_prerequisites() {
 
   # Entitlements, registry login and repo access, with the fix for whatever is missing
   local PREREQ_REPORT
-  PREREQ_REPORT=$("$SCRIPT_DIR/setup-entitlements.sh" --check 2>&1) || {
+  PREREQ_REPORT=$(bash "$SCRIPT_DIR/setup-entitlements.sh" --check 2>&1) || {
     echo "$PREREQ_REPORT"
     die "RPM lockfile prerequisites not met" "Fix the items marked ✗ above (usually: make setup-entitlements)"
   }
@@ -180,6 +185,12 @@ update_lockfiles() {
     [ "$DISPLAY_NAME" = "$REPO_NAME" ] && echo "==> $REPO_NAME" || echo "==> $DISPLAY_NAME (in $REPO_NAME)"
     echo "    Branch: $REPO_BRANCH"
 
+    # Override narrow clone refspecs to refresh release/devel and prune stale refs.
+    git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' || {
+      REPOS_FAILED+=("$DISPLAY_NAME:fetch-failed")
+      continue
+    }
+
     local BRANCH_REF="origin/$REPO_BRANCH"
     git show-ref --verify --quiet "refs/remotes/$BRANCH_REF" || {
       BRANCH_REF="$REPO_BRANCH"
@@ -193,6 +204,11 @@ update_lockfiles() {
       { REPOS_SKIPPED+=("$DISPLAY_NAME:no-lockfiles"); continue; }
 
     local FIX_BRANCH="update-rpm-lockfiles-${REPO_VERSION}"
+
+    if ! check_fix_branch_reusable "$FIX_BRANCH" "$BRANCH_REF"; then
+      REPOS_FAILED+=("$DISPLAY_NAME:existing-fix-branch")
+      continue
+    fi
 
     # Remember where we are so we can restore after committing.
     local ORIGINAL_REF
@@ -208,8 +224,14 @@ update_lockfiles() {
       continue
     fi
 
-    git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1 || \
+    git checkout -B "$FIX_BRANCH" "$BRANCH_REF" --no-overwrite-ignore >/dev/null || \
       { REPOS_FAILED+=("$DISPLAY_NAME:branch-create-failed"); continue; }
+
+    if ! check_checkout_clean; then
+      REPOS_FAILED+=("$DISPLAY_NAME:unsafe-checkout")
+      restore_stashed_worktree "$PWD" "$ORIGINAL_REF" "$FIX_BRANCH" "" safe || true
+      continue
+    fi
 
     # Before anything else dirties the tree, so a failure here can still restore cleanly,
     # and before the lockfiles, which are resolved against the base in the Dockerfile.
@@ -219,53 +241,71 @@ update_lockfiles() {
       continue
     fi
 
-    git show "origin/devel:.rpm-lockfiles/update-lockfile.sh" > .rpm-lockfiles/update-lockfile.sh 2>/dev/null || {
+    # Keep the release branch's tracked updater untouched. bash also handles VM mounts
+    # that do not preserve the updater's executable bit.
+    local UPDATER
+    UPDATER=$(mktemp "${TMPDIR:-/tmp}/update-lockfile.XXXXXX") || \
+      { REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed"); restore_clean_ref "$ORIGINAL_REF" || true; continue; }
+    git show "origin/devel:.rpm-lockfiles/update-lockfile.sh" > "$UPDATER" 2>/dev/null || {
       echo "❌ Failed to copy update-lockfile.sh from origin/devel"
       echo "   Run: git fetch origin devel"
+      rm -f "$UPDATER"
       REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed")
       restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
       continue
     }
 
-    chmod +x .rpm-lockfiles/update-lockfile.sh
-
     # Fix UBI version mismatch: devel script may use ubi10 but release branches use RHEL 9 repos.
     # Detect from repo files and patch the script to match.
     if grep -q 'ubi9\|rhel9' .rpm-lockfiles/*/submariner-rhel-*.repo 2>/dev/null && \
-       grep -q 'ubi10' .rpm-lockfiles/update-lockfile.sh; then
-      sed -i 's|registry.access.redhat.com/ubi10/ubi:latest|registry.access.redhat.com/ubi9/ubi:latest|g' \
-        .rpm-lockfiles/update-lockfile.sh
+       grep -q 'ubi10' "$UPDATER"; then
+      if ! sed -i 's|registry.access.redhat.com/ubi10/ubi:latest|registry.access.redhat.com/ubi9/ubi:latest|g' "$UPDATER"; then
+        rm -f "$UPDATER"
+        REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed")
+        restore_clean_ref "$ORIGINAL_REF" || true
+        continue
+      fi
       echo "    (patched update-lockfile.sh: ubi10 → ubi9 to match branch repo files)"
     fi
 
-    set +e  # Disable errexit to capture exit code and cleanup
-    local LOCKFILE_PATTERN _lockfile_log
-    _lockfile_log=$(mktemp)
+    local LOCKFILE_PATTERN LOCKFILE_CHANGES _lockfile_log
+    local -a UPDATER_ARGS=("$FIX_BRANCH")
+    _lockfile_log=$(mktemp) || {
+      rm -f "$UPDATER"
+      REPOS_FAILED+=("$DISPLAY_NAME:script-copy-failed")
+      restore_clean_ref "$ORIGINAL_REF" || true
+      continue
+    }
     if [[ "$COMPONENT_FILTER" =~ $COMPONENT_PATTERN ]]; then
       LOCKFILE_PATTERN=".rpm-lockfiles/$COMPONENT_FILTER/rpms.lock.yaml"
-      echo "Running: .rpm-lockfiles/update-lockfile.sh $FIX_BRANCH $COMPONENT_FILTER"
-      echo ""
-      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" "$COMPONENT_FILTER" > "$_lockfile_log" 2>&1
+      UPDATER_ARGS+=("$COMPONENT_FILTER")
     else
-      LOCKFILE_PATTERN=".rpm-lockfiles/*/rpms.lock.yaml"
-      echo "Running: .rpm-lockfiles/update-lockfile.sh $FIX_BRANCH"
-      echo ""
-      .rpm-lockfiles/update-lockfile.sh "$FIX_BRANCH" > "$_lockfile_log" 2>&1
+      LOCKFILE_PATTERN=":(glob).rpm-lockfiles/*/rpms.lock.yaml"
     fi
-    local LOCKFILE_EXIT=$?
+    echo "Running: update-lockfile.sh (from origin/devel) ${UPDATER_ARGS[*]}"
+    echo ""
+    local LOCKFILE_EXIT=0
+    bash "$UPDATER" "${UPDATER_ARGS[@]}" > "$_lockfile_log" 2>&1 || LOCKFILE_EXIT=$?
     # Show status lines and "No sources" warnings; suppress dnf/pip/skopeo setup noise
     # and update-lockfile.sh's own manual-use "To commit/To push" instructions.
-    grep -E '^(--- |WARNING:rpm_lockfile: No sources)' "$_lockfile_log" || true
+    grep -E '^(--- |WARNING:rpm_lockfile:[[:space:]]*No sources)' "$_lockfile_log" || true
     # On failure, dump the full log so the problem is diagnosable.
     [ "$LOCKFILE_EXIT" -ne 0 ] && cat "$_lockfile_log" >&2
+    if [ "$LOCKFILE_EXIT" -ne 0 ] && grep -qE 'Status code: 403|403 Forbidden' "$_lockfile_log"; then
+      echo "❌ A download failed with HTTP 403. For Red Hat CDN requests, verify entitlement access and registration." >&2
+      echo "   If registration is stale, run: make setup-entitlements FORCE=1 (on the host; macOS executes in the VM), then retry the lockfile update" >&2
+    fi
     rm -f "$_lockfile_log"
-    set -e
-    rm -f .rpm-lockfiles/update-lockfile.sh
+    rm -f "$UPDATER"
 
-    if [ $LOCKFILE_EXIT -ne 0 ]; then
+    if [ "$LOCKFILE_EXIT" -ne 0 ]; then
       REPOS_FAILED+=("$DISPLAY_NAME:update-script-failed")
       restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
-    elif [ "${#PINNED_BASE_CHANGED[@]}" -eq 0 ] && git diff --quiet $LOCKFILE_PATTERN 2>/dev/null; then
+    elif ! LOCKFILE_CHANGES=$(git status --porcelain --untracked-files=all -- "$LOCKFILE_PATTERN"); then
+      # git diff would miss a lockfile generated for the first time (untracked)
+      REPOS_FAILED+=("$DISPLAY_NAME:status-failed")
+      restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
+    elif [ "${#PINNED_BASE_CHANGED[@]}" -eq 0 ] && [ -z "$LOCKFILE_CHANGES" ]; then
       if ! restore_clean_ref "$ORIGINAL_REF"; then
         REPOS_FAILED+=("$DISPLAY_NAME:restore-failed")
         continue
@@ -275,8 +315,7 @@ update_lockfiles() {
       fi
       REPOS_SKIPPED+=("$DISPLAY_NAME:no-changes")
     else
-      # shellcheck disable=SC2086
-      git add $LOCKFILE_PATTERN ${PINNED_BASE_CHANGED[@]+"${PINNED_BASE_CHANGED[@]}"} || {
+      git add -- "$LOCKFILE_PATTERN" ${PINNED_BASE_CHANGED[@]+"${PINNED_BASE_CHANGED[@]}"} || {
         REPOS_FAILED+=("$DISPLAY_NAME:stage-failed")
         restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
         continue
@@ -361,9 +400,7 @@ print_summary() {
       echo ""
       echo "# $display"
       printf 'git -C %q show %q\n' "$SUBMARINER_BASE/$repo" "$fix_branch"
-      # --force-with-lease is safe for a re-run (idempotent if the remote matches
-      # our last fetch), and required if the branch was already pushed and the
-      # conductor re-ran after a silent tracker write failure.
+      # Divergent remote repairs require review before replacing their history.
       # A partial retry also revisits repos with open PRs. Reuse those instead
       # of letting gh pr create abort the entire multi-repo push script. gh pr
       # list's --head accepts a branch, NOT owner:branch; filter the owner in jq.
@@ -374,14 +411,14 @@ print_summary() {
         pr_body="Move pinned base images to their current digests and update RPM lockfiles to resolve package CVEs."
       fi
       pr_filter="[.[] | select(.headRepositoryOwner.login == \"$gh_user\")] | .[0].url // empty"
-      printf -v push_commands '\n  cd %q\n  git push --force-with-lease %q %q\n  PR_URL=$(gh pr list --base %q --head %q --state open --json url,headRepositoryOwner --jq %q)\n  if [ -z "$PR_URL" ]; then\n    PR_URL=$(gh pr create --base %q --head %q --title %q --body %q --assignee @me --label ready-to-test)\n  fi\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
+      printf -v push_commands '\n  cd %q\n  git push %q %q\n  PR_URL=$(gh pr list --base %q --head %q --state open --json url,headRepositoryOwner --jq %q)\n  if [ -z "$PR_URL" ]; then\n    PR_URL=$(gh pr create --base %q --head %q --title %q --body %q --assignee @me --label ready-to-test)\n  fi\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
         "$SUBMARINER_BASE/$repo" "$fork" "$fix_branch" "$branch" "$fix_branch" "$pr_filter" \
         "$branch" "$head_ref" "$pr_title" \
         "$pr_body"
       printf '%s' "$push_commands"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then
-        printf '%s' "$push_commands" >> "$AUTORELEASE_PUSH_LOG"
+        printf '%s' "$push_commands" >> "$AUTORELEASE_PUSH_LOG" || return 1
       fi
     done
   fi
@@ -391,7 +428,6 @@ print_summary() {
 }
 
 main() {
-  linux_vm_reexec "$0" "$@"
   check_prerequisites
   parse_arguments "$@"
 
@@ -423,10 +459,14 @@ main() {
     done
   fi
 
-  print_summary
+  print_summary || return $?
 
-  # review level: script stays in_progress. User must push the lockfile changes and
-  # wait for Konflux to rebuild, then explicitly mark complete via autorelease verifier.
+  # A fresh full no-op needs no PR. Changed or unprocessed repos must stay pending.
+  if [ -n "${TRACKER:-}" ] && [ "$COMPONENT_FILTER" = all ] &&
+     [ "${#REPOS_UPDATED[@]}" -eq 0 ] && [ "${#REPOS_FAILED[@]}" -eq 0 ] &&
+     [ "$problem_skips" -eq 0 ]; then
+    update_step "$VERSION" rpmLockfiles complete '{}' "$TRACKER"
+  fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

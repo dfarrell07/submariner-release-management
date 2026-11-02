@@ -55,12 +55,35 @@ Other mutating flags must likewise be explicitly requested.
 
 ## Execution
 
-Resolve the release-management root before running the operation. If
-`${CLAUDE_PLUGIN_ROOT}` has been expanded to an absolute path, use that plugin
-root. Otherwise, locate the checkout containing this `SKILL.md` and
-`scripts/autorelease.sh`. Verify the script exists and is executable.
+Use the release-management checkout selected for this task, including its WIP
+worktree. If none was selected, use an absolute `${CLAUDE_PLUGIN_ROOT}` or locate
+the checkout containing this `SKILL.md` and `scripts/autorelease.sh`. Verify the
+script exists and is executable; an installed skill must not redirect a WIP test
+to another checkout.
 
 Run `scripts/autorelease.sh`, passing the release version and every supplied
 flag or flag value as separate arguments in the user's original order. Do not
 combine arguments into a shell string, use `eval`, or assume shell variables
 persist across tool calls.
+
+When Codex runs the conductor, set `CVE_FIX_AGENT=codex` on that same invocation
+unless the user has selected another provider. The delegated Shipyard CVE helper
+supports both hosts but defaults to Claude for its optional reviews.
+
+Source updates can be tested from a tooling feature branch. Release YAML and
+release-note helpers require `main`: stop before those steps, land the tooling
+fixes through normal review, then resume from an updated `main` checkout. Keep
+release commits out of the tooling branch; do not bypass the helpers' branch guards.
+
+At the version-label review stop, use `skills/update-version-labels/SKILL.md` to
+verify the rebuilt image labels and compiled versions before resuming.
+
+Task repairs preserve unrelated pins and stop for review. If the helper cannot
+repair an EC failure, inspect the exact snapshot's report before changing tasks;
+source checks do not establish signed-image or managed release-policy acceptance.
+
+At the release-notes review stop, follow the agent review steps in
+`skills/add-release-notes/SKILL.md` before resuming. The conductor collects the
+notes; the active agent must review the prepared issue evidence and apply decisions.
+After review, report `scripts/autorelease.sh VERSION --complete releaseNotes` as
+the next action; this step has no verifier. Run it only when explicitly authorized.

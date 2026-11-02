@@ -24,6 +24,22 @@ get_gh_user() {
   gh api user --jq '.login' 2>/dev/null || true
 }
 
+# Run immediately after switching a previously clean/stashed worktree, before
+# editing anything. Different ignore rules can expose local files left by stash.
+check_checkout_clean() {
+  local worktree_status
+  if ! worktree_status=$(git status --porcelain --untracked-files=all); then
+    echo "Cannot inspect the switched worktree in $PWD; no repairs were attempted." >&2
+    return 1
+  fi
+  if [ -n "$worktree_status" ]; then
+    echo "Local files became visible after switching branches in $PWD; no repairs were attempted." >&2
+    printf '%s\n' "$worktree_status" >&2
+    echo "Move these files outside the checkout before retrying." >&2
+    return 1
+  fi
+}
+
 # Refuse to carry unfinished work onto another branch. Run in the target repo.
 restore_clean_ref() {
   local original_ref="$1" worktree_status
@@ -40,6 +56,31 @@ restore_clean_ref() {
     echo "Failed to restore $original_ref in $(pwd)." >&2
     return 1
   }
+}
+
+# Permit resetting a repair branch only when its content is already upstream.
+# Patch IDs ignore meaningful whitespace; a merge must leave the upstream tree unchanged.
+# Custom drivers can discard changes, so require review instead of trusting them.
+# Run in the target repo. Args: repair branch, fresh upstream ref.
+check_fix_branch_reusable() {
+  local fix_branch="$1" base_ref="$2" merged_tree upstream_tree fix_tree driver_status=0
+  git show-ref --verify --quiet "refs/heads/$fix_branch" || return 0
+  git merge-base --is-ancestor "$fix_branch" "$base_ref" && return 0
+  if upstream_tree=$(git rev-parse "$base_ref^{tree}") &&
+     fix_tree=$(git rev-parse "$fix_branch^{tree}"); then
+    [ "$fix_tree" = "$upstream_tree" ] && return 0
+    git config --get-regexp '^merge\..*\.driver$' >/dev/null 2>&1 || driver_status=$?
+    if [ "$driver_status" -eq 1 ] &&
+       merged_tree=$(git -c merge.renormalize=false -c merge.default=text \
+         merge-tree --write-tree "$base_ref" "$fix_branch" 2>/dev/null) &&
+       [ "$merged_tree" = "$upstream_tree" ]; then
+      return 0
+    fi
+  fi
+  echo "Existing $fix_branch contains work not confirmed upstream; it was preserved." >&2
+  echo "Inspect and resolve pending work before retrying." >&2
+  printf '  git -C %q show %q\n' "$PWD" "$fix_branch" >&2
+  return 1
 }
 
 # Save tracked/index and untracked work before an automated branch switch.
@@ -75,12 +116,17 @@ stash_worktree() {
 # edits, restore the original ref, then restore exactly the saved index/worktree.
 # Never pop onto the wrong branch or conceal a restore failure. Stashes remain
 # available for manual recovery on failure; no branch is deleted in that case.
+# Pass "safe" as the fifth argument when local or tool edits must be preserved.
 restore_stashed_worktree() {
   local repo_path="$1" original_ref="$2" drop_branch="${3:-}" stash_ref="${4:-}"
   local stash_idx
-  if ! git -C "$repo_path" checkout -f "$original_ref" >/dev/null; then
+  local -a checkout_options=(-f)
+  # A normal checkout preserves newly exposed files and unfinished child edits.
+  [ "${5:-}" != safe ] || checkout_options=(--quiet --no-overwrite-ignore)
+  if ! git -C "$repo_path" checkout "${checkout_options[@]}" "$original_ref" >/dev/null; then
     echo "Failed to restore $original_ref in $repo_path; saved stash: ${stash_ref:-none}." >&2
-    echo "Restore the branch before applying the stash with --index." >&2
+    echo "Inspect git status and move conflicting local files outside the checkout before restoring the branch." >&2
+    [ -z "$stash_ref" ] || echo "Then apply the saved stash with --index." >&2
     return 1
   fi
   if [ -n "$stash_ref" ]; then

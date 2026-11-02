@@ -77,22 +77,20 @@ if ! ALL_SNAPSHOTS=$("${QUERY[@]}" 2>/dev/null | jq 'if .items then . else {item
   exit 2
 fi
 
+# shellcheck source=lib/integration-tests.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/integration-tests.sh"
+
 # Filter to component snapshots for this version
 # - Name matches: submariner-0-X-*
 # - Event type: push (not PR builds)
 # - Sort by creation timestamp, newest first
-CANDIDATES=$(echo "$ALL_SNAPSHOTS" | jq -r \
-  --arg prefix "submariner-${VERSION_MAJOR_MINOR_DASH}-" \
+CANDIDATES=$(component_snapshot_candidates "submariner-${VERSION_MAJOR_MINOR_DASH}" <<< "$ALL_SNAPSHOTS" | jq -r \
   --arg bundle "submariner-bundle-${VERSION_MAJOR_MINOR_DASH}" \
   --argjson n "$SNAPSHOT_WINDOW" '
-  [.items[]
-  | select(.metadata.name | startswith($prefix))
-  | select(.metadata.labels."pac.test.appstudio.openshift.io/event-type"
-      | IN("push", "incoming", "retest-all-comment"))]
-  | sort_by(.metadata.creationTimestamp) | reverse | .[:$n][]
-  | "\(.metadata.name) \([.spec.components[]? | select(.name == $bundle)
-      | .containerImage | capture("(?<d>sha256:[a-f0-9]+)").d][0] // "-")"
-' 2>/dev/null) || CANDIDATES=""
+  .[:$n][] |
+  "\(.metadata.name) \([.spec.components[]? | select(.name == $bundle)
+      | (.containerImage // "" | try capture("(?<d>sha256:[a-f0-9]+)").d catch empty)][0] // "-")"
+') || { echo "❌ ERROR: Invalid snapshot evidence" >&2; exit 2; }
 
 if [ "$SNAPSHOT_ARG" = "--list" ]; then
   [ -z "$CANDIDATES" ] || printf '%s\n' "$CANDIDATES"
@@ -114,6 +112,8 @@ if [ -z "$SNAPSHOT_NAME" ]; then
   exit 1
 fi
 
+SNAPSHOT_JSON=$(jq -c --arg name "$SNAPSHOT_NAME" ' .items[] | select(.metadata.name == $name)' <<< "$ALL_SNAPSHOTS")
+
 # Extract creation timestamp for display
 SNAPSHOT_CREATED=$(echo "$ALL_SNAPSHOTS" | jq -r "
   .items[] | select(.metadata.name == \"$SNAPSHOT_NAME\") | .metadata.creationTimestamp
@@ -128,39 +128,10 @@ echo "✓ Found snapshot: $SNAPSHOT_NAME (created $SNAPSHOT_CREATED)" >&2
 echo "" >&2
 echo "Verifying snapshot has all 9 components..." >&2
 
-# Expected components (must all be present)
-EXPECTED_COMPONENTS=(
-  "submariner-operator-${VERSION_MAJOR_MINOR_DASH}"
-  "submariner-gateway-${VERSION_MAJOR_MINOR_DASH}"
-  "submariner-globalnet-${VERSION_MAJOR_MINOR_DASH}"
-  "submariner-route-agent-${VERSION_MAJOR_MINOR_DASH}"
-  "lighthouse-agent-${VERSION_MAJOR_MINOR_DASH}"
-  "lighthouse-coredns-${VERSION_MAJOR_MINOR_DASH}"
-  "nettest-${VERSION_MAJOR_MINOR_DASH}"
-  "subctl-${VERSION_MAJOR_MINOR_DASH}"
-  "submariner-bundle-${VERSION_MAJOR_MINOR_DASH}"
-)
-
-# Extract actual components from snapshot
-ACTUAL_COMPONENTS=$(echo "$ALL_SNAPSHOTS" | jq -r "
-  .items[] | select(.metadata.name == \"$SNAPSHOT_NAME\") | .spec.components[].name
-" | sort)
-
-MISSING_COMPONENTS=()
-for EXPECTED in "${EXPECTED_COMPONENTS[@]}"; do
-  if echo "$ACTUAL_COMPONENTS" | grep -qx "$EXPECTED"; then
-    echo "  ✓ $EXPECTED" >&2
-  else
-    echo "  ✗ $EXPECTED (MISSING)" >&2
-    MISSING_COMPONENTS+=("$EXPECTED")
-  fi
-done
-
-if [ ${#MISSING_COMPONENTS[@]} -gt 0 ]; then
-  echo "" >&2
-  echo "❌ ERROR: Snapshot missing ${#MISSING_COMPONENTS[@]} component(s)" >&2
-  echo "Expected 9 components, found $((9 - ${#MISSING_COMPONENTS[@]}))" >&2
-  echo "Missing: ${MISSING_COMPONENTS[*]}" >&2
+# Names and immutable images identify the candidate payload; successful tests
+# cannot certify a malformed, duplicated or incomplete component set.
+if ! component_payload_valid "submariner-${VERSION_MAJOR_MINOR_DASH}" <<< "$SNAPSHOT_JSON"; then
+  echo "❌ ERROR: Invalid component payload: require exactly nine expected components, each with an immutable SHA256 image" >&2
   exit 1
 fi
 
@@ -173,64 +144,21 @@ echo "✓ All 9 components present in snapshot" >&2
 echo "" >&2
 echo "Verifying all tests passed..." >&2
 
-# Extract test status annotation
-TEST_STATUS=$(echo "$ALL_SNAPSHOTS" | jq -r "
-  .items[] | select(.metadata.name == \"$SNAPSHOT_NAME\")
-  | .metadata.annotations.\"test.appstudio.openshift.io/status\"
-" 2>/dev/null)
-
-if [ -z "$TEST_STATUS" ] || [ "$TEST_STATUS" = "null" ]; then
-  echo "⚠️  WARNING: No test status annotation found" >&2
-  echo "Snapshot may not have completed testing yet" >&2
-  echo "Check: oc get snapshot $SNAPSHOT_NAME -n submariner-tenant -o jsonpath='{.metadata.annotations}'" >&2
-  # Don't fail - some snapshots may not have tests yet
-  TEST_STATUS="[]"
-fi
-
-# Parse test status JSON — BuildPLRInProgress means the pipeline run record is
-# being created; Konflux surfaces this transiently on fresh snapshots and it is
-# not a test failure. Treat it the same as TestPassed for gate purposes.
-FAILED_TESTS=$(echo "$TEST_STATUS" | jq -r '.[] | select(.status != "TestPassed" and .status != "BuildPLRInProgress") | .scenario' 2>/dev/null || true)
-
-if [ -n "$FAILED_TESTS" ]; then
-  echo "❌ ERROR: Snapshot has failing tests" >&2
-  echo "" >&2
-  echo "Failed test scenarios:" >&2
-  echo "$FAILED_TESTS" | while read -r scenario; do
-    STATUS=$(echo "$TEST_STATUS" | jq -r --arg s "$scenario" '.[] | select(.scenario == $s) | .status')
-    echo "  - $scenario ($STATUS)" >&2
-  done
-  echo "" >&2
-  echo "All tests must pass before creating a release" >&2
+if ! component_tests_passed <<< "$SNAPSHOT_JSON"; then
+  echo "❌ ERROR: Snapshot integration is not finished and successful" >&2
+  echo "Missing, malformed, failed or incomplete results cannot establish release readiness" >&2
+  echo "Check snapshot $SNAPSHOT_NAME aggregate conditions and completed scenario results" >&2
   exit 1
 fi
-
-# Check for enterprise-contract specifically (critical for releases)
-EC_TEST=$(echo "$TEST_STATUS" | jq -r '.[] | select(.scenario | contains("enterprise-contract")) | .status' 2>/dev/null) || EC_TEST=""
-
-if [ -n "$EC_TEST" ]; then
-  if [ "$EC_TEST" = "TestPassed" ] || [ "$EC_TEST" = "BuildPLRInProgress" ]; then
-    echo "  ✓ enterprise-contract: $EC_TEST" >&2
-  else
-    echo "  ✗ enterprise-contract: $EC_TEST (CRITICAL FAILURE)" >&2
-    exit 1
-  fi
-fi
-
-# Count total tests
-TOTAL_TESTS=$(echo "$TEST_STATUS" | jq -r '. | length' 2>/dev/null)
-if [ "$TOTAL_TESTS" -gt 0 ]; then
-  echo "✓ All $TOTAL_TESTS test(s) passed" >&2
-else
-  echo "⚠️  No tests found in snapshot (may still be building)" >&2
-fi
+TOTAL_TESTS=$(jq -r '.metadata.annotations["test.appstudio.openshift.io/status"] | fromjson | length' <<< "$SNAPSHOT_JSON")
+echo "✓ All $TOTAL_TESTS test(s) finished successfully" >&2
 
 # ============================================================================
 # Output JSON Result
 # ============================================================================
 
 echo "" >&2
-echo "✅ Verification complete - snapshot ready for release" >&2
+echo "✅ Snapshot components and completed integration verified" >&2
 echo "" >&2
 
 # Output JSON to stdout (orchestrator parses this)

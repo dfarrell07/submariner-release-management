@@ -194,6 +194,13 @@ write_decision "$run_dir" ACM-300 REMOVE 'No shipped Submariner implementation f
 write_decision "$run_dir" ACM-400 KEEP 'Key mismatch must fail' ACM-999
 printf '{bad json\n' > "$run_dir/decisions/ACM-500.json"
 
+# Put more than a pipe buffer of older history after the recovered match.
+# Recovery must consume it even though the newest matching commit comes first.
+printf '# Older stage edit\n' >> "$stage"
+printf 'Older stage history %0262144d\n' 0 > "$TEST_ROOT/history-message"
+git -C "$repo" add -- "$stage"
+git -C "$repo" commit -q -F "$TEST_ROOT/history-message"
+
 apply_rc=0
 apply_output=$(PATH="$tools:$PATH" "$REVIEW_SCRIPT" apply "$run_dir" 2>&1) || apply_rc=$?
 assert_eq 'incomplete apply returns nonzero' "$apply_rc" 1

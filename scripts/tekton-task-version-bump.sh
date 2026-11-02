@@ -87,7 +87,7 @@ declare -a REPOS_DENIED=()      # repo:N-active-denials — needs a manual fix
 declare -a DENY_REPORTS=()      # "repo\nreport" blocks for the summary
 DENY_RULES_CHECKED=0            # 1 once policy-data was loaded (else: unchecked)
 
-SUBMARINER_BASE="$HOME/go/src/submariner-io"
+SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
 readonly FBC_REPO_PATH="${FBC_REPO:-${FBC_REPO_DEFAULT:-$HOME/konflux/submariner-operator-fbc}}"
 
 # Cache for acceptable-bundles data (fetched once, reused per-task)
@@ -287,11 +287,17 @@ update_repo() {
     return
   fi
 
-  if ! git checkout -b "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1; then
+  if ! git checkout -b "$FIX_BRANCH" "$BRANCH_REF" --no-overwrite-ignore >/dev/null; then
     echo "  ✗ Failed to create branch $FIX_BRANCH" >&2
     REPOS_FAILED+=("$REPO:branch-create-failed")
-    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF" || true
+    _restore_repo "$ORIGINAL_REF" "" "$STASH_REF" safe || true
     echo ""; return
+  fi
+
+  if ! check_checkout_clean; then
+    REPOS_FAILED+=("$REPO:unsafe-checkout")
+    _restore_repo "$ORIGINAL_REF" "$FIX_BRANCH" "$STASH_REF" safe || true
+    return
   fi
 
   # Check .tekton/ AFTER switching to the fix branch (which is cut from
@@ -375,7 +381,7 @@ update_repo() {
   if ! patcher_out=$(printf '%s' "$PATCHER_SCRIPT" | bash -s bump-task-refs 2>&1); then
     echo "  ✗ pipeline-patcher failed:" >&2
     printf '%s\n' "$patcher_out" | sed 's/^/      /' >&2
-    if printf '%s' "$patcher_out" | grep -q "Can't find"; then
+    if grep -q "Can't find" <<< "$patcher_out"; then
       echo "    Hint: a task ref is missing from the trusted list — often a denied or" >&2
       echo "    moved catalog. Check EC deny rules (scripts/lib/deny-rules.sh)." >&2
     fi
@@ -534,7 +540,7 @@ ec_log_diagnosis() {
             printf '%s\n' "$parse_out" | sed 's/^/  /' >&2
             # A deny rule is not a stale-ref problem: the ref can be current and
             # trusted yet still denied. Say so instead of blaming a stale log.
-            if printf '%s' "$parse_out" | grep -q "^DENY_REASONS:"; then
+            if grep -q "^DENY_REASONS:" <<< "$parse_out"; then
               echo "" >&2
               echo "  ⚠  The EC log reports deny rule(s) — a refresh cannot fix these:" >&2
               printf '%s\n' "$parse_out" | sed -n '/^DENY_REASONS:/,/^$/p' | grep -v '^$' \
@@ -545,7 +551,7 @@ ec_log_diagnosis() {
             fi
             # If fixable and tasks named, there's a mismatch between "already
             # current" and what the log says. Surface that contradiction.
-            if printf '%s' "$parse_out" | grep -q "FIXABLE_BY_VERSION_BUMP: yes"; then
+            if grep -q "FIXABLE_BY_VERSION_BUMP: yes" <<< "$parse_out"; then
               echo "" >&2
               echo "  ⚠  Log says task version bump should fix this, but all versions" >&2
               echo "     appear current. The log may be stale (from a previous run)." >&2
@@ -558,17 +564,17 @@ ec_log_diagnosis() {
             # push/incoming build, so it can be a *different, older* snapshot
             # than the one this log is for; don't tell the user EC is still
             # broken when the log they just downloaded says otherwise.
-            if printf '%s' "$parse_out" | grep -q "FIXABLE_BY_VERSION_BUMP: n/a"; then
+            if grep -q "FIXABLE_BY_VERSION_BUMP: n/a" <<< "$parse_out"; then
               echo "" >&2
               echo "  ✓ This log shows a clean run (no violations) — EC passed here." >&2
               echo "    If the conductor still reports EC failing, this log may be for" >&2
               echo "    a different/newer snapshot than the one named above. Re-run" >&2
               echo "    /autorelease $version to let verify_ecFixes re-check the cluster." >&2
             fi
-            if printf '%s' "$parse_out" | grep -q "NON_TASK_RULES"; then
+            if grep -q "NON_TASK_RULES" <<< "$parse_out"; then
               local non_task_section
               non_task_section=$(printf '%s' "$parse_out" | sed -n '/NON_TASK_RULES/,/^$/p' | grep -v "^$")
-              if printf '%s' "$non_task_section" | grep -qv "(none"; then
+              if grep -qv "(none" <<< "$non_task_section"; then
                 echo "" >&2
                 echo "  ⚠  Non-task violations require manual fixes:" >&2
                 printf '%s\n' "$non_task_section" | grep "^  " | sed 's/^/    /' >&2

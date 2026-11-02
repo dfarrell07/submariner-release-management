@@ -25,10 +25,10 @@ infer a version or target file.
 
 ## Workflow
 
-Resolve the release-management root first. If `${CLAUDE_PLUGIN_ROOT}` has been
-expanded to an absolute path, use that plugin root. Otherwise, locate the
-checkout containing this `SKILL.md`, `scripts/add-release-notes.sh`, and
-`scripts/release-notes/review.sh`. Verify both scripts are executable.
+Use the release-management checkout selected for this task. Otherwise, use an
+absolute `${CLAUDE_PLUGIN_ROOT}` or locate the checkout containing this `SKILL.md`,
+`scripts/add-release-notes.sh`, and `scripts/release-notes/review.sh`. Verify both
+scripts are executable.
 
 1. Run `scripts/add-release-notes.sh` with the version and optional
    `--stage-yaml` arguments as separate values. This performs collection,

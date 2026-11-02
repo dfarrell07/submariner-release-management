@@ -169,9 +169,31 @@ count=$(printf '%s' "$output" | grep -c "Would create: Sub-task" || true)
 assert_eq "z-stream: 15 subtasks" "$count" "15"
 
 # Idempotent: existing tracker returns key, no subtasks
-query_jira() { echo '[{"key":"ACM-EXISTING"}]'; }
+query_jira() { echo '[{"key":"ACM-EXISTING","fields":{"summary":"Release Submariner 0.24.0"}}]'; }
 key=$(create_release_tracker "0.24.0" 2>/dev/null)
 assert_eq "idempotent: returns existing key" "$key" "ACM-EXISTING"
+
+# Renamed clones can retain release labels before the canonical task.
+for identity_case in clone-first clone-only duplicates invalid-schema empty-response multiple-responses; do
+  identity_rc=0
+  identity_key=$(
+    query_jira() {
+      case "$identity_case" in
+        clone-first) printf '%s' '[{"key":"ACM-CLONE","fields":{"summary":"Release Submariner 0.24.0 copy"}},{"key":"ACM-ACTUAL","fields":{"summary":"Release Submariner 0.24.0"}}]' ;;
+        clone-only) printf '%s' '[{"key":"ACM-CLONE","fields":{"summary":"Release Submariner 0.24.0 copy"}}]' ;;
+        duplicates) printf '%s' '[{"key":"ACM-FIRST","fields":{"summary":"Release Submariner 0.24.0"}},{"key":"ACM-SECOND","fields":{"summary":"Release Submariner 0.24.0"}}]' ;;
+        invalid-schema) printf '%s' '[{"key":"ACM-MISSING-SUMMARY"}]' ;;
+        empty-response) : ;;
+        multiple-responses) printf '[]\n[]\n' ;;
+      esac
+    }
+    find_release_tracker 0.24.0 2>/dev/null
+  ) || identity_rc=$?
+  expected_key='' expected_rc=0
+  case "$identity_case" in clone-first) expected_key=ACM-ACTUAL ;; duplicates|invalid-schema|empty-response|multiple-responses) expected_rc=2 ;; esac
+  assert_eq "tracker identity: $identity_case status" "$identity_rc" "$expected_rc"
+  assert_eq "tracker identity: $identity_case key" "$identity_key" "$expected_key"
+done
 
 # Idempotency check can't reach Jira (query fails → find_release_tracker rc 2):
 # refuse rather than create a possible duplicate.
@@ -191,7 +213,7 @@ printf '0' > "$_stale_ctr"
 query_jira() {
   _n=$(cat "$_stale_ctr"); _n=$((_n + 1)); printf '%s' "$_n" > "$_stale_ctr"
   [ "$_n" -le 1 ] && { echo "[]"; return 0; }
-  echo '[{"key":"ACM-RETRY"}]'
+  echo '[{"key":"ACM-RETRY","fields":{"summary":"Release Submariner 0.24.0"}}]'
 }
 key=$(create_release_tracker "0.24.0" 2>/dev/null)
 assert_eq "stale-index retry: found on retry -> returns key" "$key" "ACM-RETRY"
@@ -429,11 +451,115 @@ case "$_FIND_SUBTASK_ARGS" in
   *) echo "  ✓ _find_subtask does not request the broken --fields key"; PASS=$((PASS + 1)) ;;
 esac
 
+# A fuzzy summary hit must never redirect strict completion to a cloned subtask.
+# Duplicate exact matches and unreliable reads must leave Jira untouched.
+for subtask_case in clone-first clone-only duplicates empty-response; do
+  subtask_writes=$(mktemp)
+  subtask_rc=0
+  (
+    query_jira() {
+      case "$subtask_case" in
+        clone-first) printf '%s' '[{"key":"ACM-CLONE","fields":{"summary":"RPM lockfile updates copy"}},{"key":"ACM-ACTUAL","fields":{"summary":"RPM lockfile updates"}}]' ;;
+        clone-only) printf '%s' '[{"key":"ACM-CLONE","fields":{"summary":"RPM lockfile updates copy"}}]' ;;
+        duplicates) printf '%s' '[{"key":"ACM-FIRST","fields":{"summary":"RPM lockfile updates"}},{"key":"ACM-SECOND","fields":{"summary":"RPM lockfile updates"}}]' ;;
+        empty-response) : ;;
+      esac
+    }
+    _transition_issue() { printf '%s\n' "$1:$2" >> "$subtask_writes"; }
+    _add_comment() { printf 'comment\n' >> "$subtask_writes"; }
+    update_step 0.24.1 rpmLockfiles complete '{}' ACM-PARENT --strict
+  ) >/dev/null 2>&1 || subtask_rc=$?
+  expected_rc=1 expected_writes=''
+  if [ "$subtask_case" = clone-first ]; then
+    expected_rc=0
+    expected_writes=$'ACM-ACTUAL:Resolved\ncomment'
+  fi
+  assert_eq "subtask identity: $subtask_case status" "$subtask_rc" "$expected_rc"
+  assert_eq "subtask identity: $subtask_case writes" "$(cat "$subtask_writes")" "$expected_writes"
+  rm -f "$subtask_writes"
+done
+
 # Stub internals for update_step tests
+for transition_case in already-resolved wrong-status unreadable; do
+  transition_rc=0
+  (
+    _acli() { return 1; }
+    query_jira() {
+      [ "$transition_case" != unreadable ] || return 1
+      local status=Resolved
+      [ "$transition_case" != wrong-status ] || status=New
+      jq -cn --arg status "$status" '[{fields:{status:{name:$status}}}]'
+    }
+    _transition_issue ACM-98 Resolved
+  ) >/dev/null 2>&1 || transition_rc=$?
+  expected=1
+  [ "$transition_case" != already-resolved ] || expected=0
+  assert_eq "transition retry: $transition_case" "$transition_rc" "$expected"
+done
 query_jira() { echo '[{"key":"ACM-99"}]'; }
 _find_subtask() { printf '%s' "ACM-98"; }
 _add_comment() { return 0; }
 _transition_issue() { return 0; }
+
+# Strict completion commits STEP_DATA only after required status writes.
+for strict_case in success comment-fails transition-fails lookup-fails no-subtask invalid-data child-complete child-start; do
+  strict_result=$(
+    events=""
+    _find_subtask() {
+      [ "$strict_case" != lookup-fails ] || return 1
+      [ "$strict_case" = no-subtask ] || printf ACM-98
+    }
+    _transition_issue() {
+      events+="transition "
+      [ "$strict_case" != transition-fails ]
+    }
+    _add_comment() {
+      events+="comment "
+      [ "$strict_case" != comment-fails ]
+    }
+    data='{}'
+    [ "$strict_case" != invalid-data ] || data=invalid
+    status=complete
+    strict_args=(--strict)
+    if [[ "$strict_case" == child-* ]]; then
+      export AUTORELEASE_TRACKER_STEP=versionLabels
+      strict_args=()
+      [ "$strict_case" = child-complete ] || status=in_progress
+    fi
+    rc=0
+    update_step 0.24.2 versionLabels "$status" "$data" ACM-99 "${strict_args[@]}" 2>/dev/null || rc=$?
+    printf '%s|%s' "$rc" "$events"
+  )
+  case "$strict_case" in
+    success|child-complete|child-start) expected='0|transition comment ' ;;
+    comment-fails) expected='1|transition comment ' ;;
+    transition-fails) expected='1|transition ' ;;
+    *) expected='1|' ;;
+  esac
+  assert_eq "strict completion: $strict_case" "$strict_result" "$expected"
+done
+
+# Older Y-stream trackers lack only the versionLabels subtask. A successful
+# empty lookup may skip it; failed/malformed lookups must still stop completion.
+for legacy_case in absent lookup-fails malformed other-step patch-release; do
+  legacy_result=$(
+    events=''
+    _find_subtask() {
+      [ "$legacy_case" != lookup-fails ] && [ "$legacy_case" != malformed ] || return 1
+      return 0
+    }
+    _add_comment() { events+='comment '; }
+    _transition_issue() { events+='transition '; }
+    version=0.25.0 step=versionLabels
+    [ "$legacy_case" != other-step ] || step=tektonTasks
+    [ "$legacy_case" != patch-release ] || version=0.25.1
+    rc=0; update_step "$version" "$step" complete '{}' ACM-99 --strict 2>/dev/null || rc=$?
+    printf '%s|%s' "$rc" "$events"
+  )
+  expected='1|'
+  [ "$legacy_case" != absent ] || expected='0|comment '
+  assert_eq "legacy Y-stream missing subtask: $legacy_case" "$legacy_result" "$expected"
+done
 
 # Returns 0
 update_step "0.24.0" "cveFixes" "complete" "{}" "ACM-99" 2>/dev/null
@@ -476,6 +602,7 @@ assert_eq "update_step: in_progress → subtask In Progress" \
   "$(printf '%s' "$_T" | grep -q 'ACM-98=>In Progress' && echo yes || echo no)" "yes"
 _T=""; update_step "0.24.0" "cveFixes" "failed" "{}" "ACM-99" 2>/dev/null
 assert_eq "update_step: failed → no subtask transition" "$_T" ""
+
 _transition_issue() { return 0; }
 
 # find_release_tracker: invalid version → empty (not crash)
@@ -488,7 +615,7 @@ query_jira() { echo "[]"; }
 _add_comment() { return 0; }
 
 # find_release_tracker works with 2-segment version (normalized internally)
-query_jira() { echo '[{"key":"ACM-222"}]'; }
+query_jira() { echo '[{"key":"ACM-222","fields":{"summary":"Release Submariner 0.24.0"}}]'; }
 result=$(find_release_tracker "0.24" 2>/dev/null)
 assert_eq "find_release_tracker: 2-seg version works" "$result" "ACM-222"
 query_jira() { echo "[]"; }
@@ -574,12 +701,27 @@ _add_comment() { return 0; }
 # tracker_is_open: gates auto-close so re-runs on a resolved release don't
 # re-probe / re-comment. Open only when it POSITIVELY reads a non-Resolved status.
 # (Capture rc via `&& ... || ...` so a returned 1 doesn't set -e abort the run.)
-query_jira() { echo '[{"key":"ACM-99","fields":{"status":{"name":"In Progress"}}}]'; }
+query_jira() { echo '[{"key":"ACM-99","fields":{"summary":"Release Submariner 0.24.0","status":{"name":"In Progress"}}}]'; }
 tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
 assert_eq "tracker_is_open: In Progress → open (0)" "$rc" "0"
-query_jira() { echo '[{"key":"ACM-99","fields":{"status":{"name":"Resolved"}}}]'; }
+query_jira() { echo '[{"key":"ACM-99","fields":{"summary":"Release Submariner 0.24.0","status":{"name":"Resolved"}}}]'; }
 tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
 assert_eq "tracker_is_open: Resolved → not open (1)" "$rc" "1"
+for open_case in open-clone resolved-clone duplicates; do
+  query_jira() {
+    local canonical=Resolved clone='In Progress'
+    [ "$open_case" != resolved-clone ] || { canonical='In Progress'; clone=Resolved; }
+    local clone_title='Release Submariner 0.24.0 copy'
+    [ "$open_case" != duplicates ] || clone_title='Release Submariner 0.24.0'
+    jq -cn --arg canonical "$canonical" --arg clone "$clone" --arg clone_title "$clone_title" \
+      '[{key:"ACM-CLONE",fields:{summary:$clone_title,status:{name:$clone}}},
+        {key:"ACM-ACTUAL",fields:{summary:"Release Submariner 0.24.0",status:{name:$canonical}}}]'
+  }
+  tracker_is_open 0.24.0 >/dev/null 2>&1 && rc=0 || rc=$?
+  expected_rc=1
+  [ "$open_case" != resolved-clone ] || expected_rc=0
+  assert_eq "tracker_is_open: $open_case" "$rc" "$expected_rc"
+done
 query_jira() { echo '[]'; }
 tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
 assert_eq "tracker_is_open: absent → not open (1)" "$rc" "1"

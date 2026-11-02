@@ -27,7 +27,7 @@ assert_eq() {
 }
 assert_contains() {
   # assert_contains LABEL haystack needle
-  if printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✓ $1"; PASS=$((PASS + 1))
+  if grep -qF -- "$3" <<< "$2"; then echo "  ✓ $1"; PASS=$((PASS + 1))
   else echo "  ✗ $1 (expected '$3' in: '$2')"; FAIL=$((FAIL + 1)); fi
 }
 
@@ -56,6 +56,22 @@ _latest_upstream_release() { :; }
 resolved=$(_resolve_version "0.24")
 assert_eq "tracker: picks latest patch" "${resolved%%:*}" "0.24.2"
 assert_eq "tracker: source is tracker" "${resolved#*:}" "tracker"
+
+# Renamed clones may retain the tracker labels. Only an exact canonical title
+# may select a release, including when a copied title ends with a newline.
+query_jira() {
+  printf '%s' '[
+    {"fields":{"summary":"Release Submariner 0.24.1"}},
+    {"fields":{"summary":"Release Submariner 0.24.99 backup copy"}},
+    {"fields":{"summary":"Release Submariner 0.24.98\n"}},
+    {"fields":{"summary":"Release Submariner 0.24.97-rc1"}},
+    {"fields":{"summary":"Copy of Release Submariner 0.24.96"}},
+    {"fields":{"summary":"Release Submariner 0.25.99"}}
+  ]'
+}
+assert_eq "tracker: renamed clones cannot select a newer patch" "$(_resolve_version "0.24")" "0.24.1:tracker"
+query_jira() { printf '%s' '[{"fields":{"summary":"Release Submariner 0.24.99 backup copy"}}]'; }
+assert_eq "tracker: only a renamed clone falls back to default" "$(_resolve_version "0.24")" "0.24.0:default"
 
 # 1b: Resolved tracker → falls through to Strategy 2/3 (next patch computed).
 # The new JQL (AND status != Resolved) returns empty for a resolved tracker, so
@@ -452,13 +468,15 @@ echo "=== Verifier Evidence Tests ==="
 
 # Stub gh: verify_ecFixes probes fix-tekton-tasks PRs in 6 repos via gh. Left real, each call
 # does ~9s of live network lookups and the result depends on GitHub state. Empty list = no PRs.
-gh() { echo '[]'; }
+gh() { echo '[[]]'; }
 
 # 21: verify_ecFixes emits {snapshot,version} for the latest EC-passing snapshot
 _orig_oc=$(declare -f oc 2>/dev/null || echo "")
 _OC_SNAPSHOTS=''
 complete_ec_fixture() {
-  jq '.items |= map(.status.conditions = [
+  jq '.items |= map(.spec.application //= "submariner-0-99" |
+    .metadata.labels["pac.test.appstudio.openshift.io/original-prname"] //= "component-on-push" |
+    .status.conditions = [
     {type:"AppStudioIntegrationStatus",status:"True",reason:"Finished"},
     {type:"AppStudioTestSucceeded",status:"True",reason:"Passed"}] |
     .metadata.annotations["test.appstudio.openshift.io/status"] |=
@@ -472,13 +490,61 @@ assert_eq "verify_ecFixes verified (exit 0)" "$ec_exit" "0"
 assert_eq "verify_ecFixes emits snapshot+version" "$ec_out" \
   '{"snapshot":"submariner-0-99-abc123","version":"0.99.1","prs":null}'
 
+# EC repairs can exist in only one repo, on a retry branch, while the other
+# repos have no PR. Old passing snapshots must not bypass that pending repair.
+_ec_pages='[[{"state":"open","head":{"ref":"fix-tekton-tasks-0.99-v2"},"base":{"ref":"release-0.99"},"html_url":"https://example.com/repair/2"}]]'
+gh() {
+  case "$*" in
+    *submariner-io/submariner-operator/pulls*) printf '%s' "$_ec_pages" ;;
+    *) echo '[[]]' ;;
+  esac
+}
+ec_exit=0
+ec_out=$(verify_ecFixes "0.99.1" 2>/dev/null) || ec_exit=$?
+assert_eq "EC guard: single-repo suffixed repair blocks old snapshot" "$ec_exit" "3"
+assert_contains "EC guard: pending URL retained" "$ec_out" "https://example.com/repair/2"
+_ec_pages='[[],[{"state":"open","head":{"ref":"fix-tekton-tasks-0.99"},"base":{"ref":"release-0.99"},"html_url":"https://example.com/repair/3"}]]'
+ec_exit=0; ec_out=$(_verify_ec_open_prs "0.99.1" 2>/dev/null) || ec_exit=$?
+assert_eq "EC guard: reads later PR pages" "$ec_exit" "3"
+for _ec_branch in fix-tekton-tasks-0.99.1 fix-tekton-tasks-0.99.2 fix-tekton-tasks-0.99.1-extra; do
+  _ec_pages=$(jq -cn --arg branch "$_ec_branch" '[[{state:"open",head:{ref:$branch},base:{ref:"release-0.99"},html_url:"https://example.com/repair/patch"}]]')
+  ec_exit=0; ec_out=$(_verify_ec_open_prs "0.99.1" 2>/dev/null) || ec_exit=$?
+  _ec_want=0
+  [ "$_ec_branch" != fix-tekton-tasks-0.99.1 ] || _ec_want=3
+  assert_eq "EC guard: requested patch matching ($_ec_branch)" "$ec_exit" "$_ec_want"
+done
+_ec_pages='[[{"state":"open","head":{"ref":"fix-tekton-tasks-0.99-v2-extra"},"base":{"ref":"release-0.99"},"html_url":"https://example.com/unrelated"},{"state":"open","head":{"ref":"fix-tekton-tasks-0.99"},"base":{"ref":"release-0.98"},"html_url":"https://example.com/wrong-base"}]]'
+ec_exit=0; ec_out=$(_verify_ec_open_prs "0.99.1" 2>/dev/null) || ec_exit=$?
+assert_eq "EC guard: ignores unrelated suffix and base" "$ec_exit" "0"
+assert_eq "EC guard: no pending output for unrelated work" "$ec_out" ""
+for _ec_pages in '{}' '[{}]' '[[{"state":"open"}]]' 'not-json'; do
+  ec_exit=0; ec_out=$(verify_ecFixes "0.99.1" 2>/dev/null) || ec_exit=$?
+  assert_eq "EC guard: malformed response fails closed ($_ec_pages)" "$ec_exit" "2"
+  assert_eq "EC guard: malformed response emits no completion evidence" "$ec_out" ""
+done
+gh() { return 1; }
+ec_exit=0; ec_out=$(verify_ecFixes "0.99.1" 2>/dev/null) || ec_exit=$?
+assert_eq "EC guard: query failure fails closed" "$ec_exit" "2"
+assert_eq "EC guard: query failure emits no completion evidence" "$ec_out" ""
+# Assert FBC uses its real main branch rather than the component release branch.
+gh() {
+  case "$*" in
+    *stolostron/submariner-operator-fbc/pulls?state=open\&base=main\&*)
+      echo '[[{"state":"open","head":{"ref":"fix-tekton-tasks-0.99-v10"},"base":{"ref":"main"},"html_url":"https://example.com/fbc/10"}]]' ;;
+    *) echo '[[]]' ;;
+  esac
+}
+ec_exit=0; ec_out=$(_verify_ec_open_prs "0.99.1" 2>/dev/null) || ec_exit=$?
+assert_eq "EC guard: FBC main retry branch blocks" "$ec_exit" "3"
+gh() { echo '[[]]'; }
+
 # 22a: fallback path must reject PR builds. The only EC-passing snapshot is a
 # pull_request build (not a real main-branch build), so verify must decline —
 # exit 1, no output. Guards the event-type filter in the fallback selector.
 _OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-prbuild","labels":{"pac.test.appstudio.openshift.io/event-type":"pull_request"},"annotations":{"test.appstudio.openshift.io/status":"[{\"scenario\":\"submariner-enterprise-contract\",\"status\":\"TestPassed\"}]"}}}]}'
 ec_exit=0
 ec_out=$(verify_ecFixes "0.99.1" 2>/dev/null) || ec_exit=$?
-assert_eq "verify_ecFixes rejects PR-event snapshot (exit 1)" "$ec_exit" "1"
+assert_eq "verify_ecFixes rejects PR-event snapshot as unavailable (exit 2)" "$ec_exit" "2"
 assert_eq "verify_ecFixes PR-event → no output" "$ec_out" ""
 
 # 22a2: with both a PR build and an older push build EC-passing, the push one
@@ -527,7 +593,7 @@ _OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-abc123","labels":{
 get_step() { echo '{"status":"complete","data":{"snapshot":"submariner-0-99-MISSING"}}'; }
 ec_exit=0
 ec_out=$(verify_ecFixes "0.99.1" "FAKE-123" 2>/dev/null) || ec_exit=$?
-assert_eq "verify_ecFixes (tracker) missing bundleShas snapshot → exit 1" "$ec_exit" "1"
+assert_eq "verify_ecFixes (tracker) missing bundleShas snapshot → exit 2" "$ec_exit" "2"
 assert_eq "verify_ecFixes (tracker) missing snapshot → no output" "$ec_out" ""
 
 # 22e: tracker set but bundleShas has no snapshot yet → falls back to latest EC-passing
@@ -547,8 +613,24 @@ _OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-abc123","labels":{
 get_step() { return 1; }
 ec_exit=0
 ec_out=$(verify_ecFixes "0.99.1" "FAKE-123" 2>/dev/null) || ec_exit=$?
-assert_eq "verify_ecFixes (tracker) failed bundleShas read → exit 1" "$ec_exit" "1"
+assert_eq "verify_ecFixes (tracker) failed bundleShas read → exit 2" "$ec_exit" "2"
 assert_eq "verify_ecFixes (tracker) failed read → no output (no wrong-snapshot fallback)" "$ec_out" ""
+get_step() { echo invalid; }
+ec_exit=0; ec_out=$(verify_ecFixes "0.99.1" "FAKE-123" 2>/dev/null) || ec_exit=$?
+assert_eq "malformed candidate data is a precondition failure" "$ec_exit" 2
+_OC_SNAPSHOTS='{"items":null}'
+oc() { case "$1" in get) printf '%s' "$_OC_SNAPSHOTS" ;; *) return 0 ;; esac; }
+get_step() { echo '{}'; }
+ec_exit=0; ec_out=$(verify_ecFixes "0.99.1" "FAKE-123" 2>/dev/null) || ec_exit=$?
+assert_eq "malformed snapshot list is a precondition failure" "$ec_exit" 2
+# Restore a completed retained-marker fixture for the shared EC reader tests.
+_OC_SNAPSHOTS='{"items":[{"metadata":{"name":"submariner-0-99-BBB","annotations":{"test.appstudio.openshift.io/status":"[{\"scenario\":\"submariner-enterprise-contract\",\"status\":\"BuildPLRInProgress\"}]"}}}]}'
+
+_OC_SNAPSHOTS=$(printf '%s' "$_OC_SNAPSHOTS" | complete_ec_fixture | jq 'del(.items[0].status)')
+ec_exit=0; ec_out=$(verify_ecFixes "0.99.1" "FAKE-123" 2>/dev/null) || ec_exit=$?
+assert_eq "unfinished EC evidence cannot dispatch a repair" "$ec_exit" 2
+oc() { case "$1" in whoami) return 0 ;; get) printf '%s' "$_OC_SNAPSHOTS" | complete_ec_fixture ;; *) return 0 ;; esac; }
+
 eval "$_orig_get_step_ec"
 
 # 22g: EC failed (fallback) → stderr names the snapshot and status; stdout empty.
@@ -580,7 +662,7 @@ ec_exit=0 _ec_err_tmp=$(mktemp)
 ec_out=$(verify_ecFixes "0.99.1" 2>"$_ec_err_tmp") || ec_exit=$?
 ec_diag=$(cat "$_ec_err_tmp"); rm -f "$_ec_err_tmp"
 assert_eq "22i: no snapshot stdout empty" "$ec_out" ""
-assert_eq "22i: no snapshot exit 1" "$ec_exit" "1"
+assert_eq "22i: no snapshot exit 2" "$ec_exit" "2"
 assert_contains "22i: no snapshot stderr mentions prefix" "$ec_diag" "submariner-0-99-"
 
 # 22k: BuildPLRInProgress is a normal Konflux status (the pipeline run record
@@ -692,135 +774,129 @@ _MOCK_GIT_RC=0
 
 [ -n "$_orig_git_ls_remote" ] && eval "$_orig_git_ls_remote" || unset -f _git_ls_remote
 
-# 25: verify_fbcProdUrls emits the resolved registry.redhat.io bundle image.
-# After the fix, the function uses ${FBC_REPO:-$FBC_REPO_DEFAULT}, so inject
-# the temp dir via FBC_REPO (not HOME, which is no longer the lookup path).
-_fbc_dir=$(mktemp -d)
-printf '  - name: submariner.v0.99.1\n    image: registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:abc\n' \
-  > "$_fbc_dir/catalog-template.yaml"
-fp_exit=0
-fp_out=$(FBC_REPO="$_fbc_dir" verify_fbcProdUrls "0.99.1" 2>/dev/null) || fp_exit=$?
-rm -rf "$_fbc_dir"
-assert_eq "verify_fbcProdUrls verified (exit 0)" "$fp_exit" "0"
-assert_eq "verify_fbcProdUrls emits bundleImage" "$fp_out" \
-  '{"bundleImage":"registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:abc","version":"0.99.1"}'
-
-# 25b-d: verify_fbcProdUrls failure paths must return 1 with NO stdout (no false
-# STEP_DATA). Helper writes a catalog-template with the given image line.
+# Production URL completion requires one exact bundle entry and immutable image
+# in canonical upstream main, read at the freshly resolved commit.
+_orig_fbc_gh=$(declare -f gh 2>/dev/null || echo "")
+printf -v _fbc_digest '%064d' 1
+_fbc_image="registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:$_fbc_digest"
+printf -v _fbc_revision '%040d' 2
+_fbc_expected=$(jq -cn --arg image "$_fbc_image" --arg revision "$_fbc_revision" \
+  '{bundleImage:$image,version:"0.99.1",templateRevision:$revision}')
+_fbc_template=$(jq -n --arg image "$_fbc_image" \
+  '{entries:[{schema:"olm.bundle",name:"submariner.v0.99.1",image:$image}]}')
+_fbc_ref_rc=0 _fbc_template_rc=0
+gh() {
+  case "$*" in
+    'api repos/stolostron/submariner-operator-fbc/commits/main --jq .sha')
+      [ "$_fbc_ref_rc" -eq 0 ] || return "$_fbc_ref_rc"
+      printf '%s\n' "$_fbc_revision" ;;
+    "api -H Accept: application/vnd.github.raw+json repos/stolostron/submariner-operator-fbc/contents/catalog-template.yaml?ref=$_fbc_revision")
+      [ "$_fbc_template_rc" -eq 0 ] || return "$_fbc_template_rc"
+      printf '%s\n' "$_fbc_template" ;;
+    *) return 99 ;;
+  esac
+}
 _fbcprod_case() {
-  local image="$1" fbc_dir; fbc_dir=$(mktemp -d)
-  if [ -n "$image" ]; then
-    printf '  - name: submariner.v0.99.1\n    image: %s\n' "$image" \
-      > "$fbc_dir/catalog-template.yaml"
-  else
-    # No bundle entry for this version.
-    printf '  - name: submariner.v0.98.0\n    image: registry.redhat.io/x@sha256:old\n' \
-      > "$fbc_dir/catalog-template.yaml"
+  local edit="$1" out rc=0
+  case "$edit" in
+    malformed) _fbc_template='entries: [' ;;
+    empty) _fbc_template='' ;;
+    multiple-documents) _fbc_template=$'entries: []\n---\nentries: []\n' ;;
+    *) _fbc_template=$(jq -n --arg image "$_fbc_image" \
+      '{entries:[{schema:"olm.bundle",name:"submariner.v0.99.1",image:$image}]}' |
+      jq "$edit") ;;
+  esac
+  out=$(verify_fbcProdUrls 0.99.1 2>/dev/null) || rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+for edit in '.' '.entries = [{schema:"olm.channel",name:"stable-0.99",entries:[{name:"submariner.v0.99.1"}]}, (.entries[0] | .name="submariner.v0.99.1-0.123.p")] + .entries'; do
+  assert_eq "production URL: exact GA bundle past decoys" "$(_fbcprod_case "$edit")" "0|$_fbc_expected"
+done
+for edit in \
+  '.entries[0].name="submariner.v0x99y1"' \
+  '.entries[0].image="example.invalid/registry.redhat.io/bundle:unpublished"' \
+  '.entries[0].image |= sub("registry.redhat.io";"registry.redhat.io.example.invalid")' \
+  '.entries[0].image |= sub("registry.redhat.io";"quay.io")' \
+  '.entries[0].image |= sub("submariner-operator-bundle";"another-bundle")' \
+  '.entries[0].image="registry.redhat.io/rhacm2/submariner-operator-bundle:latest"' \
+  '.entries[0].image="registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:abc"' \
+  '.entries += .entries' \
+  '.entries += [.entries[0] | .image="quay.io/temp/bundle:latest"]' \
+  '.entries[0].schema="olm.channel"' '.entries=[]'; do
+  assert_eq "production URL rejects $edit" "$(_fbcprod_case "$edit")" '1|'
+done
+for edit in malformed empty multiple-documents '{}' '.entries=["invalid"]'; do
+  assert_eq "production URL: unreadable evidence $edit" "$(_fbcprod_case "$edit")" '2|'
+done
+
+for failure in ref-query bad-revision template-query; do
+  fp_result=$(
+    case "$failure" in
+      ref-query) _fbc_ref_rc=1 ;;
+      bad-revision) _fbc_revision=not-a-commit ;;
+      template-query) _fbc_template_rc=1 ;;
+    esac
+    fp_exit=0
+    fp_out=$(verify_fbcProdUrls 0.99.1 2>/dev/null) || fp_exit=$?
+    printf '%s|%s' "$fp_exit" "$fp_out"
+  )
+  assert_eq "production URL: failed upstream evidence stays unknown ($failure)" "$fp_result" '2|'
+done
+
+# Local conversions cannot certify completion, and even a dirty/stale local
+# checkout cannot hide a published upstream conversion. Neither check edits it.
+_fbc_local_case() {
+  local state="$1" fbc_dir before after out rc
+  fbc_dir=$(mktemp -d)
+  git -C "$fbc_dir" init -q
+  git -C "$fbc_dir" config user.name 'Autorelease Test'
+  git -C "$fbc_dir" config user.email 'autorelease-test@example.invalid'
+  git -C "$fbc_dir" config commit.gpgsign false
+  printf 'original\n' > "$fbc_dir/work"
+  if [ "$state" != untracked ]; then
+    printf 'entries: []\n' > "$fbc_dir/catalog-template.yaml"
   fi
-  local out exit=0
-  out=$(FBC_REPO="$fbc_dir" verify_fbcProdUrls "0.99.1" 2>/dev/null) || exit=$?
+  git -C "$fbc_dir" add .
+  git -C "$fbc_dir" commit -qm initial
+  if [ "$state" != stale ]; then
+    printf '%s\n' "$_fbc_template" > "$fbc_dir/catalog-template.yaml"
+  fi
+  if [ "$state" = unpushed ]; then
+    git -C "$fbc_dir" add catalog-template.yaml
+    git -C "$fbc_dir" commit -qm 'Unpublished conversion'
+  fi
+  printf 'staged\n' > "$fbc_dir/work"
+  git -C "$fbc_dir" add work
+  printf 'unstaged\n' >> "$fbc_dir/work"
+  printf 'preserve\n' > "$fbc_dir/untracked"
+  before=$(git -C "$fbc_dir" status --porcelain --untracked-files=all;
+    git -C "$fbc_dir" rev-parse HEAD;
+    git -C "$fbc_dir" diff --cached;
+    sha256sum "$fbc_dir"/{catalog-template.yaml,work,untracked})
+
+  local _fbc_template='entries: []'
+  rc=0
+  out=$(FBC_REPO="$fbc_dir" verify_fbcProdUrls 0.99.1 2>/dev/null) || rc=$?
+  assert_eq "production URL: upstream stage stays pending with $state local work" "$rc|$out" '1|'
+  _fbc_template=$(printf 'entries:\n- image: %s\n  schema: olm.bundle\n  name: submariner.v0.99.1\n' "$_fbc_image")
+  rc=0
+  out=$(FBC_REPO="$fbc_dir" verify_fbcProdUrls 0.99.1 2>/dev/null) || rc=$?
+  assert_eq "production URL: upstream conversion passes with $state local work" "$rc|$out" "0|$_fbc_expected"
+  after=$(git -C "$fbc_dir" status --porcelain --untracked-files=all;
+    git -C "$fbc_dir" rev-parse HEAD;
+    git -C "$fbc_dir" diff --cached;
+    sha256sum "$fbc_dir"/{catalog-template.yaml,work,untracked})
+  assert_eq "production URL: $state local work is preserved" "$after" "$before"
   rm -rf "$fbc_dir"
-  printf '%s|%s' "$exit" "$out"
 }
-# 25b: still on temporary quay.io build URL → not done
-assert_eq "verify_fbcProdUrls quay.io build URL → exit 1, no output" \
-  "$(_fbcprod_case 'quay.io/redhat-user-workloads/submariner-tenant/x@sha256:abc')" "1|"
-# 25c: neither quay build nor registry.redhat.io (unexpected registry) → not done
-assert_eq "verify_fbcProdUrls non-prod registry → exit 1, no output" \
-  "$(_fbcprod_case 'quay.io/submariner/submariner-operator-bundle@sha256:abc')" "1|"
-# 25d: no bundle entry for this version → not done
-assert_eq "verify_fbcProdUrls missing bundle entry → exit 1, no output" \
-  "$(_fbcprod_case '')" "1|"
-
-# 25e: real catalog templates interleave a 6-space channel entry and longer
-# ".p" pre-release bundles with the GA bundle. The grep-based implementation
-# uses "name: submariner.v<ver>$" (end-of-name anchor) then looks for an
-# "image:" line immediately after it via grep -A1 | grep image:. Channel
-# entries are skipped naturally because they have no "image:" line immediately
-# following their "name:" line; ".p" pre-release bundles are excluded by the
-# "$" anchor (prevents "0.99.1-0.123.p" from matching the "0.99.1" pattern).
-# Ordering the decoys before the GA entry is what makes each exclusion observable.
-_fbc_dir=$(mktemp -d)
-{
-  printf '      - name: submariner.v0.99.1\n        replaces: submariner.v0.99.0\n'
-  printf '  - name: submariner.v0.99.1-0.123.p\n    image: registry.redhat.io/rhacm2/x@sha256:PRE\n'
-  printf '  - name: submariner.v0.99.1\n    image: registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:GA\n'
-} > "$_fbc_dir/catalog-template.yaml"
+for local_state in untracked dirty unpushed stale; do
+  _fbc_local_case "$local_state"
+done
+# Published conversion verification does not require a local checkout.
 fp_exit=0
-fp_out=$(FBC_REPO="$_fbc_dir" verify_fbcProdUrls "0.99.1" 2>/dev/null) || fp_exit=$?
-rm -rf "$_fbc_dir"
-assert_eq "verify_fbcProdUrls resolves GA bundle past channel + .p decoys (exit 0)" "$fp_exit" "0"
-assert_eq "verify_fbcProdUrls emits GA image, not channel or .p" "$fp_out" \
-  '{"bundleImage":"registry.redhat.io/rhacm2/submariner-operator-bundle@sha256:GA","version":"0.99.1"}'
-
-
-# 25f (Fix 4): verify_fbcProdUrls must work regardless of indentation.
-# The old awk required exactly 2-space indent ("^  - name: ..."); the grep-based
-# implementation is indent-agnostic. Test with 4-space and 0-space indentation.
-_fbcprod_indent_case() {
-  local indent="$1" fbc_dir; fbc_dir=$(mktemp -d)
-  printf '%s- name: submariner.v0.99.1\n%s  image: registry.redhat.io/rhacm2/x@sha256:GA\n' \
-    "$indent" "$indent" \
-    > "$fbc_dir/catalog-template.yaml"
-  local out exit=0
-  out=$(FBC_REPO="$fbc_dir" verify_fbcProdUrls "0.99.1" 2>/dev/null) || exit=$?
-  rm -rf "$fbc_dir"
-  printf '%s|%s' "$exit" "$out"
-}
-assert_eq "verify_fbcProdUrls: indent-agnostic (4-space indent, exit 0)" \
-  "$(_fbcprod_indent_case '    ')" \
-  '0|{"bundleImage":"registry.redhat.io/rhacm2/x@sha256:GA","version":"0.99.1"}'
-assert_eq "verify_fbcProdUrls: indent-agnostic (0-space indent, exit 0)" \
-  "$(_fbcprod_indent_case '')" \
-  '0|{"bundleImage":"registry.redhat.io/rhacm2/x@sha256:GA","version":"0.99.1"}'
-
-# 25g (Fix 4): failure paths emit a diagnostic to stderr (not stdout) so the
-# caller can suppress with 2>/dev/null or surface for debugging.
-_fbc_dir2=$(mktemp -d)
-printf '  - name: submariner.v0.98.0\n    image: registry.redhat.io/x@sha256:old\n' \
-  > "$_fbc_dir2/catalog-template.yaml"
-fp_err=$(FBC_REPO="$_fbc_dir2" verify_fbcProdUrls "0.99.1" 2>&1 >/dev/null) || true
-fp_out=$(FBC_REPO="$_fbc_dir2" verify_fbcProdUrls "0.99.1" 2>/dev/null) || true
-rm -rf "$_fbc_dir2"
-assert_contains "verify_fbcProdUrls missing entry: stderr diagnostic" \
-  "$fp_err" "no bundle entry"
-assert_eq "verify_fbcProdUrls missing entry: stdout empty (no false data)" \
-  "$fp_out" ""
-
-# Fix 2c: verify_fbcProdUrls repo not found → exit 2 (precondition) with clone hint
-fp_exit=0 _fp_err_tmp=$(mktemp)
-fp_out=$(FBC_REPO="/nonexistent/fbc-repo-$$" verify_fbcProdUrls "0.99.1" 2>"$_fp_err_tmp") || fp_exit=$?
-fp_diag=$(cat "$_fp_err_tmp"); rm -f "$_fp_err_tmp"
-assert_eq "verify_fbcProdUrls repo missing → exit 2" "$fp_exit" "2"
-assert_eq "verify_fbcProdUrls repo missing → stdout empty" "$fp_out" ""
-assert_contains "verify_fbcProdUrls repo missing → stderr mentions clone" "$fp_diag" "clone"
-
-# 25h: verify_fbcProdUrls uses FBC_REPO_DEFAULT from jira-tracker.sh when FBC_REPO
-# is unset. FBC_REPO_DEFAULT is set once at source time (readonly). The canonical
-# way to override it is to export FBC_REPO_DEFAULT before the script starts; within
-# a running process FBC_REPO is the per-call injection mechanism. This test
-# verifies the FBC_REPO_DEFAULT fallback via a subshell where it can be pre-set.
-_fbc_default_dir=$(mktemp -d)
-printf '  - name: submariner.v0.99.1\n    image: registry.redhat.io/rhacm2/x@sha256:FROM_DEFAULT\n' \
-  > "$_fbc_default_dir/catalog-template.yaml"
-fp_exit=0
-fp_out=$(
-  env FBC_REPO_DEFAULT="$_fbc_default_dir" bash -c "
-    unset FBC_REPO
-    unset _JIRA_TRACKER_SOURCED
-    source '$_LIB_DIR/jira-tracker.sh' 2>/dev/null || true
-    export _AUTORELEASE_TESTING=true
-    query_jira() { echo '[]'; }
-    acli() { :; }
-    calculate_acm_version() { ACM_VERSION='ACM 2.17.0'; }
-    source '$_LIB_DIR/../autorelease.sh'
-    verify_fbcProdUrls '0.99.1'
-  " 2>/dev/null
-) || fp_exit=$?
-rm -rf "$_fbc_default_dir"
-assert_eq "verify_fbcProdUrls: FBC_REPO_DEFAULT fallback (exit 0)" "$fp_exit" "0"
-assert_eq "verify_fbcProdUrls: FBC_REPO_DEFAULT emits bundle" "$fp_out" \
-  '{"bundleImage":"registry.redhat.io/rhacm2/x@sha256:FROM_DEFAULT","version":"0.99.1"}'
+fp_out=$(FBC_REPO="/nonexistent/fbc-repo-$$" verify_fbcProdUrls 0.99.1 2>/dev/null) || fp_exit=$?
+assert_eq 'production URL: upstream evidence needs no local checkout' "$fp_exit|$fp_out" "0|$_fbc_expected"
+[ -n "$_orig_fbc_gh" ] && eval "$_orig_fbc_gh" || unset -f gh
 
 echo ""
 echo "=== snapshot_step_data Tests ==="
@@ -1040,6 +1116,31 @@ assert_eq "verifier empty stdout → exit 0" "$tav_exit" "0"
 assert_eq "verifier empty stdout → data {}" "${_UPDATE_STEP_CALLS[0]}" \
   "0.99.1|faketest_empty|complete|{}|FAKE-123"
 
+# A verified source step must not advance when required Jira writes fail.
+_tav_writer=$(declare -f update_step)
+update_step() { return 1; }
+verified_steps=(); _AUTORELEASE_QUIET=""
+tav_exit=0; try_auto_verify faketest_ok || tav_exit=$?
+assert_eq "completion write failure stops advancement" "$tav_exit" 2
+assert_eq "completion write failure does not silence next run" "$_AUTORELEASE_QUIET" ""
+eval "$_tav_writer"
+
+_tav_comment=$(declare -f _add_comment)
+_tav_description=$(declare -f update_subtask_description)
+_fake_verify_merged() { echo 'Merged https://example.com/repair/1'; }
+STEP_VERIFIER[faketest_merged]=_fake_verify_merged
+for _tav_failure in comment description; do
+  _add_comment() { [ "$_tav_failure" != comment ]; }
+  update_subtask_description() { [ "$_tav_failure" != description ]; }
+  verified_steps=(); _UPDATE_STEP_CALLS=()
+  tav_exit=0; try_auto_verify faketest_merged || tav_exit=$?
+  assert_eq "merged evidence $_tav_failure failure stops advancement" "$tav_exit" 2
+  assert_eq "merged evidence $_tav_failure failure leaves step incomplete" "${#_UPDATE_STEP_CALLS[@]}" 0
+done
+eval "$_tav_comment"
+eval "$_tav_description"
+unset 'STEP_VERIFIER[faketest_merged]'
+
 # D: already tried this run → don't re-verify (the anti-infinite-loop guard)
 STEP_VERIFIER["faketest_guard"]="_fake_verify_ok"
 declare -A verified_steps=([faketest_guard]=1)
@@ -1080,6 +1181,96 @@ tav_exit=0; try_auto_verify "faketest_precond" || tav_exit=$?
 assert_eq "exit-2 already-tried → exit 1 (guard, not 2)" "$tav_exit" "1"
 assert_eq "exit-2 already-tried → verifier NOT re-invoked" "$(wc -l <"$_VCALL_FILE")" "0"
 assert_eq "exit-2 already-tried → no update_step" "${#_UPDATE_STEP_CALLS[@]}" "0"
+
+# A linked worktree has a .git FILE; cache location must use Git's real path.
+_cache_fixture=$(mktemp -d)
+git init -q "$_cache_fixture/repo"
+git -C "$_cache_fixture/repo" -c user.name=Test -c user.email=test@example.com \
+  commit -q --allow-empty -m initial
+git -C "$_cache_fixture/repo" worktree add -q --detach "$_cache_fixture/worktree"
+_cache_original_root="$GIT_ROOT"
+_cache_original_version="$VERSION"
+_cache_comment_fn=$(declare -f _add_comment)
+_cache_description_fn=$(declare -f update_subtask_description)
+GIT_ROOT="$_cache_fixture/worktree"
+_CACHE_COMMENTS=0
+_CACHE_COMMENT_FAILURE=0
+_CACHE_DESCRIPTIONS=0
+_add_comment() { _CACHE_COMMENTS=$((_CACHE_COMMENTS + 1)); return "$_CACHE_COMMENT_FAILURE"; }
+update_subtask_description() { _CACHE_DESCRIPTIONS=$((_CACHE_DESCRIPTIONS + 1)); }
+_fake_verify_pending() { echo 'https://example.com/pending'; return 3; }
+STEP_VERIFIER[faketest_pending]=_fake_verify_pending
+for VERSION in 0.99.1 0.99.1 0.99.2; do
+  verified_steps=()
+  tav_exit=0; try_auto_verify faketest_pending || tav_exit=$?
+  assert_eq "PR cache: pending stays pending in linked worktree ($VERSION)" "$tav_exit" "3"
+done
+assert_eq "PR cache: deduplicates within release, separates releases" "$_CACHE_COMMENTS" "2"
+_cache_path=$(git -C "$GIT_ROOT" rev-parse --path-format=absolute \
+  --git-path autorelease-pr-hash-0.99.2-faketest_pending)
+assert_eq "PR cache: writes through linked-worktree Git path" "$([ -s "$_cache_path" ] && echo yes)" yes
+VERSION=0.99.3
+_CACHE_COMMENT_FAILURE=1
+verified_steps=()
+tav_exit=0; try_auto_verify faketest_pending || tav_exit=$?
+assert_eq "PR cache: failed Jira write stays pending" "$tav_exit" 3
+assert_eq "PR cache: failed comment still attempts description" "$_CACHE_DESCRIPTIONS" 3
+_CACHE_COMMENT_FAILURE=0
+for _attempt in retry cached; do
+  verified_steps=()
+  tav_exit=0; try_auto_verify faketest_pending || tav_exit=$?
+  assert_eq "PR cache: $_attempt stays pending" "$tav_exit" 3
+done
+assert_eq "PR cache: failed comment is retried, success is deduplicated" "$_CACHE_COMMENTS" 4
+
+# Use the real description helper: a mocked public wrapper would hide its errors.
+eval "$_cache_description_fn"
+_cache_find_subtask_fn=$(declare -f _find_subtask)
+_cache_acli_fn=$(declare -f _acli)
+_CACHE_EDITS=0
+_CACHE_EDIT_FAILURE=1
+_CACHE_LOOKUP=normal
+_find_subtask() {
+  case "$_CACHE_LOOKUP" in
+    failed) return 1 ;;
+    empty) return 0 ;;
+    normal) echo TEST-SUBTASK ;;
+  esac
+}
+_acli() { _CACHE_EDITS=$((_CACHE_EDITS + 1)); return "$_CACHE_EDIT_FAILURE"; }
+VERSION=0.99.4
+_cache_path=$(git -C "$GIT_ROOT" rev-parse --path-format=absolute \
+  --git-path autorelease-pr-hash-0.99.4-faketest_pending)
+verified_steps=()
+tav_exit=0; try_auto_verify faketest_pending 2>/dev/null || tav_exit=$?
+assert_eq "PR cache: failed description stays pending" "$tav_exit" 3
+assert_eq "PR cache: failed description is not cached" "$([ -e "$_cache_path" ] && echo yes || echo no)" no
+_CACHE_EDIT_FAILURE=0
+for _attempt in retry cached; do
+  verified_steps=()
+  tav_exit=0; try_auto_verify faketest_pending || tav_exit=$?
+  assert_eq "PR cache: description $_attempt stays pending" "$tav_exit" 3
+done
+assert_eq "PR cache: both writes retry, then deduplicate" "$_CACHE_COMMENTS:$_CACHE_EDITS" 6:2
+assert_eq "PR cache: successful description is cached" "$([ -s "$_cache_path" ] && echo yes || echo no)" yes
+for _CACHE_LOOKUP in failed empty; do
+  VERSION="0.99.5"
+  _cache_path=$(git -C "$GIT_ROOT" rev-parse --path-format=absolute \
+    --git-path autorelease-pr-hash-0.99.5-faketest_pending)
+  verified_steps=()
+  tav_exit=0; try_auto_verify faketest_pending 2>/dev/null || tav_exit=$?
+  assert_eq "PR cache: $_CACHE_LOOKUP subtask lookup stays pending" "$tav_exit" 3
+  assert_eq "PR cache: $_CACHE_LOOKUP subtask lookup is not cached" "$([ -e "$_cache_path" ] && echo yes || echo no)" no
+done
+assert_eq "PR cache: failed lookup never edits Jira" "$_CACHE_EDITS" 2
+eval "$_cache_find_subtask_fn"
+eval "$_cache_acli_fn"
+GIT_ROOT="$_cache_original_root"
+VERSION="$_cache_original_version"
+eval "$_cache_comment_fn"
+eval "$_cache_description_fn"
+unset 'STEP_VERIFIER[faketest_pending]'
+rm -rf "$_cache_fixture"
 
 # Cleanup: drop temp verifier map entries, restore real update_step
 rm -f "$_VCALL_FILE"
@@ -1286,7 +1477,7 @@ echo "=== run_dry_run Tests (--dry-run preview) ==="
 # run_dry_run reads the VERSION/RELEASE_TYPE/TRACKER globals and mutates the
 # file-scope step_statuses; it prints everything to stderr and never writes.
 assert_not_contains() {
-  if printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✗ $1 (unexpectedly present: '$3')"; FAIL=$((FAIL + 1))
+  if grep -qF -- "$3" <<< "$2"; then echo "  ✗ $1 (unexpectedly present: '$3')"; FAIL=$((FAIL + 1))
   else echo "  ✓ $1"; PASS=$((PASS + 1)); fi
 }
 
@@ -1299,7 +1490,7 @@ VERSION="0.99.1"; RELEASE_TYPE="z-stream"; TRACKER="FAKE-123"
 declare -A step_statuses=()
 dr=$(run_dry_run 2>&1)
 assert_contains "dry-run fresh z: runs rpmLockfiles"   "$dr" "run: scripts/rpm-lockfile-update.sh 0.99.1"
-assert_contains "dry-run fresh z: stops at rpmLockfiles (review)" "$dr" "Stops at: RPM lockfile updates — runs the script then pauses for review — re-run /autorelease 0.99.1 to execute"
+assert_contains "dry-run fresh z: stops at rpmLockfiles (review)" "$dr" "Stops at: RPM lockfile updates — verifies existing work first"
 assert_not_contains "dry-run fresh z: no conditional stop (no gate crossed)" "$dr" "Earliest possible stop"
 
 # DR-2: Mid-chain resume (seed through ecFixes, the plan's 5-step seed) →
@@ -1395,7 +1586,7 @@ VERSION="0.99.1"; RELEASE_TYPE="z-stream"; TRACKER="FAKE-123"
 step_statuses=([rpmLockfiles]=complete [versionLabels]=complete [tektonTasks]=complete [cveFixes]=complete)
 ecout=$(run_dry_run 2>&1)
 assert_contains "dry-run: ecFixes listed as run step" "$ecout" \
-  "run: scripts/tekton-task-version-bump.sh 0.99.1"
+  "run: scripts/tekton-task-refs-update.sh 0.99.1"
 assert_not_contains "dry-run: ecFixes has no gate · prefix" "$ecout" \
   "gate · auto-verifies: EC passes on Konflux snapshot"
 
@@ -1833,6 +2024,10 @@ declare -A step_statuses=([rpmLockfiles]=in_progress)
 dr10=$(run_dry_run 2>&1)
 assert_contains "dry-run: in_progress step annotated in numbered list" \
   "$dr10" "RPM lockfile updates (in_progress)"
+
+assert_contains "dry-run: resumed work verifies before dispatch" "$dr10" "first: verify_rpmLockfiles"
+assert_contains "dry-run: resumed script is conditional" "$dr10" "if needed after verification, run:"
+assert_not_contains "dry-run: resumed verifier does not promise rerun" "$dr10" "runs the script then pauses for review"
 
 # A non-in_progress step (fresh / no status) has no annotation.
 declare -A step_statuses=()

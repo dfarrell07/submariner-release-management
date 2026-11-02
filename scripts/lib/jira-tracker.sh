@@ -6,8 +6,8 @@
 # Each release gets a parent Task with 15-19 Sub-task children (one per workflow step).
 # Automation appends structured STEP_DATA comments as steps complete.
 #
-# Best-effort: tracker failures never crash calling scripts. Side-effect
-# functions (update_step, etc.) return 0 on error. create_release_tracker is
+# update_step is best-effort and returns 0 on error. Description updates return
+# non-zero on failure so evidence recorders can retry. create_release_tracker is
 # strict since it's a deliberate action. get_step is a reader: it returns
 # non-zero on a failed/unreliable read so evidence recorders can tell a Jira
 # blip apart from a genuinely absent step (empty output, exit 0).
@@ -125,7 +125,7 @@ STEP_PHASE["ecFixes"]="Build Readiness"
 STEP_DEPENDENCIES["ecFixes"]=""
 STALENESS_RULES["ecFixes"]="snapshot"
 AUTOMATION_LEVEL["ecFixes"]="review"
-STEP_SCRIPT["ecFixes"]="scripts/tekton-task-version-bump.sh"
+STEP_SCRIPT["ecFixes"]="scripts/tekton-task-refs-update.sh"
 
 # ── rpmLockfiles ────────────────────────────────────────────────────────────
 STEP_TITLES["rpmLockfiles"]="RPM lockfile updates"
@@ -333,6 +333,19 @@ _detect_release_type() {
   fi
 }
 
+# Jira summary searches are fuzzy and clones can retain release labels. Select
+# one exact identity, rejecting empty/truncated reads and duplicate matches.
+# Output: selected issue object, or null when a valid response has no match.
+_select_exact_jira_issue() {
+  jq -cs --arg title "$1" '
+    if length != 1 then error("Expected one Jira response") else .[0] end |
+    if type != "array" or any(.[];
+      (.key | type) != "string" or .key == "" or (.fields.summary | type) != "string")
+    then error("Invalid Jira issue response")
+    else [.[] | select(.fields.summary == $title)] |
+      if length > 1 then error("Multiple exact Jira issues") else .[0] end end'
+}
+
 # Find a subtask by parent key and step key
 # Args: $1=parent_key (e.g., ACM-54321)
 #       $2=step_key (e.g., cveFixes)
@@ -354,7 +367,9 @@ _find_subtask() {
   local result
   result=$(query_jira --jql "parent = $parent_key AND summary ~ \"$title\"" --fields "summary" 2>/dev/null) || return 1
 
-  echo "$result" | jq -r '.[0].key // empty' 2>/dev/null
+  local issue
+  issue=$(_select_exact_jira_issue "$title" <<< "$result") || return 1
+  jq -r '.key // empty' <<< "$issue"
 }
 
 # Transition a Jira issue to a new status
@@ -364,7 +379,11 @@ _transition_issue() {
   local status="$2"
 
   # Try the transition directly — Jira auto-sets resolution for most workflows
-  _acli jira workitem transition --key "$key" --status "$status" --yes </dev/null 2>/dev/null
+  _acli jira workitem transition --key "$key" --status "$status" --yes </dev/null 2>/dev/null && return 0
+  # A retry may already be at the target after a partial write or timeout.
+  local current
+  current=$(query_jira --jql "key = $key" --fields status | jq -er '.[0].fields.status.name') || return 1
+  [ "$current" = "$status" ]
 }
 
 # Write a structured comment on a Jira issue
@@ -625,17 +644,14 @@ find_release_tracker() {
     return 2
   }
 
-  # An exit-0 response can still be garbled (truncated --paginate, an error
-  # object, a bare null, or empty). Without this guard jq would yield empty,
-  # which create_release_tracker reads as "tracker absent" and would then create
-  # a DUPLICATE. Require a JSON array (mirrors get_step's validation) and signal
-  # the unreliable-read case as rc 2 so the caller refuses instead.
-  if ! printf '%s' "$result" | jq -e 'type=="array"' >/dev/null 2>&1; then
-    echo "⚠️  Unreliable Jira response checking for release tracker" >&2
+  # Renamed clones can retain release labels. Choose only the exact title;
+  # duplicate identities need review.
+  local issue
+  if ! issue=$(_select_exact_jira_issue "Release Submariner $version" <<< "$result"); then
+    echo "⚠️  Unreliable or ambiguous Jira response checking for release tracker" >&2
     return 2
   fi
-
-  echo "$result" | jq -r '.[0].key // empty' 2>/dev/null || true
+  jq -r '.key // empty' <<< "$issue"
 }
 
 # Create a new release tracker with all subtasks
@@ -764,11 +780,6 @@ create_release_tracker() {
 
   echo "✓ Parent task created: $parent_key" >&2
 
-  # Fix Version ($ACM_VERSION) must be set manually or via MCP — acli edit
-  # doesn't support fixVersions (--key and --from-json are mutually exclusive,
-  # and --from-json schema lacks fixVersions). The description includes the
-  # ACM version for reference.
-
   # --- Create subtasks ---
 
   local subtask_count=0
@@ -846,7 +857,9 @@ create_release_tracker() {
 #       $3=status ("in_progress"|"complete"|"failed")
 #       $4=data (JSON string with step-specific results) [optional]
 #       $5=parent_key [optional, avoids re-lookup]
-# Returns: 0 always (best-effort)
+#       $6=--strict [optional, conductor requires durable completion]
+# Conductor children also opt in via their existing AUTORELEASE_TRACKER_STEP.
+# Returns: 0 (best-effort), or the write status with --strict
 update_step() {
   local version="$1"
   version=$(_normalize_version "$version")
@@ -855,6 +868,10 @@ update_step() {
   local data="${4:-"{}"}"
   local parent_key="${5:-}"
 
+  if [ "${6:-}" = --strict ] || [ -n "${AUTORELEASE_TRACKER_STEP:-}" ]; then
+    _update_step_impl "$version" "$step_key" "$status" "$data" "$parent_key" --strict
+    return $?
+  fi
   _update_step_impl "$version" "$step_key" "$status" "$data" "$parent_key" || true
   return 0
 }
@@ -865,8 +882,9 @@ _update_step_impl() {
   local status="$3"
   local data="$4"
   local parent_key="$5"
+  local strict="${6:-}"
 
-  _validate_version "$version" || return 0
+  _validate_version "$version" || return 1
 
   # Find tracker if not provided
   if [ -z "$parent_key" ]; then
@@ -874,11 +892,11 @@ _update_step_impl() {
     parent_key=$(find_release_tracker "$version") || _tracker_rc=$?
     if [ "$_tracker_rc" -eq 2 ]; then
       echo "⚠️  update_step: Jira query failed (network/auth) for $version — step not recorded" >&2
-      return 0
+      return 1
     fi
     if [ -z "$parent_key" ]; then
       echo "⚠️  No tracker found for $version (run /create-release-tracker $version)" >&2
-      return 0
+      return 1
     fi
   fi
 
@@ -902,7 +920,7 @@ _update_step_impl() {
     --arg ts "$timestamp" \
     --arg status "$status" \
     --argjson data "$data" \
-    '{_t:"STEP_DATA",step:$step,timestamp:$ts,status:$status,data:$data}')
+    '{_t:"STEP_DATA",step:$step,timestamp:$ts,status:$status,data:$data}') || return 1
 
   local comment_body
   comment_body="## $title — $status_label
@@ -915,25 +933,37 @@ _update_step_impl() {
 $step_json
 \`\`\`"
 
-  # Add comment on parent task
-  _add_comment "$parent_key" "$comment_body" || {
-    echo "⚠️  Failed to add tracker comment for $step_key" >&2
-    return 0
-  }
+  # Legacy helpers record best-effort progress. The conductor writes its
+  # completion marker last so a failed transition remains retryable.
+  if [ "$strict" != --strict ]; then
+    _add_comment "$parent_key" "$comment_body" || {
+      echo "⚠️  Failed to add tracker comment for $step_key" >&2
+      return 1
+    }
+  fi
 
   # Transition subtask
   local subtask_key
-  subtask_key=$(_find_subtask "$parent_key" "$step_key") || true
+  subtask_key=$(_find_subtask "$parent_key" "$step_key") || return 1
+  # Y-stream trackers created before versionLabels applied to both streams
+  # legitimately lack that subtask; parent STEP_DATA remains authoritative.
+  if [ -z "$subtask_key" ] && { [ "$step_key" != versionLabels ] || [[ "$version" != *.0 ]]; }; then
+    return 1
+  fi
 
   if [ -n "$subtask_key" ]; then
     case "$status" in
       in_progress)
-        _transition_issue "$subtask_key" "$JIRA_STATUS_IN_PROGRESS" || \
+        _transition_issue "$subtask_key" "$JIRA_STATUS_IN_PROGRESS" || {
           echo "  ⚠ Could not update subtask Jira status for $step_key — update manually in Jira" >&2
+          return 1
+        }
         ;;
       complete)
-        _transition_issue "$subtask_key" "$JIRA_STATUS_RESOLVED" || \
+        _transition_issue "$subtask_key" "$JIRA_STATUS_RESOLVED" || {
           echo "  ⚠ Could not update subtask Jira status for $step_key — update manually in Jira" >&2
+          return 1
+        }
         ;;
       failed)
         # Keep in current status (In Progress), failure recorded in comment
@@ -941,6 +971,12 @@ $step_json
     esac
   fi
 
+  if [ "$strict" = --strict ]; then
+    _add_comment "$parent_key" "$comment_body" || {
+      echo "⚠️  Failed to add tracker comment for $step_key" >&2
+      return 1
+    }
+  fi
   echo "✓ Tracker updated: $step_key → $status_label" >&2
 }
 
@@ -1174,7 +1210,7 @@ check_freshness() {
 #       $2=step_key
 #       $3=content (markdown string)
 #       $4=parent_key [optional]
-# Returns: 0 always (best-effort)
+# Returns: 0 when updated, 1 on lookup or edit failure
 update_subtask_description() {
   local version="$1"
   version=$(_normalize_version "$version")
@@ -1182,8 +1218,7 @@ update_subtask_description() {
   local content="$3"
   local parent_key="${4:-}"
 
-  _update_subtask_description_impl "$version" "$step_key" "$content" "$parent_key" >&2 || true
-  return 0
+  _update_subtask_description_impl "$version" "$step_key" "$content" "$parent_key" >&2
 }
 
 _update_subtask_description_impl() {
@@ -1192,30 +1227,35 @@ _update_subtask_description_impl() {
   local content="$3"
   local parent_key="$4"
 
-  _validate_version "$version" || return 0
+  _validate_version "$version" || return 1
 
   if [ -z "$parent_key" ]; then
-    parent_key=$(find_release_tracker "$version") || true
-    [ -z "$parent_key" ] && return 0
+    parent_key=$(find_release_tracker "$version") || return 1
+    [ -n "$parent_key" ] || return 1
   fi
 
   local subtask_key
   subtask_key=$(_find_subtask "$parent_key" "$step_key") || {
     echo "⚠️  Could not find subtask for $step_key" >&2
-    return 0
+    return 1
   }
 
-  [ -z "$subtask_key" ] && return 0
+  if [ -z "$subtask_key" ]; then
+    [ "$step_key" = versionLabels ] && [[ "$version" == *.0 ]]
+    return $?
+  fi
 
-  local desc_file
-  desc_file=$(mktemp)
-  printf '%s\n' "$content" > "$desc_file"
+  local desc_file rc=0
+  desc_file=$(mktemp) || return 1
+  printf '%s\n' "$content" > "$desc_file" || { rm -f "$desc_file"; return 1; }
 
   _acli jira workitem edit --key "$subtask_key" --description-file "$desc_file" --yes </dev/null 2>/dev/null || {
     echo "⚠️  Failed to update description for $step_key ($subtask_key)" >&2
+    rc=1
   }
 
   rm -f "$desc_file"
+  return "$rc"
 }
 
 # Get a structured summary of all step statuses
@@ -1306,11 +1346,11 @@ tracker_is_open() {
   version=$(_normalize_version "$version")
   _validate_version "$version" || return 1
 
-  local version_label result status
+  local version_label result issue status
   version_label=$(_version_to_label "$version")
-  result=$(query_jira --jql "project = ACM AND labels = release-tracking AND labels = $version_label AND issuetype = Task" --fields "key,status" 2>/dev/null) || return 1
-  printf '%s' "$result" | jq -e 'type=="array"' >/dev/null 2>&1 || return 1
-  status=$(echo "$result" | jq -r '.[0].fields.status.name // empty' 2>/dev/null) || return 1
+  result=$(query_jira --jql "project = ACM AND labels = release-tracking AND labels = $version_label AND issuetype = Task" --fields "summary,status" 2>/dev/null) || return 1
+  issue=$(_select_exact_jira_issue "Release Submariner $version" <<< "$result") || return 1
+  status=$(jq -er '.fields.status.name | select(type == "string" and length > 0)' <<< "$issue") || return 1
 
   [ -n "$status" ] && [ "$status" != "$JIRA_STATUS_RESOLVED" ]
 }

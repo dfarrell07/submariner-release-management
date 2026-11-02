@@ -61,5 +61,14 @@ else
 fi
 
 echo ""
+for script in tekton-task-refs-update.sh tekton-task-version-bump.sh; do
+  component_path=$(env SUBMARINER_BASE="$UNRELATED_DIR/source repos" bash -c '
+    source "$1"
+    repo_path submariner-operator
+  ' _ "$RELEASE_ROOT/scripts/$script")
+  assert_eq "$script preserves the selected source root" \
+    "$component_path" "$UNRELATED_DIR/source repos/submariner-operator"
+done
+
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
