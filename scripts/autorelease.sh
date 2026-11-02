@@ -911,20 +911,30 @@ verify_rpmLockfiles() {
   _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
 }
 
+# Only repos whose release branch is still wrong get PRs. Y-stream setup usually
+# leaves some or all of them right, and a run with nothing to change opens none,
+# so the branch decides completion and only the stale repos' PRs are awaited.
 verify_versionLabels() {
   local version="$1"
   local tracker="${2:-}"
   local branch="fix-version-labels-${version}"
-  # Version labels apply to all 5 component repos
-  local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl"
-  local evidence rc=0
-  evidence=$(_verify_prs_merged "$version" "$tracker" "$branch" "$repos") || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    [ -z "$evidence" ] || printf '%s\n' "$evidence"
-    return "$rc"
+  local stale repos evidence rc=0
+  stale=$(stale_release_component_repos "$version") || return $?
+  if [ -z "$stale" ]; then
+    # Keep the merged PR links when every repo had one, as on most Z-streams.
+    # shellcheck disable=SC2086  # one repo per word
+    repos=$(printf 'submariner-io/%s ' $COMPONENT_VERSION_REPOS)
+    evidence=$(_verify_prs_merged "$version" "$tracker" "$branch" "$repos" 2>/dev/null) ||
+      evidence="Component versions match v$version on release-${version%.*}"
+    printf '%s\n' "$evidence"
+    return 0
   fi
-  verify_release_component_versions "$version" || return $?
-  printf '%s\n' "$evidence"
+  # shellcheck disable=SC2086  # one repo per line
+  repos=$(printf 'submariner-io/%s ' $stale)
+  evidence=$(_verify_prs_merged "$version" "$tracker" "$branch" "$repos") || rc=$?
+  # Wait for open PRs; otherwise rerun the script, even if merged ones left it wrong.
+  [ "$rc" -ne 3 ] || printf '%s\n' "$evidence"
+  return $((rc < 2 ? 1 : rc))
 }
 
 # verify_cveFixes: detect CVE fix PR state across all 7 Go repos.

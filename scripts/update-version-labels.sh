@@ -76,7 +76,7 @@ parse_arguments() {
 
   [ $# -gt 2 ] && die "Too many arguments"
 
-  # Validate version format (must be X.Y.Z for Z-stream)
+  # Validate version format (X.Y.Z, X.Y.0 for a Y-stream)
   if ! [[ "$VERSION_ARG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     die "Invalid version format: $VERSION_ARG" \
         "Expected: X.Y.Z (e.g., 0.23.1)"

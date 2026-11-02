@@ -122,7 +122,7 @@ help:
 	@echo "  make watch NAME=...    - Watch release status (requires oc login)"
 	@echo "  make create-release-tracker VERSION=... [QE_ASSIGNEE=...]"
 	@echo "                         - Create Jira release tracker with subtasks per workflow step"
-	@echo "                           Creates parent Task + 15-18 Sub-tasks in ACM project"
+	@echo "                           Creates parent Task + 15-19 Sub-tasks in ACM project"
 	@echo "                           Example: make create-release-tracker VERSION=0.24.0"
 	@echo "                           Example: make create-release-tracker VERSION=0.24.0 QE_ASSIGNEE=qe@redhat.com"
 	@echo "  make get-fbc-urls VERSION=... [OCP=4.XX] [RAW_URL=true] [PROD_INDEX=true]"

@@ -42,7 +42,7 @@ The metadata's automation level and the existence of a script/verifier are separ
 | `fbcProdReleases` | review | `scripts/create-fbc-releases.sh` | — |
 | `fbcProdUrls` | auto | — | `verify_fbcProdUrls` |
 
-Y-stream-only: createBranches, configureDownstream, tektonComponents and tektonBundle. Z-stream-only: versionLabels.
+Y-stream-only: createBranches, configureDownstream, tektonComponents and tektonBundle.
 Other steps are shared. Gate/hint steps can advance through verification; an in-progress scripted step with a verifier also checks external state before rerunning.
 The old claims that scripts and verifiers never coexist, component fan-out is unimplemented, or build-readiness steps auto-chain are retired.
 

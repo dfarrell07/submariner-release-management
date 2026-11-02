@@ -100,7 +100,7 @@ declare -a RELEASE_STEPS=(
   "3b|Bundle Tekton Config|component-prep|Y|fix-tekton-bundle.md|"
   "4|Enterprise Contract|component-prep|B|fix-ec-violations.md|"
   "5|CVE Scanning|component-prep|B|scan-cves.md|"
-  "5b|Version Labels|component-prep|Z|update-version-labels.md|"
+  "5b|Version Labels|component-prep|B|update-version-labels.md|"
 
   # Phase 3: Upstream Release
   "6|Upstream Release|upstream-release|B|cut-upstream-release.md|"

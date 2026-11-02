@@ -101,7 +101,7 @@ See `.agents/workflows/skip-completed-steps.md`.
 | 3b | Update bundle SHAs from component builds, set up bundle pipeline | Y |
 | 4 | Fix actual component/FBC policy violations; reuse verified completed task work | Y/Z |
 | 5 | Fix upstream CVEs before tagging; review exact downstream scan evidence | Y/Z |
-| 5b | Bump Dockerfile version labels for the new patch version | Z |
+| 5b | Set Dockerfile version labels and compiled versions to the release version | Y/Z |
 | 6 | Create upstream tags/images once; verify all five tags before reuse | Y/Z |
 | 7 | Update bundle CSV with final component SHAs from snapshot | Y/Z |
 | 8 | Create stage Release CR YAML (no notes yet) | Y/Z |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create a Jira release tracker for a Submariner release
-# Creates a parent Task with 15-18 Sub-task children (one per workflow step)
+# Creates a parent Task with 15-19 Sub-task children (one per workflow step)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +22,7 @@ usage() {
   echo "  version              Submariner version (X.Y or X.Y.Z, e.g., 0.24 or 0.24.0)"
   echo ""
   echo "Options:"
-  echo "  --y-stream           Force Y-stream (18 subtasks including branch setup)"
+  echo "  --y-stream           Force Y-stream (19 subtasks including branch setup)"
   echo "  --z-stream           Force Z-stream (15 subtasks, no branch setup)"
   echo "  --qe-assignee EMAIL  Assign QE testing subtask to this user"
   echo "  --dry-run            Print what would be created without creating anything"

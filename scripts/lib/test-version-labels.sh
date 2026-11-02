@@ -306,7 +306,14 @@ version_check_case() (
   }
   rc=0
   case "$check" in
-    release) verify_release_component_versions 0.25.0 2>/dev/null || rc=$? ;;
+    release)
+      stale=$(stale_release_component_repos 0.25.0 2>/dev/null) || rc=$?
+      [ "$rc" -ne 0 ] || [ -z "$stale" ] || rc=1 ;;
+    stale-repos)
+      # 0.25's pattern: only repos compiling a version were wrong, so shipyard
+      # needs no PR.
+      stale=$(stale_release_component_repos 0.25.0 2>/dev/null | tr '\n' ' ')
+      [ "$stale" = 'submariner-operator submariner lighthouse subctl ' ] || rc=1 ;;
     snapshot) verify_snapshot_component_versions 0.25.0 "$(snapshot good)" 2>/dev/null || rc=$? ;;
     prefix-build) verify_snapshot_component_versions 0.25.0 "$(snapshot stale-before-fix)" 2>/dev/null || rc=$? ;;
     missing) verify_snapshot_component_versions 0.25.0 '{"spec":{"components":[]}}' 2>/dev/null || rc=$? ;;
@@ -316,6 +323,7 @@ version_check_case() (
 )
 version_check_case 'matching versions pass' 0 '-X main.version=v0.25.0' release
 version_check_case 'stale compiled version fails' 1 '-X main.version=v0.24.2' release
+version_check_case 'only repos with stale versions are listed' 0 '-X main.version=v0.24.2' stale-repos
 version_check_case 'older branch version passes' 0 '-X main.version=${BASE_BRANCH}' release
 version_check_case 'unreadable Dockerfile is reported' 2 unreadable release
 version_check_case 'wrong label fails' 1 'LABEL-ONLY' release

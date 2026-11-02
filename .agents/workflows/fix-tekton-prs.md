@@ -24,7 +24,7 @@ Bot generates default `.tekton/` configs for new branches that need customizatio
 
 Use `konflux-component-setup.sh` for each component. Its shared version helper sets both the initial image label and
 compiled Go version to `vX.Y.0`, preserving the source branch used by the build. Bundle versions are handled with
-CSV generation in Step 3b/Step 7. For Z-stream bumps, use the version-label skill in Step 5b.
+CSV generation in Step 3b/Step 7. Step 5b checks them on every release.
 
 ## Done When
 

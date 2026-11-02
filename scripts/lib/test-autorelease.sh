@@ -265,13 +265,29 @@ declare -A step_statuses=()
 find_next_step "0.99.0" "y-stream" "FAKE-123" 2>/dev/null
 assert_eq "y-stream: createBranches first" "$NEXT_STEP" "createBranches"
 
-# 7: Y-stream auto-satisfies versionLabels in upstreamRelease deps
+# 7: Y-stream runs versionLabels before upstreamRelease: setup can copy the
+# previous release's versions (0.25.0 images reported v0.24.2).
 step_statuses=([createBranches]=complete [configureDownstream]=complete [tektonComponents]=complete [tektonBundle]=complete [cveFixes]=complete [ecFixes]=complete [rpmLockfiles]=complete [tektonTasks]=complete)
 find_next_step "0.99.0" "y-stream" "FAKE-123" 2>/dev/null
-assert_eq "y-stream: upstreamRelease (vl skipped)" "$NEXT_STEP" "upstreamRelease"
+assert_eq "y-stream: versionLabels before upstreamRelease" "$NEXT_STEP" "versionLabels"
+assert_eq "y-stream: versionLabels runs its script" "$NEXT_REASON" "run"
+step_statuses[versionLabels]=complete
+find_next_step "0.99.0" "y-stream" "FAKE-123" 2>/dev/null
+assert_eq "y-stream: upstreamRelease after versionLabels" "$NEXT_STEP" "upstreamRelease"
+
+# 7a: Y-stream versionLabels waits for component setup, which creates the Dockerfiles.
+step_statuses=([createBranches]=complete [configureDownstream]=complete [rpmLockfiles]=complete)
+find_next_step "0.99.0" "y-stream" "FAKE-123" 2>/dev/null
+assert_eq "y-stream: component setup before versionLabels" "$NEXT_STEP" "tektonComponents"
+step_statuses[tektonComponents]=complete
+find_next_step "0.99.0" "y-stream" "FAKE-123" 2>/dev/null
+assert_eq "y-stream: bundle setup before versionLabels" "$NEXT_STEP" "tektonBundle"
+step_statuses[tektonBundle]=complete
+find_next_step "0.99.0" "y-stream" "FAKE-123" 2>/dev/null
+assert_eq "y-stream: versionLabels after branch setup" "$NEXT_STEP" "versionLabels"
 
 # 7b: Y-stream upstreamRelease blocked when tektonComponents incomplete (new dep)
-step_statuses=([createBranches]=complete [configureDownstream]=complete [tektonBundle]=complete [cveFixes]=complete [ecFixes]=complete [rpmLockfiles]=complete [tektonTasks]=complete)
+step_statuses=([createBranches]=complete [configureDownstream]=complete [tektonBundle]=complete [cveFixes]=complete [ecFixes]=complete [rpmLockfiles]=complete [tektonTasks]=complete [versionLabels]=complete)
 find_next_step "0.99.0" "y-stream" "FAKE-123" 2>/dev/null
 assert_eq "y-stream: upstreamRelease blocked (tektonComponents incomplete)" "$NEXT_STEP" "tektonComponents"
 

@@ -39,8 +39,6 @@ _TRACKER_DRIFT_SOURCED=1
 #     Item #9 (shipped-gate) owns the registry probe with that caveat in mind.
 #   - configureDownstream: the no-cluster fallback reports "configured in repo
 #     (cluster status unknown)" — not a clean done/not-done signal.
-#   - versionLabels on Y-stream: release-status.sh only probes labels on Z-stream
-#     (step 5b), so Y-stream label drift is not checkable here.
 ground_truth_done() {
   case "$1" in
     createBranches)
@@ -52,7 +50,6 @@ ground_truth_done() {
       [ "${TEKTON_FETCH_FAILED:-0}" -gt 0 ] && { echo unknown; return; }  # non-404 probe error
       [ "${MISSING_TEKTON:-0}" -eq 0 ] && echo "done" || echo "not-done" ;;
     versionLabels)
-      [ "${IS_ZSTREAM:-false}" = "false" ] && { echo unknown; return; }
       [ "${WRONG_COUNT:-0}" -gt 0 ] && { echo not-done; return; }  # proven incomplete
       [ "${FETCH_FAILED:-0}" -gt 0 ] && { echo unknown; return; }  # can't prove done
       echo "done" ;;
@@ -89,10 +86,12 @@ print_tracker_drift() {
   local key title jira_status tracker_complete gt verdict
   # Only these keys have a checkable ground-truth signal (see ground_truth_done).
   for key in createBranches tektonComponents versionLabels upstreamRelease; do
-    # Skip steps this release's tracker doesn't track (absent => empty title).
+    # Skip steps this release's tracker doesn't track: absent from the summary,
+    # or without a subtask (Y trackers created before versionLabels ran on Y).
     title=$(printf '%s' "$summary" | jq -r --arg k "$key" '.steps[$k].title // empty' 2>/dev/null) || true
     [ -z "$title" ] && continue
     jira_status=$(printf '%s' "$summary" | jq -r --arg k "$key" '.steps[$k].jiraStatus // "Unknown"' 2>/dev/null) || true
+    [ "$jira_status" = "Unknown" ] && continue
 
     tracker_complete=false
     [ "$jira_status" = "$JIRA_STATUS_RESOLVED" ] && tracker_complete=true

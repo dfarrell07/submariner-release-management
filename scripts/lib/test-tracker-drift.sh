@@ -43,7 +43,7 @@ assert_eq "tektonComponents: missing -> not-done"  "$(ground_truth_done tektonCo
 reset_globals; IS_ZSTREAM=true
 assert_eq "tektonComponents: Z-stream -> unknown"  "$(ground_truth_done tektonComponents)" "unknown"
 
-# versionLabels: Z-stream only; FETCH_FAILED makes it inconclusive (unknown).
+# versionLabels: both streams; FETCH_FAILED makes it inconclusive (unknown).
 reset_globals; IS_ZSTREAM=true; WRONG_COUNT=0; FETCH_FAILED=0
 assert_eq "versionLabels: all correct -> done"     "$(ground_truth_done versionLabels)" "done"
 reset_globals; IS_ZSTREAM=true; WRONG_COUNT=3
@@ -51,7 +51,9 @@ assert_eq "versionLabels: wrong -> not-done"       "$(ground_truth_done versionL
 reset_globals; IS_ZSTREAM=true; FETCH_FAILED=1
 assert_eq "versionLabels: fetch failed -> unknown" "$(ground_truth_done versionLabels)" "unknown"
 reset_globals; IS_ZSTREAM=false; WRONG_COUNT=0
-assert_eq "versionLabels: Y-stream -> unknown"     "$(ground_truth_done versionLabels)" "unknown"
+assert_eq "versionLabels: Y-stream correct -> done" "$(ground_truth_done versionLabels)" "done"
+reset_globals; IS_ZSTREAM=false; WRONG_COUNT=4
+assert_eq "versionLabels: Y-stream wrong -> not-done" "$(ground_truth_done versionLabels)" "not-done"
 # WRONG_COUNT takes priority over FETCH_FAILED: proven-incomplete beats inconclusive.
 reset_globals; IS_ZSTREAM=true; WRONG_COUNT=3; FETCH_FAILED=2
 assert_eq "versionLabels: wrong + fetch-failed -> not-done" \
@@ -158,6 +160,13 @@ out=$(print_tracker_drift "{}") && rc=0 || rc=$?
 assert_eq "empty summary: returns 1"               "$rc" "1"
 out=$(print_tracker_drift "") && rc=0 || rc=$?
 assert_eq "blank summary: returns 1"               "$rc" "1"
+
+# A Y tracker created before versionLabels ran on Y has no subtask for it, so
+# get_release_summary reports jiraStatus Unknown. That isn't drift.
+reset_globals; WRONG_COUNT=0
+out=$(print_tracker_drift "$(summary_with versionLabels Unknown)") && rc=0 || rc=$?
+assert_eq "step without subtask: returns 1 (no drift)" "$rc" "1"
+assert_eq "step without subtask: prints nothing"   "$out" ""
 
 # Step not tracked for this release (absent key) -> skipped.
 reset_globals; TAG_EXISTS=""

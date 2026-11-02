@@ -1,8 +1,11 @@
 # Update Component Version Labels
 
-**When:** Z-stream (0.21.1 → 0.21.2) before cutting upstream release
+**When:** Every release, before cutting the upstream release. A Z-stream (0.21.1 → 0.21.2) always needs new versions.
+A Y-stream (0.21 → 0.22) gets its initial versions in Step 3 (Fix Tekton Config PRs), but they can be copied from the
+previous release (0.25.0 images reported v0.24.2), so check them here.
 
-**Note:** For Y-stream (0.21 → 0.22), initial versions are set as part of Step 3 (Fix Tekton Config PRs).
+`/autorelease` runs this step on both streams. It opens PRs only for repos whose release branch is wrong, waits for
+them to merge, and completes once every repo matches, straight away if none needed changes.
 
 ## Process
 

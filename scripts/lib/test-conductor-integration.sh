@@ -317,6 +317,125 @@ assert_contains "IT-6: error message mentions step" "$_it6_err" "unknownStep"
 # handle_step_override (same rejection, same exit code) via the unit-test path.
 # The guard is correct; this gap is accepted as a known limitation.
 
+# ─────────────────────────────────────────────────────────────────────────────
+# IT-7: version labels against one fake GitHub. Repos in _GH_WRONG have stale
+# release branch Dockerfiles; repos in _GH_PR_REPOS (default: the wrong ones)
+# have a fix PR in state _GH_PR. Queried PR heads go to _GH_QUERIES.
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "IT-7: Version labels on Y- and Z-streams"
+
+_GH_QUERIES=$(mktemp)
+_fake_gh() {
+  local repo='' head='' state=none
+  if [ "$1" = api ]; then
+    [ "$_GH_WRONG" != unreadable ] || return 1
+    repo="${*: -1}"; repo="${repo#repos/submariner-io/}"
+    if [[ " $_GH_WRONG " == *" ${repo%%/*} "* ]]; then
+      printf 'RUN go build -ldflags "-X main.version=v0.24.2"\nLABEL version="v0.24.2"\n'
+    else
+      printf 'RUN go build -ldflags "-X main.version=v%s"\nLABEL version="v%s"\n' "$_GH_RELEASE" "$_GH_RELEASE"
+    fi
+    return
+  fi
+  while [ "$#" -gt 1 ]; do
+    case "$1" in --repo) repo="${2##*/}" ;; --head) head="$2" ;; esac
+    shift
+  done
+  echo "$repo $head" >> "$_GH_QUERIES"
+  [[ " ${_GH_PR_REPOS-$_GH_WRONG} " != *" $repo "* ]] || state="$_GH_PR"
+  case "$state" in
+    open) printf '[{"state":"OPEN","url":"https://example.invalid/%s"}]' "$repo" ;;
+    merged) printf '[{"state":"MERGED","mergedAt":"2026-11-02T00:00:00Z","url":"https://example.invalid/%s"}]' "$repo" ;;
+    *) printf '[]' ;;
+  esac
+}
+# Args: version, wrong repos, PR state. Sets _vl_rc and _vl_out.
+_vl() {
+  : > "$_GH_QUERIES"
+  _vl_rc=0
+  _vl_out=$(_GH_RELEASE="$1" _GH_WRONG="$2" _GH_PR="$3"; gh() { _fake_gh "$@"; }
+    verify_versionLabels "$1" TEST-1 2>/dev/null) || _vl_rc=$?
+}
+_it7_binary="submariner-operator submariner lighthouse subctl"
+
+# The release branch decides: a Y-stream already right needs no PRs.
+_vl 0.99.0 "" none
+assert_eq "IT-7 Y already right completes" "$_vl_rc" "0"
+assert_eq "IT-7 Y already right says so" "$_vl_out" "Component versions match v0.99.0 on release-0.99"
+# 0.25's shape: four repos compile a stale version; shipyard is right.
+_vl 0.99.0 "$_it7_binary" open
+assert_eq "IT-7 Y stale waits for open PRs" "$_vl_rc" "3"
+assert_eq "IT-7 Y stale posts the open PRs" "$(grep -c example.invalid <<< "$_vl_out")" "4"
+assert_eq "IT-7 Y stale awaits only the wrong repos, per version" \
+  "$(grep -c ' fix-version-labels-0.99.0$' "$_GH_QUERIES")/$(grep -c '^shipyard' "$_GH_QUERIES" || true)" "4/0"
+_GH_PR_REPOS="$_it7_binary" _vl 0.99.0 "" merged
+assert_eq "IT-7 Y merged fixes complete without a shipyard PR" "$_vl_rc" "0"
+_vl 0.99.0 "$_it7_binary" none
+assert_eq "IT-7 stale without PRs runs the script, quietly" "$_vl_rc/$_vl_out" "1/"
+_vl 0.99.0 submariner merged
+assert_eq "IT-7 merged PRs that left the branch stale rerun" "$_vl_rc" "1"
+_vl 0.99.0 unreadable none
+assert_eq "IT-7 unreadable Dockerfiles can't be verified" "$_vl_rc" "2"
+# Z-stream unchanged: every repo needs a PR, and completion keeps the links.
+_vl 0.99.1 "$_it7_binary shipyard" open
+assert_eq "IT-7 Z waits for open PRs" "$_vl_rc" "3"
+_GH_PR_REPOS="$_it7_binary shipyard" _vl 0.99.1 "" merged
+assert_eq "IT-7 Z merged PRs complete with their links" "$_vl_rc/$(grep -c example.invalid <<< "$_vl_out")" "0/5"
+
+# Through the real conductor and tracker writes, with fake Jira: a Y-stream that
+# is already right runs the script once, completes on the next run, and is left
+# alone after. The tracker has no versionLabels subtask, like Y trackers created
+# before the step ran on Y (0.25's ACM-48292).
+_IT7_STATE=$(mktemp) _IT7_JIRA=$(mktemp) _IT_LOG=$(mktemp)
+export _IT7_STATE _IT_LOG
+mkdir -p "$_IT_TMPDIR/.git"
+# The real script marks the step in_progress; the stub only records that.
+printf '#!/bin/bash\necho versionLabels >> "$_IT_LOG"\necho versionLabels:in_progress >> "$_IT7_STATE"\n' \
+  > "$_IT_TMPDIR/scripts/update-version-labels.sh"
+printf '%s:complete\n' createBranches configureDownstream tektonComponents tektonBundle \
+  rpmLockfiles tektonTasks cveFixes ecFixes > "$_IT7_STATE"
+_it7_run() (
+  unset _AUTORELEASE_TESTING
+  acli() {
+    case "$*" in
+      *"comment list"*)
+        local pairs=()
+        mapfile -t pairs < "$_IT7_STATE"
+        _build_it_comments "${pairs[@]}" ;;
+      *"comment create"*)
+        while [ "$#" -gt 1 ] && [ "$1" != --body-file ]; do shift; done
+        sed -n '/^```STEP_DATA$/{n;p}' "$2" | jq -r '.step + ":" + .status' >> "$_IT7_STATE" ;;
+      *) echo "acli $*" >> "$_IT7_JIRA" ;;
+    esac
+  }
+  query_jira() { echo "query_jira $*" >> "$_IT7_JIRA"; echo "[]"; }  # no subtasks
+  gh() { _GH_RELEASE=0.99.0 _GH_WRONG="" _GH_PR=none _fake_gh "$@"; }
+  tracker_is_open() { return 1; }
+  try_auto_close() { return 1; }
+  verify_upstreamRelease() { return 1; }
+  VERSION=0.99.0 RELEASE_TYPE=y-stream TRACKER="FAKE-Y"
+  GIT_ROOT="$_IT_TMPDIR"
+  AUTORELEASE_PUSH_LOG=$(mktemp)
+  export AUTORELEASE_PUSH_LOG
+  ran_pr_step="" ran_release_yaml_step="" ran_direct_push_step=""
+  declare -A step_statuses=() verified_steps=()
+  _AUTORELEASE_QUIET=""
+  run_conductor 2>&1
+  rm -f "$AUTORELEASE_PUSH_LOG"
+)
+_it7_out=$(_it7_run)
+assert_contains "IT-7 Y no-op: script runs at review" "$_it7_out" "Version label updates: REVIEW"
+_it7_out=$(_it7_run)
+assert_contains "IT-7 Y no-op: verified" "$_it7_out" "Version label updates: verified externally"
+assert_contains "IT-7 Y no-op: advances to the upstream release" "$_it7_out" "Cut upstream release: GATE"
+assert_eq "IT-7 Y no-op: complete in tracker" "$(grep '^versionLabels:' "$_IT7_STATE" | tail -1)" "versionLabels:complete"
+_it7_run >/dev/null
+assert_eq "IT-7 Y no-op: script ran once over three runs" "$(grep -c versionLabels "$_IT_LOG")" "1"
+assert_eq "IT-7 Y no-op: missing subtask never transitioned" "$(grep -c transition "$_IT7_JIRA" || true)" "0"
+assert_contains "IT-7 Y no-op: subtask looked up" "$(cat "$_IT7_JIRA")" "Version label updates"
+rm -f "$_IT7_STATE" "$_IT7_JIRA" "$_IT_LOG" "$_GH_QUERIES"
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then echo "All $PASS tests passed"

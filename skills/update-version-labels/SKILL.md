@@ -10,7 +10,7 @@ allowed-tools: Bash
 # Update Version Labels
 
 Updates Dockerfile `version` labels and compiled `-X` versions across 5 upstream repos (9 Dockerfiles) so Konflux's `{{ labels.version }}` tag
-expansion produces correct image tags. Required for Z-stream releases before cutting upstream release.
+expansion produces correct image tags. Run for every release before cutting upstream release.
 
 ## Invocation
 

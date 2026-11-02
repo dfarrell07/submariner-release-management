@@ -86,13 +86,16 @@ _component_version_at_ref() {
   fi
 }
 
-# Check a release branch's component Dockerfiles on GitHub.
-# Args: numeric X.Y.Z version. Returns 0 on a match, 1 on a mismatch, 2 if unreadable.
-verify_release_component_versions() {
-  local version="$1" repo file
+# List the repos whose release branch Dockerfiles don't match, one per line.
+# Args: numeric X.Y.Z version. Returns 2 if a Dockerfile is unreadable.
+stale_release_component_repos() {
+  local version="$1" repo file rc
   for repo in $COMPONENT_VERSION_REPOS; do
     for file in ${COMPONENT_DOCKERFILES[$repo]}; do
-      _component_version_at_ref "$repo" "$file" "release-${version%.*}" "$version" || return $?
+      rc=0
+      _component_version_at_ref "$repo" "$file" "release-${version%.*}" "$version" || rc=$?
+      [ "$rc" -ne 2 ] || return 2
+      [ "$rc" -eq 0 ] || { echo "$repo"; break; }
     done
   done
 }

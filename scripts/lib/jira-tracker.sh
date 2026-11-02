@@ -3,7 +3,7 @@
 # Used by: create-release-tracker.sh, release-status.sh, and release workflow scripts
 #
 # Provides structured Jira-based tracking for Submariner releases.
-# Each release gets a parent Task with 15-18 Sub-task children (one per workflow step).
+# Each release gets a parent Task with 15-19 Sub-task children (one per workflow step).
 # Automation appends structured STEP_DATA comments as steps complete.
 #
 # Best-effort: tracker failures never crash calling scripts. Side-effect
@@ -143,6 +143,9 @@ AUTOMATION_LEVEL["tektonTasks"]="review"
 STEP_SCRIPT["tektonTasks"]="scripts/tekton-task-refs-update.sh"
 
 # ── versionLabels ───────────────────────────────────────────────────────────
+# Both streams: Y-stream setup can carry the previous release's versions. Y
+# trackers created before this have no subtask for it, which is fine: step state
+# lives in the parent's STEP_DATA comments and subtask updates skip a missing one.
 STEP_TITLES["versionLabels"]="Version label updates"
 STEP_PHASE["versionLabels"]="Build Readiness"
 STEP_DEPENDENCIES["versionLabels"]=""
@@ -265,11 +268,8 @@ readonly STEP_ORDER=(
   "componentProd" "fbcProdReleases" "fbcProdUrls"
 )
 
-# Y-stream only steps (omitted for Z-stream)
+# Y-stream only steps (omitted for Z-stream). Every other step runs on both.
 readonly YSTREAM_STEPS=("createBranches" "configureDownstream" "tektonComponents" "tektonBundle")
-
-# Z-stream only steps (omitted for Y-stream)
-readonly ZSTREAM_STEPS=("versionLabels")
 
 # Jira status names (overridable via env for project-specific names)
 readonly JIRA_STATUS_IN_PROGRESS="${JIRA_STATUS_IN_PROGRESS:-In Progress}"
@@ -288,10 +288,6 @@ step_applies_to_release() {
   if [ "$release_type" = "z-stream" ]; then
     for ys in "${YSTREAM_STEPS[@]}"; do
       [ "$step_key" = "$ys" ] && return 1
-    done
-  elif [ "$release_type" = "y-stream" ]; then
-    for zs in "${ZSTREAM_STEPS[@]}"; do
-      [ "$step_key" = "$zs" ] && return 1
     done
   fi
   return 0

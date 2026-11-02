@@ -68,11 +68,13 @@ Tekton task updates, before CVE scanning.
 downstream candidate separately. See
 @.agents/workflows/skip-completed-steps.md.
 
-## 5b. Update Component Version Labels (Z-stream only)
+## 5b. Update Component Version Labels
 
 @/update-version-labels
 
 **Alternative:** `make update-version-labels VERSION=<version>`
+
+Runs on Y- and Z-streams; on a Y-stream it repairs versions copied from the previous release.
 
 ## 6. Cut Upstream Release
 

@@ -106,9 +106,6 @@ echo ""
 echo "=== 2b. Conductor Constants ==="
 # ============================================================================
 
-# ZSTREAM_STEPS count
-assert_eq "ZSTREAM_STEPS has 1 entry" "${#ZSTREAM_STEPS[@]}" "1"
-
 # DAG fix: versionLabels in upstreamRelease deps
 deps="${STEP_DEPENDENCIES[upstreamRelease]:-}"
 echo "$deps" | grep -qF "versionLabels" && vl_in_deps="yes" || vl_in_deps="no"
@@ -144,7 +141,7 @@ assert_eq "cveFixes applies to z-stream" "$r1" "yes"
 step_applies_to_release "createBranches" "z-stream" && r2="yes" || r2="no"
 assert_eq "createBranches skipped for z-stream" "$r2" "no"
 step_applies_to_release "versionLabels" "y-stream" && r3="yes" || r3="no"
-assert_eq "versionLabels skipped for y-stream" "$r3" "no"
+assert_eq "versionLabels applies to y-stream" "$r3" "yes"
 step_applies_to_release "versionLabels" "z-stream" && r4="yes" || r4="no"
 assert_eq "versionLabels applies to z-stream" "$r4" "yes"
 
@@ -159,10 +156,12 @@ query_jira() { echo "[]"; }
 # shellcheck disable=SC2034  # ACM_VERSION used by library after mock returns
 calculate_acm_version() { ACM_VERSION="ACM 2.17.0"; }
 
-# Y-stream: 18 subtasks (versionLabels is Z-stream-only)
+# Y-stream: 19 subtasks (every step)
 output=$(create_release_tracker "0.24.0" 2>&1 >/dev/null)
 count=$(printf '%s' "$output" | grep -c "Would create: Sub-task" || true)
-assert_eq "y-stream: 18 subtasks" "$count" "18"
+assert_eq "y-stream: 19 subtasks" "$count" "19"
+assert_eq "y-stream: version label subtask" \
+  "$(printf '%s' "$output" | grep -c "Sub-task 'Version label updates'" || true)" "1"
 
 # Z-stream: 15 subtasks
 output=$(create_release_tracker "0.24.1" 2>&1 >/dev/null)
@@ -220,7 +219,7 @@ _payloads=$(mktemp)
   create_release_tracker 0.24.0 y-stream qe@example.invalid >/dev/null 2>&1
   create_release_tracker 0.24.1 z-stream >/dev/null 2>&1
 )
-assert_eq "create payloads: two parents and 33 subtasks" "$(jq -s length "$_payloads")" 35
+assert_eq "create payloads: two parents and 34 subtasks" "$(jq -s length "$_payloads")" 36
 assert_eq "create payloads: Activity Type on every issue" \
   "$(jq -s 'all(.[]; .additionalAttributes.customfield_10464.id == "10608")' "$_payloads")" true
 assert_eq "create payloads: parent component retained" \
@@ -641,7 +640,7 @@ printf '%s' "$summary" | jq -e . >/dev/null 2>&1 && valid="yes" || valid="no"
 assert_eq "get_release_summary: valid JSON" "$valid" "yes"
 
 step_count=$(printf '%s' "$summary" | jq '.steps | keys | length' 2>/dev/null)
-assert_eq "get_release_summary: 18 steps (y-stream, versionLabels excluded)" "$step_count" "18"
+assert_eq "get_release_summary: 19 steps (y-stream)" "$step_count" "19"
 
 # Template completeness
 fallback_found=0
