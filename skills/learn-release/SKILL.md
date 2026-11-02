@@ -97,7 +97,7 @@ See `.agents/workflows/skip-completed-steps.md`.
 | ---- | ------------ | --- |
 | 1 | Create `release-0.Y` branches across all upstream repos | Y |
 | 2 | Add Konflux components, ReleasePlans, and RPAs in konflux-release-data | Y |
-| 3 | Customize bot-generated Tekton configs, set version labels | Y |
+| 3 | Customize bot-generated Tekton configs, set version labels and compiled versions | Y |
 | 3b | Update bundle SHAs from component builds, set up bundle pipeline | Y |
 | 4 | Fix actual component/FBC policy violations; reuse verified completed task work | Y/Z |
 | 5 | Fix upstream CVEs before tagging; review exact downstream scan evidence | Y/Z |
@@ -132,7 +132,7 @@ See `.agents/workflows/skip-completed-steps.md`.
 | 3b | Two parts: (1) update bundle CSV with component SHAs from snapshot, (2) set up bundle Tekton pipeline. Components must build first. |
 | 4 | Verify completed snapshot EC and actual managed release-policy requirements; repair violations in component/FBC repos. |
 | 5 | Grype scans upstream Go, Clair scans downstream images. Reuse verified tagged source; review exact image evidence. |
-| 5b | Bump version labels in 9 Dockerfiles across 5 repos. Bundle has 3 labels (csv-version, release, version). Rebuild triggers. |
+| 5b | Bump labels and compiled versions in 9 Dockerfiles across 5 repos. Bundle has 3 labels. Rebuild triggers. |
 | 6 | Run releases repo tooling to create git tags and publish images to quay.io/submariner. Never re-cut an existing tag. |
 | 7 | Update bundle CSV `relatedImages` with SHAs from latest passing Konflux snapshot. Must use registry.redhat.io URLs for EC. |
 | 8 | Create Release CR YAML: copy previous, update name/snapshot. Save to `releases/0.X/stage/`. Don't add notes yet. |

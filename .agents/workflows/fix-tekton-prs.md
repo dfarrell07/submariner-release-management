@@ -22,25 +22,9 @@ Bot generates default `.tekton/` configs for new branches that need customizatio
 
 ### Version Labels (Y-stream only)
 
-When setting up Konflux for a new branch, set the initial Dockerfile `version` labels:
-
-```bash
-# In each repo's Konflux Dockerfile(s), change:
-#   version="${BASE_BRANCH}"
-# To (example for 0.22):
-#   version="v0.22.0"
-
-sed -i 's/version="${BASE_BRANCH}"/version="v0.22.0"/' package/Dockerfile.*.konflux
-
-# Bundle (submariner-operator repo only) has 3 version labels:
-sed -i \
-  -e 's/^LABEL csv-version="[^"]*"/LABEL csv-version="0.22.0"/' \
-  -e 's/^LABEL release="[^"]*"/LABEL release="v0.22.0"/' \
-  -e 's/^LABEL version="[^"]*"/LABEL version="v0.22.0"/' \
-  bundle.Dockerfile.konflux
-```
-
-This enables `{{ labels.version }}` tag expansion in Konflux releases. For Z-stream bumps, see Step 5b.
+Use `konflux-component-setup.sh` for each component. Its shared version helper sets both the initial image label and
+compiled Go version to `vX.Y.0`, preserving the source branch used by the build. Bundle versions are handled with
+CSV generation in Step 3b/Step 7. For Z-stream bumps, use the version-label skill in Step 5b.
 
 ## Done When
 

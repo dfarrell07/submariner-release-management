@@ -29,6 +29,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
+# shellcheck source=lib/dockerfile-version.sh
+source "$SCRIPT_DIR/lib/dockerfile-version.sh"
 
 # ━━━ CONSTANTS ━━━
 
@@ -419,6 +421,26 @@ extract_shas() {
   echo "Extracted 7 component SHAs from snapshot"
 }
 
+# Images built from mismatched Dockerfiles must not be pinned into the bundle.
+check_component_versions() {
+  local version="${TARGET_VERSION#v}" snapshot_json rc=0
+  snapshot_json=$(oc get snapshot "$SNAPSHOT" -n submariner-tenant -o json) || rc=2
+  if [ "$rc" -eq 0 ]; then
+    verify_snapshot_component_versions "$version" "$snapshot_json" || rc=$?
+  fi
+  case "$rc" in
+    0) echo "Component Dockerfiles match v$version at the snapshot's revisions" ;;
+    1) die "Snapshot $SNAPSHOT was built from Dockerfiles that do not match v$version" \
+         "If v$version is the intended release, run make update-version-labels VERSION=$version, merge, wait for rebuilds, then retry. Otherwise pass the intended version." ;;
+    *)
+      [ "${ALLOW_UNVERIFIED_COMPONENT_VERSIONS:-}" = true ] || \
+        die "Could not compare component versions for snapshot $SNAPSHOT" \
+          "Restore GitHub and cluster access and retry, or set ALLOW_UNVERIFIED_COMPONENT_VERSIONS=true to continue unverified."
+      echo "⚠️  WARNING: continuing with unverified component versions." >&2
+      ;;
+  esac
+}
+
 # ━━━ STEP 1b: IDEMPOTENCY CHECK ━━━
 
 # Returns 0 (true) if origin/release-X.Y already has all target SHAs in its
@@ -752,6 +774,7 @@ main() {
 
   find_snapshot
   extract_shas
+  check_component_versions
 
   # Idempotency: if origin/release-X.Y already has our target SHAs, the SHA-bump
   # PR is already merged and rebuilt. Mark step complete so the conductor advances

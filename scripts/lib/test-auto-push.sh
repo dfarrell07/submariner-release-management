@@ -90,6 +90,28 @@ produce_rpm_log() (
   print_summary >/dev/null
 )
 
+# Open PR links are what the conductor posts to Jira while it waits.
+labels_case() (
+  local merged_rc="$1"
+  _verify_prs_merged() {
+    printf '%s' "$3" > "$TEST_ROOT/labels-branch"
+    printf 'PRs proposed:\nhttps://example.invalid/1'
+    return "$merged_rc"
+  }
+  verify_release_component_versions() { return "${LABELS_VERSION_RC:-0}"; }
+  verify_versionLabels 0.25.1 TEST-1
+)
+labels_rc=0
+labels_output=$(labels_case 3) || labels_rc=$?
+assert_eq 'open label PRs wait' "$labels_rc" 3
+assert_eq 'open label PR links reach the conductor' "$(grep -c 'example.invalid/1' <<< "$labels_output")" 1
+assert_eq 'label PRs are tracked per version' "$(cat "$TEST_ROOT/labels-branch")" fix-version-labels-0.25.1
+labels_rc=0
+LABELS_VERSION_RC=1 labels_case 0 >/dev/null || labels_rc=$?
+assert_eq 'merged PRs with stale Dockerfiles do not complete' "$labels_rc" 1
+labels_output=$(labels_case 0)
+assert_eq 'merged label PR links reach the conductor' "$(grep -c 'example.invalid/1' <<< "$labels_output")" 1
+
 verify_rc=0
 _verify_prs_merged 0.25.1 TEST-1 update-rpm-lockfiles-0.25.1 'org/submariner org/shipyard' >/dev/null 2>&1 || verify_rc=$?
 assert_eq 'open + missing PR requests retry' "$verify_rc" 1

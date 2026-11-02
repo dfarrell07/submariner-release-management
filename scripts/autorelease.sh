@@ -15,6 +15,8 @@ GIT_ROOT="$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel 2>/dev/null || ech
 _LIB_DIR="$SCRIPT_DIR/lib"
 # shellcheck source=lib/jira-tracker.sh
 source "$_LIB_DIR/jira-tracker.sh"
+# shellcheck source=lib/dockerfile-version.sh
+source "$_LIB_DIR/dockerfile-version.sh"
 # Registry-only shipped signals for auto-close (no cluster login): prod bundle
 # tag check + operator-index bundle content check, and the per-release OCP scope.
 # shellcheck source=lib/prod-bundle.sh
@@ -937,11 +939,17 @@ verify_rpmLockfiles() {
 verify_versionLabels() {
   local version="$1"
   local tracker="${2:-}"
-  local major_minor="${version%.*}"
-  local branch="fix-version-labels-${major_minor}"
+  local branch="fix-version-labels-${version}"
   # Version labels apply to all 5 component repos
   local repos="submariner-io/submariner-operator submariner-io/submariner submariner-io/lighthouse submariner-io/shipyard submariner-io/subctl"
-  _verify_prs_merged "$version" "$tracker" "$branch" "$repos"
+  local evidence rc=0
+  evidence=$(_verify_prs_merged "$version" "$tracker" "$branch" "$repos") || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ -z "$evidence" ] || printf '%s\n' "$evidence"
+    return "$rc"
+  fi
+  verify_release_component_versions "$version" || return $?
+  printf '%s\n' "$evidence"
 }
 
 # verify_cveFixes: detect CVE fix PR state across all 7 Go repos.

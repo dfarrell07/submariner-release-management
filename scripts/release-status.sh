@@ -72,6 +72,8 @@ source "$SCRIPT_DIR/lib/prod-bundle.sh"
 # FBC OCP scope and FBC_OCP_VERSIONS (canonical; single source of truth for OCP list).
 # shellcheck source=lib/fbc-scope.sh
 source "$SCRIPT_DIR/lib/fbc-scope.sh"
+# shellcheck source=lib/dockerfile-version.sh
+source "$SCRIPT_DIR/lib/dockerfile-version.sh"
 
 # FBC catalog/snapshot checks shared with the release gate (verify-fbc-release.sh).
 # shellcheck source=lib/fbc-snapshot.sh
@@ -446,6 +448,9 @@ check_version_label() {
     # Extract from version= lines (not ldflags): version="v0.22.0"
     # Exclude ldflags lines which also contain version= but for build-time injection
     actual=$(echo "$content" | grep '^ *version=' | grep -v ldflags | grep -oP 'v[0-9.]+' | head -1 || true)
+    if component_compiled_version_stale "$content" "$VERSION"; then
+      INCORRECT+=("$repo/$file (compiled version)")
+    fi
   fi
 
   if [ "$actual" != "$expected" ]; then
@@ -815,7 +820,7 @@ check_step_5b() {
 
   WRONG_COUNT=${#INCORRECT[@]}
   if [ "$WRONG_COUNT" -gt 0 ]; then
-    echo "❌ $WRONG_COUNT version label(s) need update:"
+    echo "❌ $WRONG_COUNT version label(s) or compiled version(s) need update:"
     for f in "${INCORRECT[@]}"; do
       echo "   - $f"
     done
@@ -824,7 +829,7 @@ check_step_5b() {
     echo "⚠️  Inconclusive: could not fetch $FETCH_FAILED Dockerfile(s) (GitHub auth/network)"
     echo "   ⮕ Next: Restore GitHub access, then re-run to verify version labels (Step 5b)"
   else
-    echo "✅ All 9 Dockerfiles (11 version labels) correct"
+    echo "✅ All 9 Dockerfiles correct (11 version labels and compiled versions)"
   fi
 }
 

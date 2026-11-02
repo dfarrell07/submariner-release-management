@@ -111,6 +111,43 @@ fi
 unset -f oc gh
 
 echo ""
+echo "=== check_component_versions Tests ==="
+
+assert_gate() {  # <desc> <dockerfile version> <want-rc> [allow] [oc rc]
+  local rc=0
+  (
+    # shellcheck disable=SC2034  # consumed by check_component_versions
+    SNAPSHOT=snap TARGET_VERSION=v0.25.0 ALLOW_UNVERIFIED_COMPONENT_VERSIONS="${4:-}" GATE_OC_RC="${5:-0}"
+    oc() {
+      [ "$GATE_OC_RC" = 0 ] || return "$GATE_OC_RC"
+      local repo file name
+      for repo in $COMPONENT_VERSION_REPOS; do
+        for file in ${COMPONENT_DOCKERFILES[$repo]}; do
+          name="${file##*Dockerfile.}"
+          jq -n --arg name "${name%.konflux}-0-25" '{name: $name, source: {git: {revision: "abc"}}}'
+        done
+      done | jq -s '{spec: {components: .}}'
+    }
+    gh() { printf 'RUN go build -ldflags "-X main.version=%s"\nLABEL version="v0.25.0"\n' "$GATE_DOCKERFILE_VERSION"; }
+    GATE_DOCKERFILE_VERSION="$2" check_component_versions
+  ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = "$3" ]; then echo "  ✓ $1"; PASS=$((PASS + 1))
+  else echo "  ✗ $1 (got rc $rc, want $3)"; FAIL=$((FAIL + 1)); fi
+}
+assert_gate "matching images pass" v0.25.0 0
+assert_gate "stale compiled version stops the update" v0.24.2 1
+assert_gate "override does not excuse a known mismatch" v0.24.2 1 true
+assert_gate "unreadable snapshot stops the update" v0.25.0 1 "" 1
+assert_gate "explicit override continues when unreadable" v0.25.0 0 true 1
+
+# Reruns must not skip the check by taking the already-updated exit.
+main_body=$(awk '/^main\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$SCRIPT_DIR/bundle-image-update.sh")
+gate_line=$(grep -n 'check_component_versions' <<< "$main_body" | head -1 | cut -d: -f1)
+idem_line=$(grep -n 'if check_origin_already_updated' <<< "$main_body" | cut -d: -f1)
+if [ -n "$gate_line" ] && [ "$gate_line" -lt "$idem_line" ]; then echo "  ✓ gate runs before idempotent exit"; PASS=$((PASS + 1))
+else echo "  ✗ gate must run before idempotent exit"; FAIL=$((FAIL + 1)); fi
+
+echo ""
 if [ "$FAIL" -eq 0 ]; then
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "All $PASS tests passed"

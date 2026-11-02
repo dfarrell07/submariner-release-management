@@ -1,6 +1,6 @@
 ---
 name: update-version-labels
-description: Update Konflux Dockerfile version labels across Submariner repositories
+description: Update Konflux Dockerfile version labels and compiled versions across Submariner repositories
 version: 1.0.0
 argument-hint: "<version> [repo]"
 user-invocable: true
@@ -9,7 +9,7 @@ allowed-tools: Bash
 
 # Update Version Labels
 
-Updates Dockerfile `version` labels across 5 upstream repos (9 Dockerfiles) so Konflux's `{{ labels.version }}` tag
+Updates Dockerfile `version` labels and compiled `-X` versions across 5 upstream repos (9 Dockerfiles) so Konflux's `{{ labels.version }}` tag
 expansion produces correct image tags. Required for Z-stream releases before cutting upstream release.
 
 ## Invocation
