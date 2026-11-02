@@ -167,6 +167,8 @@ echo "=== linux-vm.sh check / usage ==="
 new_sandbox
 OUT=$("$VM" check 2>&1) && RC=0 || RC=$?
 assert_eq "passing probes: check succeeds" "$RC" "0"
+assert_contains "check probes for the base image refresh tools" "$(cat "$LIMA_LOG")" "subscription-manager skopeo jq;"
+assert_contains "the VM is provisioned with those tools" "$(cat "$SCRIPT_DIR/../lima/release-vm.yaml")" "subscription-manager skopeo jq"
 new_sandbox; export LIMA_CHECK_RC=1
 OUT=$("$VM" check 2>&1) && RC=0 || RC=$?
 assert_eq "a failing probe fails check" "$RC" "1"

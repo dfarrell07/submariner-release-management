@@ -1,4 +1,4 @@
-.PHONY: help test test-scripts linux-vm-setup linux-vm-check test-linux-vm test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update setup-entitlements check-entitlements seal-entitlements test-setup-entitlements tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-parallel test-parse-ec-log test-deny-rules test-version-bump test-skills test-release-root test-add-team-member test-release-note-review
+.PHONY: help test test-scripts linux-vm-setup linux-vm-check test-linux-vm test-remote validate-yaml validate-fields validate-data validate-references validate-bundle-images validate-cve-fixes validate-markdown gitlint shellcheck apply watch configure-downstream add-fbc-ocp-version create-fbc-releases create-component-release update-version-labels rpm-lockfile-update setup-entitlements check-entitlements seal-entitlements test-setup-entitlements tekton-task-refs-update cve-fixes-update add-release-notes review-release-notes verify-cve-fixes konflux-component-setup konflux-bundle-setup bundle-image-update get-fbc-urls create-release-tracker test-tracker test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-parallel test-parse-ec-log test-deny-rules test-version-bump test-skills test-release-root test-add-team-member test-release-note-review test-pinned-base
 
 # macOS: scripts need bash 4+ and GNU tools (sed -i, grep -P, date -d, find -printf).
 ifeq ($(shell uname -s),Darwin)
@@ -109,6 +109,7 @@ help:
 	@echo "  make test-drift        - Tracker-vs-reality drift detection tests"
 	@echo "  make test-prod-bundle  - Prod-bundle shipped-check (tag-scheme) tests"
 	@echo "  make test-fbc-scope    - FBC per-release OCP-scope derivation tests"
+	@echo "  make test-pinned-base  - Pinned base image refresh tests"
 	@echo "  make test-skills       - Shared Claude/Codex skill compatibility contract"
 	@echo "  make test-release-root - Delegate working-directory independence"
 	@echo "  make test-add-team-member - Team RBAC update tests"
@@ -256,6 +257,9 @@ test-fbc-scope:
 test-fbc-snapshot:
 	./scripts/lib/test-fbc-snapshot.sh
 
+test-pinned-base:
+	./scripts/lib/test-pinned-base.sh
+
 test-parallel:
 	./scripts/lib/test-parallel-jobs.sh
 
@@ -286,7 +290,7 @@ test-release-root:
 test: validate-yaml validate-fields validate-data validate-markdown gitlint shellcheck test-scripts
 
 # Script and unit tests only (no linters); also run on macOS in CI
-test-scripts: test-linux-vm test-fbc-onboarding test-skills test-release-root test-add-team-member test-release-note-review test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-tracker test-parallel test-parse-ec-log test-deny-rules test-version-bump test-setup-entitlements
+test-scripts: test-linux-vm test-fbc-onboarding test-skills test-release-root test-add-team-member test-release-note-review test-autorelease test-conductor test-component test-tekton test-cve test-bundle test-version-labels test-worktree-safety test-drift test-prod-bundle test-fbc-scope test-fbc-snapshot test-tracker test-parallel test-parse-ec-log test-deny-rules test-version-bump test-setup-entitlements test-pinned-base
 
 test-remote:
 	@test -n "$(FILE)" || (echo "ERROR: FILE parameter required. Usage: make test-remote FILE=releases/..." && exit 1)

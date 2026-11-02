@@ -39,7 +39,7 @@ cmd_setup() {
 readonly GUEST_CHECKS='
 ok=0
 chk() { if "${@:2}" >/dev/null 2>&1; then echo "  ✓ $1"; else echo "  ✗ $1"; ok=1; fi; }
-for t in git podman gh gpg subscription-manager; do chk "$t installed" command -v "$t"; done
+for t in git podman gh gpg subscription-manager skopeo jq; do chk "$t installed" command -v "$t"; done
 chk "$1 is writable" test -w "$1"
 chk "podman runs a container with a :z volume on the mount" \
   podman run --rm -v "$1:/probe:z" registry.access.redhat.com/ubi9/ubi-minimal true

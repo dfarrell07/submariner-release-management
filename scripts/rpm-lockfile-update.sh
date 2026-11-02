@@ -14,6 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/git-utils.sh"
 # shellcheck source=lib/linux-vm.sh
 source "$SCRIPT_DIR/lib/linux-vm.sh"
+# shellcheck source=lib/pinned-base.sh
+source "$SCRIPT_DIR/lib/pinned-base.sh"
 
 # Constants
 readonly SUBMARINER_BASE="${SUBMARINER_BASE:-$HOME/go/src/submariner-io}"
@@ -22,11 +24,18 @@ readonly FILTER_PATTERN="^(submariner|shipyard|gateway|globalnet|route-agent|net
 readonly COMMIT_MSG="Regenerate RPM lockfiles for %s
 
 Updated lockfiles to resolve latest package versions."
+readonly COMMIT_MSG_BASE="Refresh base images and RPM lockfiles for %s
+
+Refreshed pinned base image digests in:
+%s
+
+Regenerated RPM lockfiles against the refreshed base images."
 
 BRANCH=""
 VERSION=""
 COMPONENT_FILTER=""
 declare -a REPOS_UPDATED=()
+declare -A BASE_REFRESHED=()
 declare -a REPOS_SKIPPED=()
 declare -a REPOS_FAILED=()
 
@@ -42,8 +51,11 @@ check_prerequisites() {
   command -v git &>/dev/null || MISSING_TOOLS+=("git")
   command -v podman &>/dev/null || MISSING_TOOLS+=("podman")
   command -v gh &>/dev/null || MISSING_TOOLS+=("gh")
+  command -v skopeo &>/dev/null || MISSING_TOOLS+=("skopeo")
+  command -v jq &>/dev/null || MISSING_TOOLS+=("jq")
 
-  [ "${#MISSING_TOOLS[@]}" -gt 0 ] && die "Missing required tools: ${MISSING_TOOLS[*]}"
+  [ "${#MISSING_TOOLS[@]}" -gt 0 ] && die "Missing required tools: ${MISSING_TOOLS[*]}" \
+    "In a Linux VM created before these were required: limactl shell ${LINUX_VM_NAME} sudo dnf install -y skopeo jq"
 
   [ -z "${BASH_VERSINFO[0]}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ] && \
     die "bash 4.0+ required" "macOS: brew install bash"
@@ -199,6 +211,14 @@ update_lockfiles() {
     git checkout -B "$FIX_BRANCH" "$BRANCH_REF" >/dev/null 2>&1 || \
       { REPOS_FAILED+=("$DISPLAY_NAME:branch-create-failed"); continue; }
 
+    # Before anything else dirties the tree, so a failure here can still restore cleanly,
+    # and before the lockfiles, which are resolved against the base in the Dockerfile.
+    if ! pinned_base_refresh "$COMPONENT_FILTER"; then
+      REPOS_FAILED+=("$DISPLAY_NAME:base-refresh-failed")
+      restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
+      continue
+    fi
+
     git show "origin/devel:.rpm-lockfiles/update-lockfile.sh" > .rpm-lockfiles/update-lockfile.sh 2>/dev/null || {
       echo "❌ Failed to copy update-lockfile.sh from origin/devel"
       echo "   Run: git fetch origin devel"
@@ -245,7 +265,7 @@ update_lockfiles() {
     if [ $LOCKFILE_EXIT -ne 0 ]; then
       REPOS_FAILED+=("$DISPLAY_NAME:update-script-failed")
       restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
-    elif git diff --quiet $LOCKFILE_PATTERN 2>/dev/null; then
+    elif [ "${#PINNED_BASE_CHANGED[@]}" -eq 0 ] && git diff --quiet $LOCKFILE_PATTERN 2>/dev/null; then
       if ! restore_clean_ref "$ORIGINAL_REF"; then
         REPOS_FAILED+=("$DISPLAY_NAME:restore-failed")
         continue
@@ -256,20 +276,32 @@ update_lockfiles() {
       REPOS_SKIPPED+=("$DISPLAY_NAME:no-changes")
     else
       # shellcheck disable=SC2086
-      git add $LOCKFILE_PATTERN || {
+      git add $LOCKFILE_PATTERN ${PINNED_BASE_CHANGED[@]+"${PINNED_BASE_CHANGED[@]}"} || {
         REPOS_FAILED+=("$DISPLAY_NAME:stage-failed")
         restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
         continue
       }
 
+      local MESSAGE
       # shellcheck disable=SC2059
-      git commit -s -m "$(printf "$COMMIT_MSG" "$REPO_BRANCH")" || {
+      if [ "${#PINNED_BASE_CHANGED[@]}" -gt 0 ]; then
+        MESSAGE=$(printf "$COMMIT_MSG_BASE" "$REPO_BRANCH" "$(printf -- '- %s\n' "${PINNED_BASE_CHANGED[@]}")")
+      else
+        MESSAGE=$(printf "$COMMIT_MSG" "$REPO_BRANCH")
+      fi
+
+      git commit -s -m "$MESSAGE" || {
         REPOS_FAILED+=("$DISPLAY_NAME:commit-failed")
         restore_clean_ref "$ORIGINAL_REF" || true  # failure already recorded
         continue
       }
 
-      echo "✓ Committed lockfile changes"
+      if [ "${#PINNED_BASE_CHANGED[@]}" -gt 0 ]; then
+        echo "✓ Committed base image and lockfile changes"
+      else
+        echo "✓ Committed lockfile changes"
+      fi
+      [ "${#PINNED_BASE_CHANGED[@]}" -eq 0 ] || BASE_REFRESHED["$REPO_NAME"]=1
       REPOS_UPDATED+=("$DISPLAY_NAME#$REPO_NAME#$REPO_VERSION#$REPO_BRANCH")
       # Restore original branch so later steps don't find the repo on a stray branch.
       restore_clean_ref "$ORIGINAL_REF" || REPOS_FAILED+=("$DISPLAY_NAME:restore-failed")
@@ -335,12 +367,17 @@ print_summary() {
       # A partial retry also revisits repos with open PRs. Reuse those instead
       # of letting gh pr create abort the entire multi-repo push script. gh pr
       # list's --head accepts a branch, NOT owner:branch; filter the owner in jq.
-      local pr_filter push_commands
+      local pr_filter push_commands pr_title="Update RPM lockfiles for v${version}"
+      local pr_body="Update RPM lockfiles to resolve package CVEs."
+      if [ -n "${BASE_REFRESHED[$repo]:-}" ]; then
+        pr_title="Refresh pinned base images and RPM lockfiles for v${version}"
+        pr_body="Move pinned base images to their current digests and update RPM lockfiles to resolve package CVEs."
+      fi
       pr_filter="[.[] | select(.headRepositoryOwner.login == \"$gh_user\")] | .[0].url // empty"
       printf -v push_commands '\n  cd %q\n  git push --force-with-lease %q %q\n  PR_URL=$(gh pr list --base %q --head %q --state open --json url,headRepositoryOwner --jq %q)\n  if [ -z "$PR_URL" ]; then\n    PR_URL=$(gh pr create --base %q --head %q --title %q --body %q --assignee @me --label ready-to-test)\n  fi\n  gh pr merge --auto --rebase "${PR_URL##*/}"\n' \
         "$SUBMARINER_BASE/$repo" "$fork" "$fix_branch" "$branch" "$fix_branch" "$pr_filter" \
-        "$branch" "$head_ref" "Update RPM lockfiles for v${version}" \
-        "Update RPM lockfiles to resolve package CVEs."
+        "$branch" "$head_ref" "$pr_title" \
+        "$pr_body"
       printf '%s' "$push_commands"
       # Append to push summary if conductor is running
       if [ -n "${AUTORELEASE_PUSH_LOG:-}" ]; then

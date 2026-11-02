@@ -11,7 +11,7 @@ provision:
     script: |
       #!/bin/bash
       set -eux
-      dnf install -y git podman gh gnupg2 subscription-manager
+      dnf install -y git podman gh gnupg2 subscription-manager skopeo jq
       git config --system safe.directory '*'
       # podman's :z relabel cannot work on mounted host files
       setenforce 0 || true

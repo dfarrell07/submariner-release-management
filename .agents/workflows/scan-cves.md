@@ -30,7 +30,8 @@ Update RPM lockfiles to fix RPM package CVEs:
 /rpm-lockfile-update <branch>
 ```
 
-This updates lockfiles in submariner (3 components) and shipyard (1 component) repos.
+This updates lockfiles in submariner (3 components) and shipyard (1 component) repos. It first refreshes digest-pinned
+base images (today nettest's `ubi9`); see `skills/rpm-lockfile-update/SKILL.md`.
 
 ### Addon Go Toolchain
 

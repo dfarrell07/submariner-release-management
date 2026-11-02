@@ -283,6 +283,7 @@ rpm_case() (
   # shellcheck source=../rpm-lockfile-update.sh
   source "$RELEASE_SCRIPTS/rpm-lockfile-update.sh"
   BRANCH=release-0.25 VERSION=0.25.1 COMPONENT_FILTER=gateway
+  skopeo() { echo 'real skopeo reached' >&2; return 1; }  # the fixture has no pinned base
   inject_git_failures
   update_lockfiles
   assert_eq 'original commit preserved' "$(command git rev-parse original)" "$original_sha"

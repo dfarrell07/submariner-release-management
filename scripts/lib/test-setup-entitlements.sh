@@ -41,6 +41,8 @@ new_sandbox() {
 #!/bin/bash
 if [ "${1:-}" = -s ]; then echo Linux; else exec /usr/bin/uname "$@"; fi
 STUB
+  # rpm-lockfile-update requires skopeo; these tests must never reach the real one
+  printf '#!/bin/bash\nexit 1\n' > "$SB/bin/skopeo"
   cat > "$SB/bin/sudo" <<'STUB'
 #!/bin/bash
 exec "$@"

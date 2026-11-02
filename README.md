@@ -105,6 +105,10 @@ The VM mounts this repo and `SUBMARINER_BASE` at the host paths. Prompts, logs a
 `SUBMARINER_BASE`, run `limactl shell submariner-release sudo subscription-manager unregister`,
 `limactl delete -f submariner-release`, then `make linux-vm-setup`.
 
+`rpm-lockfile-update` also refreshes digest-pinned base images, which needs `skopeo` and `jq`. A VM created before they
+were required needs `limactl shell submariner-release sudo dnf install -y skopeo jq`. Registry auth is the login from
+`make setup-entitlements`.
+
 ## Claude Skills
 
 ```bash
