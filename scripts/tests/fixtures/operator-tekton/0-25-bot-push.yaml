@@ -1,0 +1,19 @@
+# yamllint disable rule:line-length rule:document-start
+# submariner-operator a1fa5753:.tekton/submariner-operator-0-25-push.yaml, up to namespace (bot form before the filter)
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  annotations:
+    build.appstudio.openshift.io/repo: https://github.com/submariner-io/submariner-operator?rev={{revision}}
+    build.appstudio.redhat.com/commit_sha: '{{revision}}'
+    build.appstudio.redhat.com/target_branch: '{{target_branch}}'
+    pipelinesascode.tekton.dev/cancel-in-progress: "false"
+    pipelinesascode.tekton.dev/max-keep-runs: "3"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
+      == "release-0.25"
+  labels:
+    appstudio.openshift.io/application: submariner-0-25
+    appstudio.openshift.io/component: submariner-operator-0-25
+    pipelines.appstudio.openshift.io/type: build
+  name: submariner-operator-0-25-on-push
+  namespace: submariner-tenant

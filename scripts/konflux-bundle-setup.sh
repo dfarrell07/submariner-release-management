@@ -37,6 +37,10 @@ fi
 source "$PATCHER_LIB"
 # shellcheck source=lib/git-utils.sh
 source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
+# shellcheck source=lib/acm-version.sh
+source "$SCRIPT_DIR/lib/acm-version.sh"
+# shellcheck source=lib/cel-filter.sh
+source "$SCRIPT_DIR/lib/cel-filter.sh"
 
 # ━━━ CONSTANTS ━━━
 
@@ -83,6 +87,7 @@ check_prerequisites() {
   command -v awk &>/dev/null || MISSING_TOOLS+=("awk")
   command -v curl &>/dev/null || MISSING_TOOLS+=("curl")
   command -v jq &>/dev/null || MISSING_TOOLS+=("jq")
+  command -v yq &>/dev/null || MISSING_TOOLS+=("yq")
   command -v sha256sum &>/dev/null || command -v shasum &>/dev/null || MISSING_TOOLS+=("sha256sum")
 
   if [ "${#MISSING_TOOLS[@]}" -gt 0 ]; then
@@ -95,6 +100,7 @@ check_prerequisites() {
         sed|awk) echo "  $tool: included in most systems" ;;
         curl) echo "  curl: included in most systems" ;;
         jq) echo "  jq: https://jqlang.github.io/jq/download/" ;;
+        yq) echo "  yq: https://github.com/mikefarah/yq#install" ;;
         sha256sum) echo "  sha256sum (Linux) or shasum -a 256 (macOS): included in most systems" ;;
       esac
     done
@@ -204,14 +210,8 @@ Provide version argument: konflux-bundle-setup.sh <version>"
   VERSION_MINOR="${VERSION##*.}"
   VERSION_DASH="${VERSION//./-}"
 
-  # Calculate ACM version: Submariner 0.X → ACM 2.(X-7)
-  ACM_VERSION="2.$((VERSION_MINOR - 7))"
-
-  # Validate ACM version is positive
-  if [ "$((VERSION_MINOR - 7))" -lt 0 ]; then
-    die "ACM version would be negative: $ACM_VERSION" \
-      "   Minimum supported Submariner version is 0.7 (ACM 2.0)"
-  fi
+  ACM_VERSION=$(acm_version_for "$VERSION") || \
+    die "Cannot determine the ACM version for the CPE label"
 
   # Calculate previous version for copying bundle infrastructure
   PREV_VERSION_MINOR=$((VERSION_MINOR - 1))
@@ -316,19 +316,19 @@ add_bundle_infrastructure() {
   # Update version references in bundle files
   echo "Updating version strings..."
 
-  # Calculate previous ACM version for replacement
-  local PREV_ACM_VERSION="2.$((PREV_VERSION_MINOR - 7))"
-
   # Escape dots for sed patterns (0.22 → 0\.22)
   local PREV_VERSION_ESCAPED="${PREV_VERSION/./\\.}"
-  local PREV_ACM_ESCAPED="${PREV_ACM_VERSION/./\\.}"
 
   # Replace version strings in bundle files
   sed -i \
     -e "s/${PREV_VERSION_ESCAPED}/${VERSION}/g" \
     -e "s/${PREV_VERSION_DASH}/${VERSION_DASH}/g" \
-    -e "s/${PREV_ACM_ESCAPED}/${ACM_VERSION}/g" \
     bundle.Dockerfile.konflux config/bundle/kustomization.yaml config/bundle/patches/submariner.csv.config.yaml
+
+  # Only the CPE label names the ACM version. A bare version replacement would
+  # also rewrite unrelated text, such as an OCP v5.0 once the ACM version is 5.0.
+  acm_set_cpe bundle.Dockerfile.konflux "$ACM_VERSION" || \
+    die "Failed to set the CPE label to ACM ${ACM_VERSION} in bundle.Dockerfile.konflux"
 
   # Update tekton to use Konflux bundle Dockerfile
   sed -i 's|value: bundle.Dockerfile$|value: bundle.Dockerfile.konflux|' \
@@ -541,13 +541,14 @@ add_file_change_filters() {
     elif git show "origin/${PREV_RELEASE_BRANCH}:${PREV_FILE}" > "${CURRENT_FILE}.new" 2>/dev/null; then
       echo "  Copied from origin/${PREV_RELEASE_BRANCH}"
     else
-      echo "⚠️  Could not copy ${PREV_FILE} from ${PREV_RELEASE_BRANCH} (tried local and origin)"
-      echo "   Skipping file change filters for $FILE_TYPE"
-      continue
+      rm -f .tekton/submariner-bundle-"${VERSION_DASH}"-*.new
+      die "Could not copy ${PREV_FILE} from ${PREV_RELEASE_BRANCH} (tried local and origin)" \
+        "   The bundle file change filters come from that file. Fetch the branch and re-run."
     fi
 
     # Verify file was copied successfully
     if [ ! -s "${CURRENT_FILE}.new" ]; then
+      rm -f "${CURRENT_FILE}.new"
       die "Copied file is empty: ${CURRENT_FILE}.new"
     fi
 
@@ -559,24 +560,25 @@ add_file_change_filters() {
       -e "s/release-${PREV_VERSION_ESCAPED}/release-${VERSION}/g" \
       "${CURRENT_FILE}.new"
 
-    # Validate YAML before replacing original
-    if command -v yq &>/dev/null; then
-      if ! yq eval '.' "${CURRENT_FILE}.new" > /dev/null 2>&1; then
-        rm -f "${CURRENT_FILE}.new"
-        die "YAML invalid after version update in ${CURRENT_FILE}.new"
-      fi
-    fi
-
-    # Verify final file is not empty before replacing
-    if [ ! -s "${CURRENT_FILE}.new" ]; then
+    # Check the filter before replacing the original (also rejects invalid YAML)
+    local NEW_CEL
+    NEW_CEL=$(cel_read "${CURRENT_FILE}.new") || {
       rm -f "${CURRENT_FILE}.new"
-      die "Processed file is empty: ${CURRENT_FILE}.new"
-    fi
+      die "YAML invalid after version update in ${CURRENT_FILE}.new"
+    }
+    cel_check_bundle "$NEW_CEL" "${FILE_TYPE/-/_}" "release-${VERSION}" "submariner-bundle-${VERSION_DASH}" || {
+      rm -f .tekton/submariner-bundle-"${VERSION_DASH}"-*.new
+      die "${PREV_FILE} from ${PREV_RELEASE_BRANCH} has no valid path filter for ${VERSION}" \
+        "   Fix the expression on ${PREV_RELEASE_BRANCH}, then re-run."
+    }
 
-    # Replace original with updated version
+    echo "✓ Prepared $FILE_TYPE file"
+  done
+
+  # Replace the originals only once both are good
+  for FILE_TYPE in pull-request push; do
+    CURRENT_FILE=".tekton/submariner-bundle-${VERSION_DASH}-${FILE_TYPE}.yaml"
     mv "${CURRENT_FILE}.new" "$CURRENT_FILE"
-
-    echo "✓ Updated $FILE_TYPE file"
   done
 
   git add .tekton/submariner-bundle-*.yaml
@@ -772,4 +774,7 @@ main() {
   fi
 }
 
-main "$@"
+# Sourced by test-konflux-setup.sh to run individual steps.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

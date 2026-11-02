@@ -10,7 +10,7 @@
 Automated workflow: query Jira, filter, auto-apply, verify CVEs,
 then per-issue agent review.
 
-**Submariner ↔ ACM:** 0.X → 2.(X-7) (e.g., 0.20 → 2.13, 0.21 → 2.14)
+**Submariner ↔ ACM:** see `scripts/lib/acm-version.sh`.
 
 ### Prerequisites
 

@@ -18,6 +18,9 @@ Configure Konflux for new Submariner version.
 
 **Workflow:** `~/konflux/konflux-release-data/tenants-config/cluster/kflux-prd-rh02/tenants/submariner-tenant/CLAUDE.md`
 
+**ACM version:** Scripts take it from `scripts/lib/acm-version.sh` and fail for a release it doesn't list. For a new
+Y-stream, confirm the ACM version with the release owner (don't guess it) and add its row there first.
+
 ## Done When
 
 - PR merged in konflux-release-data repo with new release plans

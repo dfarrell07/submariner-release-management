@@ -19,27 +19,27 @@ banner() {
 # ============================================================================
 # ACM Version Calculation
 # ============================================================================
-# Maps Submariner version to ACM version: 0.X → 2.(X-7).0
+# Maps Submariner version to the Jira form of its ACM version, "ACM X.Y.0".
 # Sets global variables: VERSION_MAJOR_MINOR, VERSION_MAJOR_MINOR_DASH, ACM_VERSION
 # Requires: VERSION variable set by caller
+# shellcheck source=acm-version.sh
+source "$(dirname "${BASH_SOURCE[0]}")/acm-version.sh"
+
 calculate_acm_version() {
   # Extract version components (e.g., "0.23.1" → "0.23")
   VERSION_MAJOR_MINOR="${VERSION%.*}"
   # shellcheck disable=SC2034  # Used by caller after sourcing
   VERSION_MAJOR_MINOR_DASH="${VERSION_MAJOR_MINOR//./-}"
 
-  # Submariner 0.X → ACM 2.(X-7)
-  local MINOR_VERSION="${VERSION_MAJOR_MINOR##*.}"
-  local ACM_MINOR=$((MINOR_VERSION - 7))
-
-  if [[ $ACM_MINOR -lt 0 ]]; then
+  local acm
+  acm=$(acm_version_for "$VERSION_MAJOR_MINOR") || {
     echo "❌ ERROR: Cannot calculate ACM version for Submariner '$VERSION_MAJOR_MINOR'" >&2
     return 1
-  fi
+  }
 
   # Always use base ACM version (not patch)
   # shellcheck disable=SC2034  # Used by caller after sourcing
-  ACM_VERSION="ACM 2.${ACM_MINOR}.0"
+  ACM_VERSION="ACM ${acm}.0"
 }
 
 # ============================================================================

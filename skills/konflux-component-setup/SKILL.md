@@ -55,3 +55,8 @@ executable.
 Run `scripts/konflux-component-setup.sh`, passing each supplied value as a
 separate argument, or no arguments for auto-detection. Do not combine arguments
 into a shell string or use `eval`.
+
+Report a failure with the script's message rather than editing around it. For `submariner-operator`, the last step
+fails unless both pipelines get a path filter, copied from the previous release branch, with every operator build input
+and no `bundle/` or `config/` path. Fix the filter on that branch, then re-run. Without it, a bundle SHA merge also
+rebuilds the operator and the snapshot's operator digest doesn't match the bundle.

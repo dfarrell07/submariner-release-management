@@ -39,6 +39,10 @@ source "$PATCHER_LIB"
 source "$SCRIPT_DIR/lib/git-utils.sh" 2>/dev/null || true
 # shellcheck source=lib/dockerfile-version.sh
 source "$SCRIPT_DIR/lib/dockerfile-version.sh"
+# shellcheck source=lib/acm-version.sh
+source "$SCRIPT_DIR/lib/acm-version.sh"
+# shellcheck source=lib/cel-filter.sh
+source "$SCRIPT_DIR/lib/cel-filter.sh"
 
 # ━━━ CONSTANTS ━━━
 
@@ -109,6 +113,7 @@ check_prerequisites() {
   command -v awk &>/dev/null || MISSING_TOOLS+=("awk")
   command -v curl &>/dev/null || MISSING_TOOLS+=("curl")
   command -v jq &>/dev/null || MISSING_TOOLS+=("jq")
+  command -v yq &>/dev/null || MISSING_TOOLS+=("yq")
   command -v sha256sum &>/dev/null || command -v shasum &>/dev/null || MISSING_TOOLS+=("sha256sum")
 
   if [ "${#MISSING_TOOLS[@]}" -gt 0 ]; then
@@ -121,6 +126,7 @@ check_prerequisites() {
         sed|awk) echo "  $tool: included in most systems" ;;
         curl) echo "  curl: included in most systems" ;;
         jq) echo "  jq: https://jqlang.github.io/jq/download/" ;;
+        yq) echo "  yq: https://github.com/mikefarah/yq#install" ;;
         sha256sum) echo "  sha256sum (Linux) or shasum -a 256 (macOS): included in most systems" ;;
       esac
     done
@@ -141,7 +147,7 @@ check_prerequisites() {
         "This script uses associative arrays (declare -A) which require bash 4.0+."
   fi
 
-  echo "✓ Prerequisites verified: bash 4.0+, git, sed, awk, curl, jq, sha256sum/shasum"
+  echo "✓ Prerequisites verified: bash 4.0+, git, sed, awk, curl, jq, yq, sha256sum/shasum"
 }
 
 # ━━━ STEP 1: DETECT REPOSITORY AND COMPONENT ━━━
@@ -446,12 +452,8 @@ Either checkout a branch manually or provide version argument:
   VERSION_DOTTED="${VERSION_MAJOR}.${VERSION_MINOR}"
   TARGET_BRANCH="release-${VERSION_DOTTED}"
   PREV_VERSION=$((VERSION_MINOR - 1))
-  ACM_VERSION=$((VERSION_MINOR - 7))
-
-  if [ "$ACM_VERSION" -lt 0 ]; then
-    die "ACM version would be negative: 2.$ACM_VERSION" \
-        "Minimum supported version is 0.7 (ACM 2.0)"
-  fi
+  ACM_VERSION=$(acm_version_for "$VERSION_DOTTED") || \
+    die "Cannot determine the ACM version for the CPE label"
 
   # Validate .tekton directory exists
   [ -d .tekton ] || die ".tekton directory not found" \
@@ -485,7 +487,7 @@ Either checkout a branch manually or provide version argument:
   echo "Current branch: $CURRENT_BRANCH"
   echo "Target branch:  $TARGET_BRANCH"
   echo "Previous ver:   ${VERSION_MAJOR}.${PREV_VERSION}"
-  echo "ACM version:    2.${ACM_VERSION}"
+  echo "ACM version:    ${ACM_VERSION}"
   echo "Prefetch type:  $PREFETCH_TYPE"
   echo "Has CPE label:  $HAS_CPE"
   if [ -n "$SPECIAL_FILES" ]; then
@@ -574,13 +576,9 @@ add_konflux_dockerfile() {
   # Update CPE label if component has it
   if [ "$HAS_CPE" = "yes" ]; then
     if grep -q "cpe=" "$DOCKERFILE"; then
-      sed -i "s/cpe=\"cpe:\/a:redhat:acm:[0-9.]*::el9\"/cpe=\"cpe:\/a:redhat:acm:2.${ACM_VERSION}::el9\"/" "$DOCKERFILE" || \
-        die "Failed to update CPE label in Dockerfile"
-      if grep -q "cpe=\"cpe:/a:redhat:acm:2.${ACM_VERSION}::el9\"" "$DOCKERFILE"; then
-        echo "✓ Updated CPE label: ACM 2.${ACM_VERSION}"
-      else
-        die "CPE label update verification failed"
-      fi
+      acm_set_cpe "$DOCKERFILE" "$ACM_VERSION" || \
+        die "Failed to set the CPE label to ACM ${ACM_VERSION} in $DOCKERFILE"
+      echo "✓ Updated CPE label: ACM ${ACM_VERSION}"
     else
       echo "⚠️  Warning: CPE label not found in Dockerfile (component may not need it)"
     fi
@@ -983,6 +981,10 @@ update_task_refs() {
 
 # ━━━ STEP 10: ADD FILE CHANGE FILTERS (OPERATOR ONLY) ━━━
 
+# Without a path filter a bundle SHA merge also rebuilds the operator, and the
+# snapshot it creates has an operator digest that doesn't match the bundle. So this
+# step fails unless both pipelines end up filtered. Nothing is written until both
+# expressions are good.
 add_file_change_filters() {
   echo "━━━ Step 10: Add File Change Filters ━━━"
 
@@ -991,102 +993,70 @@ add_file_change_filters() {
     return 0
   fi
 
-  # Check if already applied - both files must have filters to skip
-  local FILTER_COUNT
-  FILTER_COUNT=$({ grep -l "pathChanged()" "${TEKTON_FILES[@]}" 2>/dev/null || true; } | wc -l)
-  if [ "$FILTER_COUNT" -eq 2 ]; then
-    echo "ℹ️  File change filters already present in both files"
-    return 0
-  fi
-
   local PREV_VERSION_DASHED="${VERSION_MAJOR}-${PREV_VERSION}"
+  local PREV_VERSION_DOTTED="${VERSION_MAJOR}.${PREV_VERSION}"
+  local PREV_REF="origin/release-${PREV_VERSION_DOTTED}"
+  local THIS_COMPONENT="${COMPONENT}-${VERSION_DASHED}"
+  local FILE_TYPE EVENT CURRENT_FILE PREV_FILE CURRENT_CEL NEW_CEL
+  local -a FILES=()
+  local -A WANTED=()
 
-  echo "📋 Copying CEL expressions from release-${VERSION_MAJOR}.${PREV_VERSION} branch..."
-
-  local FILE_TYPE CURRENT_FILE PREV_FILE CEL_LINE CEL_LINE_UPDATED
   for FILE_TYPE in pull-request push; do
-    CURRENT_FILE=".tekton/${COMPONENT}-${VERSION_DASHED}-${FILE_TYPE}.yaml"
+    CURRENT_FILE=".tekton/${THIS_COMPONENT}-${FILE_TYPE}.yaml"
     PREV_FILE=".tekton/${COMPONENT}-${PREV_VERSION_DASHED}-${FILE_TYPE}.yaml"
+    EVENT="${FILE_TYPE/-/_}"
 
-    if [ ! -f "$CURRENT_FILE" ]; then
-      echo "⚠️  Warning: $CURRENT_FILE not found, skipping"
-      continue
+    [ -f "$CURRENT_FILE" ] || die "$CURRENT_FILE not found" \
+      "Both operator pipelines are needed to apply the file change filters."
+    CURRENT_CEL=$(cel_read "$CURRENT_FILE") || die "Cannot parse $CURRENT_FILE as YAML"
+
+    NEW_CEL="$CURRENT_CEL"
+    if [[ "$NEW_CEL" != *pathChanged* ]]; then
+      echo "📋 Copying $FILE_TYPE CEL expression from $PREV_REF..."
+      local PREV_YAML
+      PREV_YAML=$(git show "${PREV_REF}:${PREV_FILE}" 2>/dev/null) || \
+        die "Cannot read ${PREV_FILE} from ${PREV_REF}" \
+            "The operator filter is copied from there. Fetch the branch and re-run."
+      NEW_CEL=$(cel_read - <<< "$PREV_YAML") || die "Cannot parse ${PREV_REF}:${PREV_FILE} as YAML"
+      [[ "$NEW_CEL" == *pathChanged* ]] || \
+        die "${PREV_REF}:${PREV_FILE} has no path filter to copy" \
+            "Add the filter to $PREV_REF first (as in submariner-operator#4325), then re-run."
+      NEW_CEL="${NEW_CEL//release-${PREV_VERSION_DOTTED}/release-${VERSION_DOTTED}}"
+      NEW_CEL="${NEW_CEL//${COMPONENT}-${PREV_VERSION_DASHED}/${THIS_COMPONENT}}"
     fi
 
-    # Extract CEL expression from previous branch. `|| true`: git show (missing
-    # ref/file) or grep (no match) exits non-zero, which under set -o pipefail
-    # would abort before the friendly empty-CEL_LINE handler below.
-    CEL_LINE=$(git show "origin/release-${VERSION_MAJOR}.${PREV_VERSION}:${PREV_FILE}" 2>/dev/null | \
-      grep 'pipelinesascode.tekton.dev/on-cel-expression:' || true)
+    cel_check_operator "$NEW_CEL" "$EVENT" "release-${VERSION_DOTTED}" "$THIS_COMPONENT" || \
+      die "$CURRENT_FILE would not have a valid path filter" \
+          "Fix the expression there or on $PREV_REF, then re-run."
 
-    if [ -z "$CEL_LINE" ]; then
-      echo "⚠️  Could not extract CEL from ${PREV_FILE} - previous branch may not have filters yet"
-      continue
+    FILES+=("$CURRENT_FILE")
+    if [ "$NEW_CEL" = "$CURRENT_CEL" ]; then
+      echo "ℹ️  File change filter already present in $CURRENT_FILE"
+    else
+      WANTED["$CURRENT_FILE"]="$NEW_CEL"
     fi
+  done
 
-    # Update version numbers in the expression
-    CEL_LINE_UPDATED=$(echo "$CEL_LINE" | \
-      sed -e "s/release-${VERSION_MAJOR}.${PREV_VERSION}/release-${VERSION_MAJOR}.${VERSION_MINOR}/g" \
-          -e "s/${COMPONENT}-${PREV_VERSION_DASHED}/${COMPONENT}-${VERSION_DASHED}/g")
-
-    # Verify max-keep-runs exists before modifying
-    grep -q 'pipelinesascode.tekton.dev/max-keep-runs:' "$CURRENT_FILE" || {
-      echo "⚠️  Warning: max-keep-runs annotation not found in $CURRENT_FILE"
-      echo "   Cannot add file change filters without insertion point. Skipping."
-      continue
+  for CURRENT_FILE in "${!WANTED[@]}"; do
+    cel_write "$CURRENT_FILE" "${WANTED[$CURRENT_FILE]}" || {
+      git checkout -- "${FILES[@]}" 2>/dev/null || true
+      die "Failed to write the CEL expression to $CURRENT_FILE" \
+          "It needs an on-cel-expression or max-keep-runs annotation, and must stay valid YAML."
     }
-
-    # Delete bot's CEL expression (handles both 1-line and 2-line formats)
-    awk '/pipelinesascode.tekton.dev\/on-cel-expression:/ {
-      skip=1
-      next
-    }
-    skip && /^[[:space:]]+==/ {
-      skip=0
-      next
-    }
-    {
-      skip=0
-      print
-    }' "$CURRENT_FILE" > "${CURRENT_FILE}.tmp" || {
-      rm -f "${CURRENT_FILE}.tmp"
-      die "Failed to delete bot's CEL expression from $CURRENT_FILE"
-    }
-    mv "${CURRENT_FILE}.tmp" "$CURRENT_FILE" || \
-      die "Failed to replace $CURRENT_FILE after CEL deletion"
-
-    # Insert updated CEL expression after max-keep-runs
-    awk -v cel="$CEL_LINE_UPDATED" \
-      '/pipelinesascode.tekton.dev\/max-keep-runs:/ {print; print cel; next} {print}' \
-      "$CURRENT_FILE" > "${CURRENT_FILE}.tmp" || {
-      rm -f "${CURRENT_FILE}.tmp"
-      die "Failed to insert updated CEL expression into $CURRENT_FILE"
-    }
-    mv "${CURRENT_FILE}.tmp" "$CURRENT_FILE" || \
-      die "Failed to replace $CURRENT_FILE with updated version"
-
-    # Validate YAML syntax
-    yq eval '.' "$CURRENT_FILE" > /dev/null 2>&1 || {
-      git checkout "$CURRENT_FILE"
-      die "YAML validation failed for $CURRENT_FILE after adding CEL expression"
-    }
-
     echo "✓ Added file change filters to $CURRENT_FILE"
   done
 
-  # Check if any changes were made
-  if git diff --quiet "${TEKTON_FILES[@]}"; then
-    echo "⚠️  No changes made - previous branch may not have filters configured yet."
-    echo "   Skipping commit. Filters will need to be added manually."
+  if git diff --quiet -- "${FILES[@]}"; then
     return 0
   fi
 
-  git add "${TEKTON_FILES[@]}" || exit 1
+  git add -- "${FILES[@]}" || exit 1
   commit_changes "Add file change filters for operator builds
 
 Add file change filters to CEL expressions in Tekton pipelines.
-This prevents operator builds when only bundle files change,
-reducing unnecessary pipeline runs." "File change filters added and committed"
+This prevents operator builds when only bundle files change, so a
+bundle SHA update can't create a snapshot whose operator digest
+doesn't match the bundle." "File change filters added and committed"
 }
 
 # ━━━ STEP 11: SUMMARY AND NEXT STEPS ━━━
@@ -1153,4 +1123,7 @@ main() {
   print_summary
 }
 
-main "$@"
+# Sourced by test-konflux-setup.sh to run individual steps.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

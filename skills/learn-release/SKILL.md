@@ -88,7 +88,7 @@ See `.agents/workflows/skip-completed-steps.md`.
 
 - **Stage vs Prod**: Stage publishes to registry.stage.redhat.io; prod to registry.redhat.io.
 - **Version formats**: `0.21` (branch), `0-21` (Konflux names), `v0.21.2` (Dockerfile labels), `0.21.2` (commits/PRs).
-- **ACM mapping**: Submariner 0.X → ACM 2.(X-7). Example: 0.21 → 2.14, 0.22 → 2.15.
+- **ACM mapping**: Each Submariner Y-stream ships in one ACM release. `scripts/lib/acm-version.sh` has the table.
 - **Advisory types**: RHSA (security/CVEs), RHBA (bug fixes), RHEA (enhancements). Type determines release notes format.
 
 ## Steps

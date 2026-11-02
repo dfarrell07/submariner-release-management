@@ -34,6 +34,12 @@ if [ -z "$INPUT_VERSION" ]; then
   exit 1
 fi
 
+# Fails on a malformed version, or one with no ACM version, before touching the
+# release-data repository.
+# shellcheck source=lib/acm-version.sh
+source "$SCRIPT_DIR/lib/acm-version.sh"
+NEW_ACM=$(acm_version_for "$INPUT_VERSION") || exit 1
+
 # ━━━ PREREQUISITES VALIDATION ━━━
 
 # Change to konflux-release-data repository
@@ -71,13 +77,6 @@ if ! git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
 fi
 
 # ━━━ VERSION AUTO-DETECTION ━━━
-
-# Validate format: 0.Y or 0.Y.Z (Submariner major version is always 0)
-echo "$INPUT_VERSION" | grep -qE '^0\.[0-9]+(\.[0-9]+)?$' || {
-  echo "❌ Error: Invalid version format '$INPUT_VERSION'"
-  echo "   Expected: 0.Y or 0.Y.Z (e.g., 0.23 or 0.23.1)"
-  exit 1
-}
 
 # Tracker integration
 TRACKER_LIB="${TRACKER_LIB:-$SCRIPT_DIR/lib/jira-tracker.sh}"
@@ -117,16 +116,7 @@ fi
 PREV_MINOR=$(echo "$EXISTING_VERSIONS" | tail -1)
 PREV="0-${PREV_MINOR}"
 
-# Calculate ACM versions: Submariner 0.X → ACM 2.(X-7)
-PREV_ACM="2.$((PREV_MINOR - 7))"
-NEW_ACM="2.$((NEW_MINOR - 7))"
-
-# Validate ACM versions are positive
-if [ "$((NEW_MINOR - 7))" -lt 0 ]; then
-  echo "❌ Error: ACM version would be negative: 2.$((NEW_MINOR - 7))"
-  echo "   Minimum supported version is 0.7 (ACM 2.0)"
-  exit 1
-fi
+PREV_ACM=$(acm_version_for "0.${PREV_MINOR}") || exit 1
 
 echo "✓ Version detection:"
 echo "  Previous: ${PREV} (ACM ${PREV_ACM})"
@@ -188,9 +178,12 @@ grep -q "value: submariner-$NEW" *.yaml || { echo "❌ Application name not upda
 
 grep -q "value: release-${NEW//-/.}" component-patch.yaml || { echo "❌ Git branch not updated to release-${NEW//-/.}"; exit 1; }
 
-if grep -rEq "${PREV}|${PREV//-/.}|${PREV_ACM}" .; then
+# The ACM version is only ever replaced between slashes, and a bare "5.0" would
+# match unrelated text.
+PREV_ACM_PATH="/${PREV_ACM//./\\.}/"
+if grep -rEq "${PREV}|${PREV//-/.}|${PREV_ACM_PATH}" .; then
   echo "❌ Old version references still present:"
-  grep -rE "${PREV}|${PREV//-/.}|${PREV_ACM}" . | head -3
+  grep -rE "${PREV}|${PREV//-/.}|${PREV_ACM_PATH}" . | head -3
   exit 1
 fi
 

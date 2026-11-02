@@ -14,10 +14,11 @@ STAGE_YAML="$3"
 OUTPUT_FILE="$4"
 DECISION_FILE="$5"
 VERSION_MAJOR_MINOR="${VERSION%.*}"
-MINOR_VERSION="${VERSION_MAJOR_MINOR##*.}"
-ACM_VERSION="ACM 2.$((MINOR_VERSION - 7)).0"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/acm-version.sh
+source "$SCRIPT_DIR/../lib/acm-version.sh"
+ACM_VERSION="ACM $(acm_version_for "$VERSION_MAJOR_MINOR").0"
 PROMPT_TEMPLATE="$SCRIPT_DIR/review-prompt.md"
 
 if [[ ! -f "$PROMPT_TEMPLATE" ]]; then

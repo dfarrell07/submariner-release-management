@@ -24,8 +24,8 @@ digest and provisional status in the change description. Reuse real catalog
 inputs and complete preparation and image testing. This does not establish
 product compatibility or require changing the bundle's compatibility metadata.
 
-To resolve the stream, compare with the ACM release that ships it (Submariner
-0.N pairs with ACM 2.(N-7); for example, ACM 2.17 is in the v5.0 index and its
+To resolve the stream, compare with the ACM release that ships it (the mapping
+is in `scripts/lib/acm-version.sh`; for example, ACM 2.17 is in the v5.0 index and its
 submariner-addon subscribes to `stable-0.24`). ART's FBC targets are
 `OCP_TARGET_VERSIONS` in `group.yml` on the `acm-<X.Y>` branch of
 [ocp-build-data](https://github.com/openshift-eng/ocp-build-data), and that
