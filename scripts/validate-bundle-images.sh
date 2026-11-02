@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # Validate bundle CSV image SHAs match snapshot component SHAs
+#
+# Usage: validate-bundle-images.sh [release.yaml]
+#        validate-bundle-images.sh --snapshot <name> [namespace]
+#
+# Exit codes: 0 match, 1 mismatch or unusable bundle, 2 snapshot or bundle
+# unreadable (retry). BUNDLE_CACHE_DIR, if set, keeps extracted manifests by
+# bundle digest so snapshots sharing a bundle extract it once.
 
 set -euo pipefail
 
@@ -26,15 +33,21 @@ validate_file() {
     is_fbc_release=true
   fi
 
+  validate_snapshot "$namespace" "$snapshot" "$is_fbc_release"
+}
+
+validate_snapshot() {
+  local namespace=$1 snapshot=$2 is_fbc_release=$3
+
   # Get snapshot from cluster
   if ! snapshot_json=$(oc get snapshot "$snapshot" -n "$namespace" -o json 2>/dev/null); then
     echo "ERROR: Failed to get snapshot '$snapshot' from namespace '$namespace'"
-    exit 1
+    exit 2
   fi
 
   if [[ -z "$snapshot_json" ]]; then
     echo "ERROR: Snapshot query returned empty result"
-    exit 1
+    exit 2
   fi
 
   # Create temp directory
@@ -66,16 +79,24 @@ validate_file() {
   snapshot_count=$(wc -l < "$tmpdir/snapshot_components.txt")
   echo "  Snapshot has $snapshot_count components"
 
-  # Extract bundle manifests
-  mkdir -p "$tmpdir/manifests"
-  if ! oc image extract "$bundle_image" --path=/manifests/:$tmpdir/manifests/ 2>/dev/null; then
-    echo "ERROR: Failed to extract bundle image"
-    rm -rf "$tmpdir"
-    exit 1
+  # Extract bundle manifests, once per bundle digest when BUNDLE_CACHE_DIR is set
+  manifests="$tmpdir/manifests"
+  bundle_digest=$(echo "$bundle_image" | grep -oP 'sha256:\K[a-f0-9]+' || echo "")
+  if [[ -n "${BUNDLE_CACHE_DIR:-}" && -n "$bundle_digest" ]]; then
+    manifests="$BUNDLE_CACHE_DIR/$bundle_digest"
+  fi
+  if [[ ! -d "$manifests" ]]; then
+    mkdir -p "$tmpdir/extract"
+    if ! oc image extract "$bundle_image" --path="/manifests/:$tmpdir/extract/" 2>/dev/null; then
+      echo "ERROR: Failed to extract bundle image"
+      rm -rf "$tmpdir"
+      exit 2
+    fi
+    mv "$tmpdir/extract" "$manifests"
   fi
 
   # Find CSV file
-  csv_file=$(find "$tmpdir/manifests" -type f -name '*.clusterserviceversion.yaml' | head -1)
+  csv_file=$(find "$manifests" -type f -name '*.clusterserviceversion.yaml' | head -1)
   if [[ -z "$csv_file" ]]; then
     echo "ERROR: No ClusterServiceVersion found in bundle"
     rm -rf "$tmpdir"
@@ -89,14 +110,14 @@ validate_file() {
     yq '.spec.relatedImages[].image' "$csv_file" 2>/dev/null
     yq '.spec.install.spec.deployments[].spec.template.spec.containers[].image' "$csv_file" 2>/dev/null
     yq '.spec.install.spec.deployments[].spec.template.spec.initContainers[].image' "$csv_file" 2>/dev/null
-  } | grep -v '^null$' | grep -v '^$' | sort -u > "$tmpdir/csv_images.txt"
+  } | grep -v '^null$' | grep -v '^$' | sort -u > "$tmpdir/csv_images.txt" || true
 
   csv_image_count=$(wc -l < "$tmpdir/csv_images.txt")
 
   if [[ $csv_image_count -eq 0 ]]; then
-    echo "WARNING: No images found in CSV"
+    echo "ERROR: No images found in CSV"
     rm -rf "$tmpdir"
-    return
+    exit 1
   fi
 
   echo "  CSV has $csv_image_count images"
@@ -106,6 +127,7 @@ validate_file() {
   matched=0
   skipped=0
   unpinned=0
+  : > "$tmpdir/matched_components.txt"
   while IFS= read -r csv_image; do
     # Skip empty or null lines
     if [[ -z "$csv_image" || "$csv_image" == "null" ]]; then
@@ -169,6 +191,7 @@ validate_file() {
       short_sha=$(echo "$csv_sha" | cut -c1-15)
       echo "  ✓ $normalized_component: $short_sha matches $snapshot_name"
       matched=$((matched + 1))
+      echo "$snapshot_name" >> "$tmpdir/matched_components.txt"
     fi
   done < "$tmpdir/csv_images.txt"
 
@@ -197,6 +220,23 @@ validate_file() {
     exit 1
   fi
 
+  # Each snapshot component must be proven by a CSV image, or a component dropped
+  # from the CSV would pass. subctl is the only one the bundle doesn't deploy, and
+  # metrics-proxy has no component of its own: its image is nettest's, checked above.
+  unreferenced=0
+  while IFS='|' read -r component_name _; do
+    [[ "$component_name" == subctl* ]] && continue
+    if ! grep -qxF "$component_name" "$tmpdir/matched_components.txt"; then
+      echo "ERROR: snapshot component '$component_name' has no matching CSV image"
+      unreferenced=$((unreferenced + 1))
+    fi
+  done < "$tmpdir/snapshot_components.txt"
+
+  if [[ $unreferenced -gt 0 ]]; then
+    rm -rf "$tmpdir"
+    exit 1
+  fi
+
   if [[ $skipped -gt 0 ]]; then
     echo "✓ Validated $matched images ($skipped skipped)"
   else
@@ -205,8 +245,16 @@ validate_file() {
   rm -rf "$tmpdir"
 }
 
-# Main - support both single-file and all-files modes
-if [[ $# -gt 0 && -n "$1" ]]; then
+# Main - support snapshot, single-file and all-files modes
+if [[ "${1:-}" == "--snapshot" ]]; then
+  if [[ -z "${2:-}" ]]; then
+    echo "ERROR: --snapshot requires a snapshot name"
+    exit 1
+  fi
+  validate_snapshot "${3:-submariner-tenant}" "$2" false
+  echo ""
+  echo "Snapshot validation passed"
+elif [[ $# -gt 0 && -n "$1" ]]; then
   # Single file mode - validate the provided file
   file="$1"
   if [[ ! -f "$file" ]]; then

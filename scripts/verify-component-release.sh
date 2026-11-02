@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Verify component release readiness
 #
-# Usage: verify-component-release.sh <version>
+# Usage: verify-component-release.sh <version> [snapshot | --list]
 #
 # Arguments:
-#   version: Submariner version (e.g., 0.22.1 or 0.22)
+#   version:  Submariner version (e.g., 0.22.1 or 0.22)
+#   snapshot: verify this snapshot instead of the newest one
+#   --list:   print the newest 20 qualifying snapshots, newest
+#             first, as "<name> <bundle digest>" lines, and verify nothing
 #
 # Output:
 #   stderr: Diagnostic output (✓/✗ messages)
@@ -13,6 +16,7 @@
 # Exit codes:
 #   0: Success (verification passed)
 #   1: Failure (no snapshot found or verification failed)
+#   2: Snapshots could not be read (retry)
 
 set -euo pipefail
 
@@ -20,14 +24,17 @@ set -euo pipefail
 # Argument Parsing and Version Detection
 # ============================================================================
 
-if [ $# -ne 1 ]; then
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
   echo "❌ ERROR: Invalid number of arguments" >&2
-  echo "Usage: $0 <version>" >&2
+  echo "Usage: $0 <version> [snapshot | --list]" >&2
   echo "Example: $0 0.22.1" >&2
   exit 1
 fi
 
 VERSION="$1"
+SNAPSHOT_ARG="${2:-}"
+# The same window bundle-image-update.sh searches for a passing snapshot.
+SNAPSHOT_WINDOW=20
 
 # Validate version format (X.Y or X.Y.Z)
 if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
@@ -54,29 +61,50 @@ echo "" >&2
 
 echo "Querying Konflux for component snapshots..." >&2
 
-# Batched query (1 API call instead of many)
+# Batched query (1 API call instead of many); a named snapshot is read alone.
 # Use `if ! VAR=$(...)` so a failed oc call surfaces this error: a bare
 # `VAR=$(cmd)` under set -e aborts the script silently before the guard runs.
 # `|| [ -z ... ]` also catches an empty-but-rc0 result.
-if ! ALL_SNAPSHOTS=$(oc get snapshots -n submariner-tenant -o json 2>/dev/null) \
+if [ -n "$SNAPSHOT_ARG" ] && [ "$SNAPSHOT_ARG" != "--list" ]; then
+  QUERY=(oc get snapshot "$SNAPSHOT_ARG" -n submariner-tenant -o json)
+else
+  QUERY=(oc get snapshots -n submariner-tenant -o json)
+fi
+if ! ALL_SNAPSHOTS=$("${QUERY[@]}" 2>/dev/null | jq 'if .items then . else {items: [.]} end') \
    || [ -z "$ALL_SNAPSHOTS" ]; then
   echo "❌ ERROR: Failed to query snapshots from cluster" >&2
   echo "Check: oc login status and network connectivity" >&2
-  exit 1
+  exit 2
 fi
 
 # Filter to component snapshots for this version
 # - Name matches: submariner-0-X-*
 # - Event type: push (not PR builds)
-# - Sort by creation timestamp, take latest
-SNAPSHOT_NAME=$(echo "$ALL_SNAPSHOTS" | jq -r "
-  .items[]
-  | select(.metadata.name | startswith(\"submariner-${VERSION_MAJOR_MINOR_DASH}-\"))
-  | select(.metadata.labels.\"pac.test.appstudio.openshift.io/event-type\" == \"push\" or .metadata.labels.\"pac.test.appstudio.openshift.io/event-type\" == \"incoming\" or .metadata.labels.\"pac.test.appstudio.openshift.io/event-type\" == \"retest-all-comment\")
-  | {name: .metadata.name, created: .metadata.creationTimestamp}
-" | jq -rs 'sort_by(.created) | reverse | .[0].name' 2>/dev/null)
+# - Sort by creation timestamp, newest first
+CANDIDATES=$(echo "$ALL_SNAPSHOTS" | jq -r \
+  --arg prefix "submariner-${VERSION_MAJOR_MINOR_DASH}-" \
+  --arg bundle "submariner-bundle-${VERSION_MAJOR_MINOR_DASH}" \
+  --argjson n "$SNAPSHOT_WINDOW" '
+  [.items[]
+  | select(.metadata.name | startswith($prefix))
+  | select(.metadata.labels."pac.test.appstudio.openshift.io/event-type"
+      | IN("push", "incoming", "retest-all-comment"))]
+  | sort_by(.metadata.creationTimestamp) | reverse | .[:$n][]
+  | "\(.metadata.name) \([.spec.components[]? | select(.name == $bundle)
+      | .containerImage | capture("(?<d>sha256:[a-f0-9]+)").d][0] // "-")"
+' 2>/dev/null) || CANDIDATES=""
 
-if [ -z "$SNAPSHOT_NAME" ] || [ "$SNAPSHOT_NAME" = "null" ]; then
+if [ "$SNAPSHOT_ARG" = "--list" ]; then
+  [ -z "$CANDIDATES" ] || printf '%s\n' "$CANDIDATES"
+  exit 0
+fi
+SNAPSHOT_NAME=$(echo "$CANDIDATES" | head -1 | cut -d' ' -f1)
+
+if [ -z "$SNAPSHOT_NAME" ] && [ -n "$SNAPSHOT_ARG" ]; then
+  echo "❌ ERROR: $SNAPSHOT_ARG is not a push snapshot for version $VERSION_MAJOR_MINOR" >&2
+  exit 1
+fi
+if [ -z "$SNAPSHOT_NAME" ]; then
   echo "❌ ERROR: No passing component snapshot found for version $VERSION_MAJOR_MINOR" >&2
   echo "" >&2
   echo "Possible causes:" >&2

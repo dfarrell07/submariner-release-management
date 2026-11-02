@@ -619,7 +619,7 @@ assert_contains "verify_ecFixes not logged in → stderr mentions login" "$ec_di
 [ -n "$_orig_oc" ] && eval "$_orig_oc" || unset -f oc
 
 # 23/24: verify_createBranches / verify_upstreamRelease emit git evidence
-# Mock _git_ls_remote (the thin wrapper in autorelease.sh) rather than git itself
+# Mock _git_ls_remote (the thin wrapper in lib/upstream-tags.sh) rather than git itself
 # so that the timeout 30 prefix in the real function does not bypass the mock.
 _orig_git_ls_remote=$(declare -f _git_ls_remote 2>/dev/null || echo "")
 _MOCK_LSREMOTE=''

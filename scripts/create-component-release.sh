@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # Create component release (stage or prod)
 #
-# Usage: create-component-release.sh <version> [stage|prod]
+# Usage: create-component-release.sh <version> [stage|prod] [--snapshot <name>]
 #
 # Arguments:
 #   version: Submariner version (e.g., 0.22.1 or 0.22)
 #   [stage|prod]: Release type (default: stage)
+#   --snapshot <name>: stage only. Release this snapshot instead of choosing one;
+#     it must still pass every check
+#
+# Environment:
+#   ALLOW_PRE_TAG_CANDIDATE=true: let stage continue without v<version> on all five
+#     component repos (warns)
+#   ALLOW_EMPTY_RELEASE_NOTES=true: let prod continue when the stage YAML has no
+#     issues or CVEs (warns)
 #
 # Exit codes:
 #   0: Success (release created and committed)
@@ -15,9 +23,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# shellcheck source=lib/upstream-tags.sh
+source "$SCRIPT_DIR/lib/upstream-tags.sh"
+
 # Global variables (set by parse_arguments)
 VERSION=""
 RELEASE_TYPE="stage"
+SNAPSHOT_ARG=""
 GIT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SCRIPTS_DIR=""
 
@@ -37,6 +49,7 @@ check_prerequisites() {
   command -v oc &>/dev/null || MISSING_TOOLS+=("oc")
   command -v jq &>/dev/null || MISSING_TOOLS+=("jq")
   command -v git &>/dev/null || MISSING_TOOLS+=("git")
+  command -v yq &>/dev/null || MISSING_TOOLS+=("yq")
 
   if [ "${#MISSING_TOOLS[@]}" -gt 0 ]; then
     echo "❌ ERROR: Missing required tools: ${MISSING_TOOLS[*]}"
@@ -47,31 +60,26 @@ check_prerequisites() {
         oc) echo "  oc: https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html" ;;
         jq) echo "  jq: https://jqlang.github.io/jq/download/" ;;
         git) echo "  git: https://git-scm.com/downloads" ;;
+        yq) echo "  yq: https://github.com/mikefarah/yq" ;;
       esac
     done
     exit 1
   fi
 
-  # Check oc authentication (only for stage/prod that need snapshot)
-  if [ "$RELEASE_TYPE" = "stage" ]; then
-    if oc whoami &>/dev/null; then
-      :  # Already authenticated
-    else
-      echo ""
-      echo "============================================"
-      echo "ERROR: Not authenticated with Konflux"
-      echo "============================================"
-      echo "This script requires oc authentication."
-      echo "Run: oc login --web https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443/"
-      echo ""
-      exit 1
-    fi
+  # Check oc authentication: stage and prod both read the snapshot
+  if ! oc whoami &>/dev/null; then
+    echo ""
+    echo "============================================"
+    echo "ERROR: Not authenticated with Konflux"
+    echo "============================================"
+    echo "This script requires oc authentication."
+    echo "Run: oc login --web https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443/"
+    echo ""
+    exit 1
   fi
 
-  echo "✓ Prerequisites verified: oc, jq, git"
-  if oc whoami &>/dev/null; then
-    echo "✓ Authenticated with Konflux as: $(oc whoami)"
-  fi
+  echo "✓ Prerequisites verified: oc, jq, git, yq"
+  echo "✓ Authenticated with Konflux as: $(oc whoami)"
 }
 
 # ============================================================================
@@ -79,13 +87,30 @@ check_prerequisites() {
 # ============================================================================
 
 show_usage() {
-  echo "Usage: $0 <version> [stage|prod]"
+  echo "Usage: $0 <version> [stage|prod] [--snapshot <name>]"
   echo "Example: $0 0.22.1"
   echo "Example: $0 0.22.1 stage"
+  echo "Example: $0 0.22.1 stage --snapshot submariner-0-22-xxxxx"
   echo "Example: $0 0.22.1 prod"
 }
 
 parse_arguments() {
+  local args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --snapshot)
+        if [ -z "${2:-}" ]; then
+          echo "❌ ERROR: --snapshot requires a snapshot name"
+          show_usage
+          exit 1
+        fi
+        SNAPSHOT_ARG="$2"
+        shift 2
+        ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  set -- "${args[@]}"
   local VERSION_ARG="${1:-}"
   local TYPE_ARG="${2:-}"
 
@@ -125,6 +150,11 @@ parse_arguments() {
       show_usage
       exit 1
     fi
+  fi
+
+  if [ -n "$SNAPSHOT_ARG" ] && [ "$RELEASE_TYPE" = "prod" ]; then
+    echo "❌ ERROR: --snapshot is for stage only: prod releases the stage snapshot"
+    exit 1
   fi
 
   echo ""
@@ -203,6 +233,22 @@ verify_release() {
       echo "Run stage creation first: $0 $VERSION stage"
       exit 1
     fi
+    # Prod copies the stage notes and componentProd depends on releaseNotes. Only
+    # prod stops: stage is generated with an empty placeholder and may be applied
+    # before notes exist so FBC work can proceed. Zero issues is plausible but also
+    # the signature of an untriaged backlog, so continuing takes an explicit choice.
+    local NOTE_COUNT
+    NOTE_COUNT=$(yq '((.spec.data.releaseNotes.issues.fixed // []) | length) + ((.spec.data.releaseNotes.cves // []) | length)' \
+      "$STAGE_YAML" 2>/dev/null) || NOTE_COUNT=0
+    if [ "${NOTE_COUNT:-0}" = "0" ]; then
+      if [ "${ALLOW_EMPTY_RELEASE_NOTES:-}" != "true" ]; then
+        echo "❌ ERROR: $STAGE_YAML has no release notes to copy to prod"
+        echo "Add them first (Step 9): make add-release-notes VERSION=$VERSION"
+        echo "If this release really has no issues or CVEs, re-run with ALLOW_EMPTY_RELEASE_NOTES=true."
+        exit 1
+      fi
+      echo "⚠️  WARNING: continuing with no release notes because ALLOW_EMPTY_RELEASE_NOTES=true." >&2
+    fi
     SNAPSHOT_NAME=$(grep "snapshot:" "$STAGE_YAML" | awk '{print $2}')
     echo "Using snapshot from stage: $SNAPSHOT_NAME"
     echo ""
@@ -214,9 +260,15 @@ verify_release() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
 
-  # Call verification script
+  if [ -z "$SNAPSHOT_ARG" ]; then
+    select_snapshot
+    return 0
+  fi
+
+  # An explicit snapshot is checked like any other, and never replaced.
+  echo "Using snapshot passed with --snapshot: $SNAPSHOT_ARG"
   local VERIFY_JSON VERIFY_EXIT
-  VERIFY_JSON=$("$SCRIPTS_DIR/verify-component-release.sh" "$VERSION" 2>&1) && VERIFY_EXIT=0 || VERIFY_EXIT=$?
+  VERIFY_JSON=$("$SCRIPTS_DIR/verify-component-release.sh" "$VERSION" "$SNAPSHOT_ARG" 2>&1) && VERIFY_EXIT=0 || VERIFY_EXIT=$?
 
   if [ $VERIFY_EXIT -ne 0 ]; then
     echo "$VERIFY_JSON"
@@ -244,6 +296,89 @@ verify_release() {
   SNAPSHOT_NAME=$(echo "$VERIFY_RESULT" | jq -r '.snapshot')
 
   echo ""
+}
+
+# ============================================================================
+# Snapshot selection (stage without --snapshot)
+# ============================================================================
+#
+# One bundle merge can produce several snapshots, and one can pair the rebuilt
+# bundle with a component build its CSV doesn't reference: on 0.25.0 a bundle
+# push also rebuilt the operator. Walk the newest snapshots and take the first
+# that passes verify-component-release.sh and the bundle digest check. The walk
+# stops at an older bundle: falling back past the newest bundle build could undo
+# the SHA bump, and the freshness gate below can't see that without a tracker.
+# A read failure stops rather than skips, so it can't promote an older snapshot.
+_selection_read_failure() {
+  echo "❌ ERROR: could not read snapshot $1 or its bundle; no snapshot was chosen." >&2
+  echo "   Check oc login and registry access, then re-run to retry." >&2
+  exit 1
+}
+
+select_snapshot() {
+  local mm_dash="${VERSION%.*}" list rc=0
+  mm_dash="${mm_dash//./-}"
+  SNAPSHOT_NAME=""
+  list=$("$SCRIPTS_DIR/verify-component-release.sh" "$VERSION" --list 2>/dev/null) || rc=$?
+  [ "$rc" -le 1 ] || _selection_read_failure "list"
+  if [ -z "$list" ]; then
+    echo "❌ ERROR: no push snapshot found for ${VERSION%.*}" >&2
+    echo "   Check: oc get snapshots -n submariner-tenant | grep submariner-$mm_dash" >&2
+    exit 1
+  fi
+
+  local name bundle newest_bundle="" out verify_out skips=() mismatch_out=""
+  while read -r name bundle; do
+    if [ "$bundle" = "-" ]; then
+      skips+=("$name: no bundle")
+      continue
+    fi
+    newest_bundle=${newest_bundle:-$bundle}
+    if [ "$bundle" != "$newest_bundle" ]; then
+      echo "  Stopped at $name: it and older snapshots have an earlier bundle build"
+      break
+    fi
+    rc=0
+    verify_out=$("$SCRIPTS_DIR/verify-component-release.sh" "$VERSION" "$name" 2>&1) || rc=$?
+    if [ "$rc" -eq 1 ]; then
+      skips+=("$name: failing tests or missing components")
+      continue
+    fi
+    [ "$rc" -eq 0 ] || _selection_read_failure "$name"
+    rc=0
+    out=$("$SCRIPTS_DIR/validate-bundle-images.sh" --snapshot "$name" 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      SNAPSHOT_NAME="$name"
+      break
+    fi
+    [ "$rc" -eq 1 ] || { echo "$out" >&2; _selection_read_failure "$name"; }
+    skips+=("$name: component digests don't match its bundle CSV")
+    [ -n "$mismatch_out" ] || mismatch_out="Newest mismatching candidate $name:"$'\n'"$out"
+  done <<<"$list"
+
+  if [ -n "$SNAPSHOT_NAME" ]; then
+    echo "$verify_out" | head -n -1
+    echo "$out"
+    echo ""
+    echo "✓ Chose snapshot $SNAPSHOT_NAME (skipped ${#skips[@]} newer)"
+    [ "${#skips[@]}" -eq 0 ] || printf '    %s\n' "${skips[@]}"
+    echo ""
+    return 0
+  fi
+
+  echo "" >&2
+  echo "❌ ERROR: no recent ${VERSION%.*} snapshot with the newest bundle passes every check." >&2
+  [ "${#skips[@]}" -eq 0 ] || printf '    %s\n' "${skips[@]}" >&2
+  if [ -n "$mismatch_out" ]; then
+    printf '\n%s\n\n' "$mismatch_out" >&2
+    echo "   A component was rebuilt after the bundle SHA bump. An operator build without" >&2
+    echo "   file filters rebuilds on every bundle push (submariner-io/submariner-operator#4325)." >&2
+    echo "   Fix: update the bundle SHAs again (Step 7) from a current snapshot, merge," >&2
+    echo "   wait for the bundle rebuild, then re-run." >&2
+  else
+    echo "   Details: scripts/verify-component-release.sh $VERSION <snapshot>" >&2
+  fi
+  exit 1
 }
 
 # ============================================================================
@@ -332,6 +467,30 @@ assert_bundle_rebuilt() {
   fi
 
   echo "✓ Bundle freshness: submariner-bundle rebuilt since bundleShas (${chosen_digest:0:19}…)" >&2
+}
+
+# ============================================================================
+# Bundle digest gate (stage and prod)
+# ============================================================================
+#
+# A snapshot can pair a bundle with component builds its CSV does not reference.
+# Check before generating anything; a failed read stops too, so this fails closed.
+assert_bundle_digests() {
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "Checking snapshot digests against the bundle CSV"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+  if "$SCRIPTS_DIR/validate-bundle-images.sh" --snapshot "$SNAPSHOT_NAME"; then
+    echo ""
+    return 0
+  fi
+  echo "" >&2
+  echo "❌ ERROR: snapshot $SNAPSHOT_NAME failed the bundle digest check (see above)." >&2
+  echo "   No release YAML was created." >&2
+  echo "   Mismatch: do not release this snapshot. Use one whose bundle references its" >&2
+  echo "   component builds; stage without --snapshot chooses one." >&2
+  echo "   Read failure: check oc login and registry access, then re-run to retry." >&2
+  exit 1
 }
 
 # ============================================================================
@@ -513,10 +672,14 @@ Release notes: Copied from stage (QE-verified)"
 # ============================================================================
 
 main() {
-  # parse_arguments must run first: it sets RELEASE_TYPE (which check_prerequisites
-  # branches on for the oc-auth check) and SCRIPTS_DIR (used by the tracker source).
+  # parse_arguments must run first: it sets RELEASE_TYPE and SCRIPTS_DIR (used by
+  # the tracker source).
   parse_arguments "$@"
   check_prerequisites
+  # Candidates usually share one bundle: extract its manifests once.
+  BUNDLE_CACHE_DIR=$(mktemp -d)
+  export BUNDLE_CACHE_DIR
+  trap 'rm -rf "$BUNDLE_CACHE_DIR"' EXIT
 
   # Tracker integration
   TRACKER_LIB="${TRACKER_LIB:-$SCRIPTS_DIR/lib/jira-tracker.sh}"
@@ -526,7 +689,9 @@ main() {
   [ -f "$SCRIPTS_DIR/lib/git-utils.sh" ] && source "$SCRIPTS_DIR/lib/git-utils.sh" 2>/dev/null || true
   TRACKER=$(find_release_tracker "$VERSION" 2>/dev/null || true)
   STEP_KEY=$( [ "$RELEASE_TYPE" = "prod" ] && echo "componentProd" || echo "componentStage" )
-  [ -n "${TRACKER:-}" ] && update_step "$VERSION" "$STEP_KEY" "in_progress" '{}' "$TRACKER"
+  if [ "$RELEASE_TYPE" = "stage" ]; then
+    require_upstream_tag "$VERSION" "$STEP_KEY" || exit 1
+  fi
 
   # Phase 3: QE gate check for prod releases. get_step returns non-zero on a
   # tracker READ failure and empty output when the step is genuinely absent, so
@@ -551,6 +716,14 @@ main() {
   fi
 
   verify_release
+  # Both bundle gates run before the idempotency check: in a respin run before the
+  # bundle rebuild, selection falls back to the snapshot already released, and
+  # that must stop as a stale bundle, not complete the step.
+  assert_bundle_rebuilt
+  # Selection already checked an automatically chosen snapshot's digests.
+  if [ "$RELEASE_TYPE" = "prod" ] || [ -n "$SNAPSHOT_ARG" ]; then
+    assert_bundle_digests
+  fi
 
   # Idempotency: if a Release CR for this snapshot is already Succeeded on the
   # cluster, the step was already applied in a previous run. Mark it complete so
@@ -579,7 +752,8 @@ main() {
     fi
   fi
 
-  assert_bundle_rebuilt
+  # Mark in progress only once every stop has passed.
+  [ -n "${TRACKER:-}" ] && update_step "$VERSION" "$STEP_KEY" "in_progress" '{}' "$TRACKER"
   generate_yaml
   validate_yaml
   commit_changes

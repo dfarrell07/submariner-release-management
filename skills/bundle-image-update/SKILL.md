@@ -33,6 +33,12 @@ make bundle-image-update VERSION=0.21.2
 **Requirements:** `~/go/src/submariner-io/submariner-operator` must exist on a release branch.
 Must be logged into Konflux cluster. Bash 4.0+.
 
+**Upstream tag:** the script stops unless `v$VERSION` is on all five component repos. Set
+`ALLOW_PRE_TAG_CANDIDATE=true` for the initial pre-tag update in Y-stream setup (Step 3b), or when
+the user explicitly asks for a pre-tag candidate. It isn't needed once the tag exists. Otherwise,
+if the script stops for a missing tag, report that and stop. The override warns. A failed GitHub
+check always stops: retry it.
+
 ## Inputs and execution
 
 The version is optional and may be `X.Y` or `X.Y.Z`. The optional snapshot form

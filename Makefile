@@ -35,9 +35,11 @@ help:
 	@echo "                           Default TYPE is stage if not specified"
 	@echo "                           Example: make create-fbc-releases VERSION=0.22.1"
 	@echo "                           Example: make create-fbc-releases VERSION=0.22.1 TYPE=prod"
-	@echo "  make create-component-release VERSION=... [TYPE=stage|prod]"
+	@echo "  make create-component-release VERSION=... [TYPE=stage|prod] [SNAPSHOT=...]"
 	@echo "                         - Create component release (requires oc login)"
 	@echo "                           Default TYPE is stage if not specified"
+	@echo "                           Stage picks the newest snapshot whose digests match its bundle;"
+	@echo "                           SNAPSHOT (stage only) names one instead, still checked"
 	@echo "                           Example: make create-component-release VERSION=0.22.1"
 	@echo "                           Example: make create-component-release VERSION=0.22.1 TYPE=prod"
 	@echo "  make update-version-labels VERSION=... [REPO=...]"
@@ -148,7 +150,7 @@ create-fbc-releases:
 
 create-component-release:
 	@test -n "$(VERSION)" || (echo "ERROR: VERSION parameter required. Usage: make create-component-release VERSION=0.22.1 [TYPE=stage|prod]" && exit 1)
-	./scripts/create-component-release.sh $(VERSION) $(if $(TYPE),$(TYPE),stage)
+	./scripts/create-component-release.sh $(VERSION) $(if $(TYPE),$(TYPE),stage) $(if $(SNAPSHOT),--snapshot $(SNAPSHOT),)
 
 update-version-labels:
 	@test -n "$(VERSION)" || (echo "ERROR: VERSION required. Usage: make update-version-labels VERSION=0.23.1 [REPO=subctl]" && exit 1)
@@ -220,6 +222,7 @@ test-tracker:
 test-autorelease:
 	./scripts/lib/test-autorelease.sh
 	./scripts/lib/test-auto-push.sh
+	./scripts/lib/test-upstream-tags.sh
 
 test-conductor:
 	./scripts/lib/test-conductor-integration.sh

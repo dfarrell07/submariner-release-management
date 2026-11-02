@@ -595,10 +595,10 @@ try_auto_verify() {
 
 readonly SUBMARINER_UPSTREAM_REPOS="submariner-operator submariner lighthouse shipyard subctl admiral cloud-prepare"
 
-# Thin wrapper around `git ls-remote` with a hard 30-second timeout to prevent
-# firewall-silent TCP drops from stalling the conductor indefinitely.  Tests
-# override this function to inject mock output without touching the PATH.
-_git_ls_remote() { timeout 30 git ls-remote "$@"; }
+# _git_ls_remote and verify_upstreamRelease: shared with the scripts that
+# stop when the upstream tag is missing.
+# shellcheck source=lib/upstream-tags.sh
+source "$SCRIPT_DIR/lib/upstream-tags.sh"
 
 verify_createBranches() {
   local major_minor="${1%.*}"
@@ -620,31 +620,6 @@ verify_createBranches() {
   # Record the branch and the operator-repo head so the tracker shows what was seen.
   jq -cn --arg branch "release-$major_minor" --arg sha "$operator_sha" '{branch:$branch,operatorSha:$sha}'
   return 0
-}
-
-verify_upstreamRelease() {
-  local version="$1"
-  # Check only the 5 repos that receive v$VERSION tags per cut-upstream-release.md:
-  # submariner-operator (checked separately in step 3 of the workflow), plus the 4
-  # repos verified in step 4 of the workflow.  Excludes admiral and cloud-prepare
-  # (library repos present in SUBMARINER_UPSTREAM_REPOS that do not produce
-  # deliverable images) and submariner-charts (an installer/charts repo).
-  local component_repos="submariner-operator submariner lighthouse shipyard subctl"
-  local operator_sha=""
-  for repo in $component_repos; do
-    local ls_out ls_rc=0
-    ls_out=$(_git_ls_remote --tags "https://github.com/submariner-io/$repo" "refs/tags/v$version" 2>/dev/null) || ls_rc=$?
-    if [ "$ls_rc" -ne 0 ]; then
-      echo "  ls-remote failed (exit $ls_rc) — network, rate-limit, or timeout issue for submariner-io/$repo" >&2
-      return 2
-    fi
-    if ! echo "$ls_out" | grep -q "refs/tags/v$version"; then
-      echo "  v$version tag not found on submariner-io/$repo" >&2
-      return 1
-    fi
-    [ "$repo" = "submariner-operator" ] && operator_sha=$(echo "$ls_out" | awk 'NR==1{print $1}')
-  done
-  jq -cn --arg tag "v$version" --arg sha "$operator_sha" '{tag:$tag,operatorSha:$sha}'
 }
 
 # shellcheck source=lib/integration-tests.sh

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for create-component-release.sh's bundle-freshness gate.
+# Tests for create-component-release.sh's snapshot selection and gates.
 # Run: ./scripts/lib/test-component-release.sh
 #
 # Sources the REAL assert_bundle_rebuilt / _bundle_digest (main is guarded by
@@ -7,6 +7,7 @@
 # update_step are stubbed; spy files survive command-substitution subshells so
 # read-only / short-circuit claims are checkable.
 # shellcheck disable=SC2034  # VERSION/RELEASE_TYPE/TRACKER/SNAPSHOT_NAME are read by the sourced gate
+# shellcheck disable=SC2329  # stubs are called by the sourced main
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -124,6 +125,200 @@ assert_contains "unreadable digest → skip notice" "$GATE_OUT" "could not read 
 
 # 9: Read-only across every case above — the write sentinel stayed clean.
 assert_eq "gate is strictly read-only (no update_step)" "$(wc -c <"$WRITE_SPY")" "0"
+
+assert_lacks() {
+  if printf '%s' "$2" | grep -qF -- "$3"; then echo "  ✗ $1 (found: '$3')"; FAIL=$((FAIL + 1))
+  else echo "  ✓ $1"; PASS=$((PASS + 1)); fi
+}
+
+# --- Fixtures: a fake oc over a snapshot list, run by the real scripts ---
+FIX=$(mktemp -d)
+trap 'rm -f "$CLUSTER_SPY" "$TRACKER_SPY" "$WRITE_SPY"; rm -rf "$FIX"' EXIT
+mkdir -p "$FIX/bin" "$FIX/root/releases/0.99/stage"
+export OC_LOG="$FIX/oc.log" FAKE_SNAPSHOTS="$FIX/snapshots.json"
+cat >"$FIX/bin/oc" <<'STUB'
+#!/usr/bin/env bash
+echo "$1 $2 $3" >>"$OC_LOG"
+case "$1 $2" in
+  "get snapshots") cat "$FAKE_SNAPSHOTS" ;;
+  "get snapshot")
+    [ -z "${FAKE_OC_FAIL_GET:-}" ] || exit 1
+    snap=$(jq -e --arg n "$3" '.items[] | select(.metadata.name == $n)' "$FAKE_SNAPSHOTS") || exit 1
+    case "$*" in
+      *jsonpath*) jq -r '.spec.components[] | select(.name | startswith("submariner-bundle")) | .containerImage' <<<"$snap" ;;
+      *) echo "$snap" ;;
+    esac
+    ;;
+  "get release") [ -z "${FAKE_RELEASED:-}" ] || echo True ;;
+  "image extract")
+    [ -z "${FAKE_OC_FAIL_EXTRACT:-}" ] || exit 1
+    for arg in "$@"; do
+      case "$arg" in --path=*) dir="${arg#--path=/manifests/:}" ;; esac
+    done
+    cat "$FAKE_CSV" >"${dir}submariner.clusterserviceversion.yaml"
+    ;;
+esac
+STUB
+chmod +x "$FIX/bin/oc"
+
+R=registry.redhat.io/rhacm2
+cat >"$FIX/good.csv" <<CSV
+spec:
+  relatedImages:
+  - {name: submariner-operator, image: $R/submariner-rhel9-operator@sha256:a1}
+  - {name: submariner-gateway, image: $R/submariner-gateway-rhel9@sha256:a2}
+  - {name: submariner-routeagent, image: $R/submariner-route-agent-rhel9@sha256:a3}
+  - {name: submariner-globalnet, image: $R/submariner-globalnet-rhel9@sha256:a4}
+  - {name: submariner-lighthouse-agent, image: $R/lighthouse-agent-rhel9@sha256:a5}
+  - {name: submariner-lighthouse-coredns, image: $R/lighthouse-coredns-rhel9@sha256:a6}
+  - {name: submariner-nettest, image: $R/nettest-rhel9@sha256:a7}
+  - {name: submariner-metrics-proxy, image: $R/nettest-rhel9@sha256:a7}
+CSV
+export FAKE_CSV="$FIX/good.csv"
+
+# snaps <name:operator digest:bundle digest:test status>...: the snapshot list,
+# newest first. Every other component matches the CSV.
+snaps() {
+  local spec n op b t i=0
+  for spec in "$@"; do
+    IFS=: read -r n op b t <<<"$spec"
+    jq -n --arg n "submariner-0-99-$n" --arg ts "2026-01-01T00:00:$((50 - i))Z" \
+      --arg op "$op" --arg b "$b" --arg t "$t" --arg q quay.io/rh '
+      {metadata: {name: $n, creationTimestamp: $ts,
+         labels: {"pac.test.appstudio.openshift.io/event-type": "push"},
+         annotations: {"test.appstudio.openshift.io/status":
+           ([{scenario: "enterprise-contract", status: $t}] | tojson)}},
+       spec: {components: ([
+         ["submariner-operator", $op], ["submariner-gateway", "a2"], ["submariner-route-agent", "a3"],
+         ["submariner-globalnet", "a4"], ["lighthouse-agent", "a5"], ["lighthouse-coredns", "a6"],
+         ["nettest", "a7"], ["subctl", "a8"], ["submariner-bundle", $b]]
+         | map({name: "\(.[0])-0-99", containerImage: "\($q)/\(.[0])-0-99@sha256:\(.[1])"}))}}'
+    i=$((i + 1))
+  done | jq -s '{items: .}' >"$FAKE_SNAPSHOTS"
+}
+
+VAL_RC=0; VAL_OUT=""
+run_validator() {
+  VAL_RC=0
+  VAL_OUT=$(PATH="$FIX/bin:$PATH" "$SCRIPT_DIR/validate-bundle-images.sh" "$@" 2>&1) || VAL_RC=$?
+}
+
+echo ""
+echo "=== validate-bundle-images.sh --snapshot Tests ==="
+
+snaps snap:a1:b1:TestPassed
+run_validator --snapshot submariner-0-99-snap
+assert_eq "digests match → rc 0" "$VAL_RC" "0"
+for edit in 's/sha256:a1/sha256:ee/' '/submariner-gateway/d' '/metrics-proxy/s/a7/ee/' 's/@sha256:a2/:v0.99/' 'd'; do
+  sed "$edit" "$FIX/good.csv" >"$FIX/variant.csv"
+  FAKE_CSV="$FIX/variant.csv" run_validator --snapshot submariner-0-99-snap
+  assert_eq "CSV edit '$edit' → rc 1" "$VAL_RC" "1"
+done
+FAKE_OC_FAIL_EXTRACT=1 run_validator --snapshot submariner-0-99-snap
+assert_eq "unreadable bundle → rc 2 (retry, not mismatch)" "$VAL_RC" "2"
+mkdir -p "$FIX/cache"; : >"$OC_LOG"
+BUNDLE_CACHE_DIR="$FIX/cache" run_validator --snapshot submariner-0-99-snap
+BUNDLE_CACHE_DIR="$FIX/cache" run_validator --snapshot submariner-0-99-snap
+assert_eq "same bundle → extracted once" "$(grep -c '^image extract' "$OC_LOG")" "1"
+
+echo ""
+echo "=== create-component-release main Tests ==="
+
+# The real main and gates, with tag lookups, tracker writes and the YAML steps
+# stubbed. get_step returns the bundleShas snapshot in _BS_SNAP, if any.
+GIT_ROOT="$FIX/root"
+MAIN_SPY="$FIX/main.spy"
+_git_ls_remote() {
+  [ "$_LS_MODE" = missing ] && [ "${2##*/}" = shipyard ] || printf 'abc\t%s\n' "$3"
+}
+MAIN_RC=0; MAIN_OUT=""; MAIN_CALLS=""
+run_main() {  # <stage|prod> [--snapshot name]
+  : >"$MAIN_SPY"
+  MAIN_RC=0
+  MAIN_OUT=$(
+    _TYPE="$1" _SNAP_ARG="${3:-}" TRACKER_LIB=/nonexistent PATH="$FIX/bin:$PATH" SCRIPTS_DIR="$SCRIPT_DIR"
+    unset -f oc  # the gate tests' stub; main uses the fake oc on PATH
+    parse_arguments() { VERSION=0.99.0; RELEASE_TYPE="$_TYPE"; SNAPSHOT_ARG="$_SNAP_ARG"; }
+    check_prerequisites() { :; }
+    find_release_tracker() { echo ACM-1; }
+    update_step() { echo "update_step $3" >>"$MAIN_SPY"; }
+    get_step() { jq -cn --arg s "${_BS_SNAP:-}" '{status: "complete", data: {snapshot: $s}}'; }
+    generate_yaml() { echo "generate_yaml $SNAPSHOT_NAME" >>"$MAIN_SPY"; }
+    validate_yaml() { :; }
+    commit_changes() { :; }
+    main 2>&1
+  ) || MAIN_RC=$?
+  MAIN_CALLS=$(cat "$MAIN_SPY")
+}
+stage_yaml() {  # <snapshot> <fixed issues as YAML flow>
+  printf 'spec:\n  snapshot: %s\n  data:\n    releaseNotes:\n      issues:\n        fixed: %s\n      cves: []\n' \
+    "$1" "$2" >"$FIX/root/releases/0.99/stage/submariner-0-99-0-stage-20260101-01.yaml"
+}
+stage_yaml submariner-0-99-old '[]'
+
+_LS_MODE=missing run_main stage
+assert_eq "stage, tag missing → stops before any work" "$MAIN_RC:$MAIN_CALLS" "1:"
+_LS_MODE=tagged
+
+snaps new:a1:b1:TestPassed old:a1:b1:TestPassed
+run_main stage
+assert_contains "newest matches → released" "$MAIN_CALLS" "generate_yaml submariner-0-99-new"
+assert_contains "newest matches → no skips" "$MAIN_OUT" "Chose snapshot submariner-0-99-new (skipped 0 newer)"
+
+snaps new:06:b1:TestPassed mid:a1:b1:TestPassed old:a1:b1:TestPassed
+: >"$OC_LOG"
+run_main stage
+assert_contains "newest mismatches → older match released" "$MAIN_CALLS" "generate_yaml submariner-0-99-mid"
+assert_contains "newest mismatches → skip reported" "$MAIN_OUT" "(skipped 1 newer)"
+assert_contains "newest mismatches → skip explained" "$MAIN_OUT" \
+  "    submariner-0-99-new: component digests don't match its bundle CSV"
+assert_eq "auto pick → digests checked once per candidate, bundle extracted once" \
+  "$(grep -c '^image extract' "$OC_LOG"):$(grep -c 'get snapshot submariner-0-99-mid' "$OC_LOG")" "1:2"
+
+snaps new:06:b1:TestPassed mid:07:b1:TestPassed
+run_main stage
+assert_eq       "none match → stops, nothing generated" "$MAIN_RC:$MAIN_CALLS" "1:"
+assert_contains "none match → newest candidate's validator output" "$MAIN_OUT" \
+  "Newest mismatching candidate submariner-0-99-new:"
+assert_contains "none match → points at the operator file filters" "$MAIN_OUT" "submariner-operator#4325"
+
+snaps new:06:b1:TestPassed mid:a1:b1:TestPassed
+FAKE_OC_FAIL_EXTRACT=1 run_main stage
+assert_contains "unreadable bundle → stops to retry, never skips" "$MAIN_OUT" "re-run to retry"
+snaps new:a1:b1:TestFail old:a1:b1:TestPassed
+run_main stage
+assert_contains "failing tests → skipped" "$MAIN_CALLS" "generate_yaml submariner-0-99-old"
+snaps new:06:b2:TestPassed old:a1:b1:TestPassed
+run_main stage
+assert_eq       "earlier bundle build → never a fallback" "$MAIN_RC:$MAIN_CALLS" "1:"
+
+snaps new:06:b1:TestPassed old:a1:b1:TestPassed
+run_main stage --snapshot submariner-0-99-old
+assert_contains "explicit match → released as given" "$MAIN_CALLS" "generate_yaml submariner-0-99-old"
+run_main stage --snapshot submariner-0-99-new
+assert_eq       "explicit mismatch → stops, never replaced" "$MAIN_RC:$MAIN_CALLS" "1:"
+assert_contains "explicit mismatch → explains" "$MAIN_OUT" "failed the bundle digest check"
+
+# Respin before the new bundle rebuild: newer snapshots don't match the old
+# bundle, so selection falls back to the one already released. That is a stale
+# bundle, not a completed step.
+FAKE_RELEASED=1 _BS_SNAP=submariner-0-99-new run_main stage
+assert_eq       "respin before rebuild → stops" "$MAIN_RC" "1"
+assert_contains "respin before rebuild → stale bundle" "$MAIN_OUT" "Stale bundle"
+assert_lacks    "respin before rebuild → step not completed" "$MAIN_CALLS" "update_step complete"
+
+echo ""
+echo "=== Prod Tests ==="
+
+run_main prod
+assert_eq       "prod, empty stage notes → stops" "$MAIN_RC:$MAIN_CALLS" "1:"
+assert_contains "prod, empty stage notes → names the override" "$MAIN_OUT" "ALLOW_EMPTY_RELEASE_NOTES=true"
+ALLOW_EMPTY_RELEASE_NOTES=true run_main prod
+assert_contains "prod, notes override → warns" "$MAIN_OUT" "WARNING: continuing with no release notes"
+assert_contains "prod, notes override → stage snapshot released" "$MAIN_CALLS" "generate_yaml submariner-0-99-old"
+stage_yaml submariner-0-99-new '[{id: ACM-1, source: issues.redhat.com}]'
+run_main prod
+assert_eq       "prod, digest mismatch → stops" "$MAIN_RC:$MAIN_CALLS" "1:"
 
 echo ""
 if [ "$FAIL" -eq 0 ]; then

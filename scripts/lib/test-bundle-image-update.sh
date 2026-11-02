@@ -37,6 +37,28 @@ assert_branch "empty branch refused"         ""                                1
 assert_branch "release prefix substring refused" "release-0.250"              1
 
 echo ""
+echo "=== Upstream Tag Gate Call Site ==="
+
+# A missing tag stops the real main before the step is marked or anything runs.
+# require_upstream_tag itself is covered by test-upstream-tags.sh.
+TAG_RC=0
+TAG_SPY=$(
+  _git_ls_remote() { :; }
+  # shellcheck disable=SC2034  # read by the sourced main
+  TRACKER_LIB=/nonexistent
+  check_prerequisites() { :; }
+  parse_arguments() { TARGET_VERSION=0.25.0; }
+  find_release_tracker() { echo ACM-1; }
+  update_step() { echo update_step; }
+  find_snapshot() { echo find_snapshot; }
+  check_freshness() { :; }; extract_shas() { :; }; print_summary() { :; }
+  check_origin_already_updated() { return 0; }
+  main 2>/dev/null
+) || TAG_RC=$?
+if [ "$TAG_RC" = 1 ] && [ -z "$TAG_SPY" ]; then echo "  ✓ missing tag stops before any work"; PASS=$((PASS + 1))
+else echo "  ✗ missing tag stops before any work (rc $TAG_RC, ran: $TAG_SPY)"; FAIL=$((FAIL + 1)); fi
+
+echo ""
 echo "=== find_snapshot Stale-Snapshot Warning Tests ==="
 
 # Set up globals required by find_snapshot (sourced from bundle-image-update.sh).

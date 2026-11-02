@@ -10,6 +10,8 @@
 #
 # What it does:
 #   - Navigates to submariner-operator repo (auto-detects or uses default path)
+#   - Stops if v<target> is not on all five component repos, unless
+#     ALLOW_PRE_TAG_CANDIDATE=true is set (warns)
 #   - Queries Konflux for latest passing snapshot (or uses --snapshot arg)
 #   - Extracts 7 component SHAs (8 total with metrics-proxy duplicate)
 #   - Updates config/manager/patches/related-images.deployment.config.yaml
@@ -68,6 +70,9 @@ die() {
   [ -n "${2:-}" ] && echo "$2"
   exit 1
 }
+
+# shellcheck source=lib/upstream-tags.sh
+source "$SCRIPT_DIR/lib/upstream-tags.sh"
 
 # ━━━ STEP 0: PREREQUISITES AND ARGUMENTS ━━━
 
@@ -741,6 +746,7 @@ main() {
   # shellcheck source=/dev/null
   [ -f "$TRACKER_LIB" ] && source "$TRACKER_LIB" 2>/dev/null || true
   TRACKER=$(find_release_tracker "${TARGET_VERSION:-}" 2>/dev/null || true)
+  require_upstream_tag "$TARGET_VERSION" "bundleShas" || exit 1
   [ -n "${TRACKER:-}" ] && update_step "$TARGET_VERSION" "bundleShas" "in_progress" '{}' "$TRACKER"
 
   # CVE recheck gate

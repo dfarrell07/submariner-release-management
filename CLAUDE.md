@@ -39,6 +39,9 @@ Release scripts automatically update tracker subtasks as they complete.
 
 **Alternative:** `make konflux-bundle-setup VERSION=<version>`
 
+The initial bundle SHA update here runs before the upstream tag exists, so it uses `ALLOW_PRE_TAG_CANDIDATE=true`. The override
+isn't needed once the tag exists.
+
 ## 4. Update Tekton Tasks and Resolve EC Violations
 
 @/konflux-ci-fix
@@ -83,9 +86,15 @@ downstream candidate separately. See
 
 **Alternative:** `make bundle-image-update VERSION=<version>` or @.agents/workflows/update-bundle-shas.md (manual workflow)
 
+**Stops if `v$VERSION` is not on all 5 component repos.** A deliberate pre-tag candidate takes an explicit
+`ALLOW_PRE_TAG_CANDIDATE=true`, which warns.
+
 ## 8. Create Component Stage Release
 
 @.agents/workflows/create-release.md
+
+**Stops if `v$VERSION` is missing,** as in Step 7. The script picks the newest recent snapshot whose component digests match
+the bundle CSV, and reports what it skipped; it stops if none does, or if a snapshot passed with `--snapshot` doesn't.
 
 ## 9. Add Release Notes
 
@@ -131,6 +140,9 @@ See `.agents/workflows/add-release-notes.md` for workflow details.
 ## 15. Create Component Prod Release
 
 @.agents/workflows/create-prod-release.md
+
+**Stops if the latest stage YAML has no release notes,** unless `ALLOW_EMPTY_RELEASE_NOTES=true` is set (warns), or if the
+snapshot's component digests don't match the bundle CSV.
 
 ## 16. Apply Component Prod Release
 
