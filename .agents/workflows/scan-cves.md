@@ -35,15 +35,29 @@ base images (today nettest's `ubi9`); see `skills/rpm-lockfile-update/SKILL.md`.
 
 ### Addon Go Toolchain
 
-Fix Go toolchain CVEs by updating `Dockerfile.konflux` builder image.
-
 **Repo:** <https://github.com/stolostron/submariner-addon>
 **Local:** `~/go/src/stolostron/submariner-addon`
 
+Identify the effective build path before editing: Konflux uses `Dockerfile.konflux`, OpenShift CI
+uses `Dockerfile`, and ART image/stream configuration may override source, builder and runtime.
+
 ```bash
-skopeo list-tags docker://brew.registry.redhat.io/rh-osbs/openshift-golang-builder | \
-  jq -r '.Tags[] | select(contains("el9"))' | sort -Vr | head -10
+skopeo list-tags docker://registry.redhat.io/openshift/golang-builder
 ```
+
+Choose a builder from the `golang-builder-v<Go-minor>-rhel<major>` tag family documented in
+[ACM-45149](https://redhat.atlassian.net/browse/ACM-45149) that meets module and security-fix requirements.
+Preserve the build path's compiler lineage, runtime base, OS/CPU and crypto requirements,
+CGO/strict-FIPS settings and hermetic build flags.
+Explicit `-mod=mod` overrides the builder's `GOFLAGS=-mod=vendor` default.
+
+Verify registry access in the actual build environment. Run **images** for ordinary Dockerfile changes
+and the required Konflux checks for Konflux changes. Qualify the merged-source output image digests
+on required platforms using existing deployment and crypto/FIPS checks; `--version` only checks loading.
+
+Keep source, builder/runtime/output digests, compiler and CI evidence with the CVE or migration tracker.
+[Go can select another toolchain](https://go.dev/doc/toolchain); confirm it with `GOTOOLCHAIN` and the
+binary's `go version -m` output. Record unavailable checks and hold release use until required checks pass.
 
 ## Done When
 

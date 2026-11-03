@@ -1,6 +1,6 @@
 # Submariner Release Management
 
-Submariner release orchestration via Konflux.
+Submariner release orchestration via Konflux. See the [current work map](plans/current-work.md) for planning and release handoffs.
 
 ## Usage
 

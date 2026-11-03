@@ -1,6 +1,6 @@
 # Submariner FBC rollout to OCP 5.0
 
-Reviewed October 26, 2026. Tracking: [ACM-48200][delivery]. Release management
+Execution observations below are dated October 26, 2026. Tracking: [ACM-48200][delivery]. Release management
 owns the automated installation test; QE follows the normal stage handoff.
 Use the [onboarding workflow][onboarding] for mechanics. Keep one candidate
 record linked from ACM-48200: bundle/channel, source SHA, push build, snapshot,
@@ -16,8 +16,14 @@ Name these owners in ACM-48200 now, because later sections depend on them: the
 reviewer for the cluster-profile change, the owner of the Pyxis FBC opt-in, and the
 QE approver.
 
-The initial candidate is Submariner **0.24.1**, channel **stable-0.24**, for
-OCP **5.0**. [FBC PR #81][catalog] merged the catalog and tooling;
+The October 26 candidate was Submariner **0.24.1**, channel **stable-0.24**, for
+OCP **5.0**. A later [0.25.0 stage record](../releases/fbc/5-0/stage/submariner-fbc-5-0-0-25-0-stage-20261102-01.yaml)
+is now committed. That YAML alone proves preparation, not application, installation,
+QE approval or publication. Select the intended release version and candidate record
+before executing this runbook; replace every version, channel and snapshot example
+below consistently and refresh the live prerequisites.
+
+For the October 26 candidate, [FBC PR #81][catalog] merged the catalog and tooling;
 [FBC PR #82][pipelines] merged the four-platform build (`amd64`, `arm64`,
 `ppc64le`, `s390x`) using the OCP 5 RHEL9 registry base and lifecycle injection.
 Confirm the intended bundle digest against the approved component release
@@ -28,7 +34,10 @@ Status as of October 26, 2026. Tenant resources and admissions have reconciled.
 FBC PR #82 merged as `13b7416`; its push build produced snapshot
 `submariner-fbc-5-0-20261026-144157-000` and image digest
 `sha256:6bd0ce2161ac…` (the [PR build][pr-build] for head `897c64a` had already passed on all four platforms).
-The [cluster-profile PR][profile] and [helper PR #120][helper] are still open.
+The [cluster-profile PR][profile] and [helper PR #120][helper] were open at that
+cutoff. By November 3, #120 and [FBC PR #86][lifecycle-builds] had merged October 27,
+and the cluster-profile change October 29. Use the merged helper and verify live
+profile access and the selected build; merged prerequisites do not qualify a candidate.
 
 The optional operator scenario now creates its PipelineRun: the tenant fix
 removing `CHANNEL_NAME` (release-data !24109) is deployed, and the first push
@@ -38,8 +47,8 @@ validation: `konflux cluster "kflux-prd-rh02" and tenant "submariner-tenant"
 don't own the cluster profile "aws-konflux-prod"`
 (`EphemeralClusterValidationFailure`). The task kept polling the
 `InitializationFailed` phase for its full 2-hour timeout and exited 255, so the
-scenario ended `TestFail`. That is a profile-ownership failure, resolved only by
-the cluster-profile PR; it is not installation evidence and says nothing yet
+scenario ended `TestFail`. That is a profile-ownership failure addressed by
+the later cluster-profile PR; it is not installation evidence and says nothing yet
 about the OCP release. The `stable-5.0` update graph still has no nodes
 (`candidate-5.0` has releases, for example `5.0.0-rc.7`). Refresh these
 observations when executing the plan.
@@ -70,21 +79,21 @@ Release qualification needs the recorded candidate push build below. Both
 stage/prod ReleasePlans must remain matched before live verification and
 release.
 
-Progress #120 review, cluster-profile access and OCP 5 release availability in
-parallel. Build readiness and installation have separate gates.
+Verify cluster-profile access and OCP 5 release availability before installation.
+Build readiness and installation have separate gates.
 
 ## 2. Build and identify the candidate
 
 **Required for release:** every build must include the `fbc-inject-lifecycle-oci-ta`
 task. Snapshots built without it, such as the Pipelines as Code (PaC) push snapshots
-from `main` before fbc #86 merges, need a rebuild before a production release. The
+from `main` before FBC #86 merged, need a rebuild before a production release. The
 0.23.4 stage replacement builds of October 12 already include it.
 
 Before merging the candidate source, record whether all intended bundle and
 operand digests can be pulled from production or need approved 0.24 stage
 mirrors. Verify mappings and pull access if mirrors are needed. The install
-pipeline reads `.tekton/images-mirror-set.yaml` at that SHA; the current file
-targets 0.23 only. The first push run was given that 0.23 mirror set, but it
+pipeline reads `.tekton/images-mirror-set.yaml` at that SHA; the October 26
+source targeted 0.23 only. The first push run was given that 0.23 mirror set, but it
 failed before any bundle or operand pull, so pull behavior is unobserved. Both
 5.0 catalog bundles are `registry.redhat.io` digests and the mirrors use
 `AllowContactingSource`; record the actual pull behavior of the installing run
@@ -104,8 +113,8 @@ unless a reviewed Tekton Results (or equivalent) path recovers its run.
 trusted-task list marks several pins with an `expires_on` date (checked October 26):
 `init` on 2026-11-16 and `git-clone-oci-ta`, `build-image-index` (an 11-18 record
 also exists) and `fbc-inject-lifecycle-oci-ta` on 2026-11-22 in the merged 5.0
-pipelines, and from 2026-10-30 in the 4.x pipelines until fbc #86 merges. They do
-not block release under today's policy: `fbc-standard` and `fbc-stage` load
+pipelines, and from 2026-10-30 in the 4.x pipelines before FBC #86 merged. They did
+not block release under the policy inspected October 26: `fbc-standard` and `fbc-stage` load
 `policy-data`, which has `trusted_task_rules_enabled: true`, and when rules data is
 present the policy checks task versions against allow and deny rules and does not
 consult the expiry list. If that flag were false or the rules empty, the policy
@@ -122,9 +131,9 @@ time it with the candidate build below; an earlier build is not the candidate bu
 candidate record: `13b7416` only if its run is recovered as above, otherwise the
 first build made by these steps.
 
-1. Confirm the prerequisites: the cluster-profile change is merged, `stable-5.0` has
-   nodes or an approved test using the `candidate-5.0` OCP channel is ready (before
-   that the operator test fails the same way), and #120 is merged.
+1. Confirm live profile access and OCP release availability: `stable-5.0` needs
+   nodes, or an approved test using the `candidate-5.0` OCP channel must be ready.
+   Use the merged #120 helper.
 2. Merge a commit to `main` that touches the 5.0 build files. A rebuild needs such a
    commit; a retest comment on a pushed commit does not count, because its snapshot
    is not labelled as a push event.
@@ -145,16 +154,17 @@ Obtain `lifecycle.json` from the candidate push build's digest-pinned lifecycle
 and resolved task/image pins; review the lifecycle contents and retain the
 artifact digest and file SHA256. Review the contents against the catalog: the
 reference taken from the `13b7416` build lists versions 0.13 to 0.20 and 0.22 but
-none for 0.23 or 0.24, the only versions the 5.0 catalog ships, while the verifier
+none for 0.23 or 0.24, the only versions the 5.0 catalog shipped at that source,
+while the verifier
 checks only the schema, the package and a non-empty version list. Record any such
 gap as an open lifecycle-data issue ([OPGM-364][lifecycle]) or require an entry for
 each bundle in the catalog. Do not extract the reference from the catalog
 image under test. Reference provenance and support policy are manual review
 inputs, not claims established by the content verifier.
 
-Merge #120 with the reviewed fixes for omitted default-channel parameters,
-required operator-test labels and exact source/reference content verification
-before using `verify-live`. Use its merged helper and updated workflow with
+The merged #120 helper checks omitted default-channel parameters,
+required operator-test labels and exact source/reference content.
+Use it and the updated workflow for `verify-live` with
 `--expected-lifecycle` pointing to the reviewed candidate push reference.
 
 ## 3. Qualify installation and catalog contents
@@ -264,6 +274,7 @@ when the install path becomes usable.
 [pr-build]: https://konflux-ui.apps.kflux-prd-rh02.0fk9.p1.openshiftapps.com/ns/submariner-tenant/pipelinerun/submariner-fbc-5-0-on-pull-request-npbx4
 [profile]: https://github.com/openshift/release/pull/87176
 [helper]: https://github.com/stolostron/submariner-release-management/pull/120
+[lifecycle-builds]: https://github.com/stolostron/submariner-operator-fbc/pull/86
 [tenant]: https://gitlab.cee.redhat.com/releng/konflux-release-data/-/merge_requests/23786
 [rerun]: https://konflux-ci.dev/docs/testing/integration/rerunning/
 [lifecycle]: https://redhat.atlassian.net/browse/OPGM-364
