@@ -11,7 +11,8 @@ spec:
   snapshot: submariner-0-25-20261102-190914-000
   data:
     releaseNotes:
-      type: RHBA  # Change to RHSA if adding CVEs, RHEA for enhancements
+      type: RHBA
       issues:
-        fixed: []  # Fill with Step 9 workflow
-      cves: []     # Fill with Step 9 workflow (required if type=RHSA)
+        fixed:
+          - id: ACM-47088
+            source: issues.redhat.com
