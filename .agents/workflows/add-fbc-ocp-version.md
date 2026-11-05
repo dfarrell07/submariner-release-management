@@ -315,18 +315,19 @@ reviewed temporary pipeline copy that requests the `candidate-5.0` OCP channel w
 an approved exact prerelease, verify the observed cluster version matches, and remove the copy
 afterwards.
 Provisioning and deployment run only on push events. Rerun the scenario on the
-push snapshot named in your candidate record (the notes that identify the one build
-you are qualifying; see the [rollout runbook](../../plans/ocp-5-0-fbc-rollout.md)),
-never on a PR snapshot, whose `TestPassed` skips every install task. A new push
-build creates a new snapshot and replaces the candidate record. The test and build PipelineRuns are
-pruned within hours, so save the `provision-cluster` step log and the claim
+push snapshot in the candidate record: source SHA, snapshot/image, reviewed lifecycle
+reference and resolved test revisions. Append observed cluster version, installed
+bundle/channel, stage/prod identities and QE approval as they become available.
+Never use a PR snapshot, whose `TestPassed`
+skips every install task. A replacement build needs a new record and evidence.
+The test and build PipelineRuns are pruned within hours, so save the
+`provision-cluster` step log and the claim
 status from the Konflux UI before they disappear.
 The install task also pushes its workspace (the gathered cluster resources and the
 CSV and InstallPlan dumps) to `<OCI_REF>:<source-sha>-<taskrun-uid>` in the FBC
 component's quay repository, which outlives the pruned run; pull it after a run that
-reaches that step and look for cluster-version evidence, whose contents are not yet
-verified for 5.0. Note that the install pipeline and most of its steps are resolved
-from the integration catalog at `main`, and the run receives the tenant's image-push
+reaches that step and retain its cluster-version evidence. The install pipeline and
+most of its steps are resolved from the integration catalog at `main`, and the run receives the tenant's image-push
 credential, so record the resolved revisions with the evidence; "reviewed" here means
 the revision you inspected, not a pinned one.
 Inspect the resolved PipelineRun and TaskRuns for `get-unreleased-bundle`,
