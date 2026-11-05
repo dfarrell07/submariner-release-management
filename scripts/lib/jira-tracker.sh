@@ -1334,11 +1334,11 @@ get_release_summary() {
   echo "$result"
 }
 
-# Read-only, best-effort: is the release tracker still OPEN (found, and not yet
-# Resolved)? Makes auto-close idempotent — a re-run on an already-resolved
+# Read-only, best-effort: is the release tracker positively known to be open?
+# Makes auto-close idempotent — a re-run on an already-completed
 # release must not re-probe registries or add a duplicate resolution comment.
-# Returns 0 ONLY when it positively reads a non-Resolved parent status; returns 1
-# for Resolved, absent, unparseable, or unreachable — i.e. "do not auto-close
+# Returns 0 ONLY for a new/in-progress status category; returns 1
+# for done, absent, unparseable, or unreachable — i.e. "do not auto-close
 # now" (probe-failure counts as closed-enough so a flake can never re-comment).
 # Args: $1=version (X.Y.Z)
 tracker_is_open() {
@@ -1346,13 +1346,12 @@ tracker_is_open() {
   version=$(_normalize_version "$version")
   _validate_version "$version" || return 1
 
-  local version_label result issue status
+  local version_label result issue
   version_label=$(_version_to_label "$version")
   result=$(query_jira --jql "project = ACM AND labels = release-tracking AND labels = $version_label AND issuetype = Task" --fields "summary,status" 2>/dev/null) || return 1
   issue=$(_select_exact_jira_issue "Release Submariner $version" <<< "$result") || return 1
-  status=$(jq -er '.fields.status.name | select(type == "string" and length > 0)' <<< "$issue") || return 1
-
-  [ -n "$status" ] && [ "$status" != "$JIRA_STATUS_RESOLVED" ]
+  jq -e '.fields.status.statusCategory.key | . == "new" or . == "indeterminate"' \
+    <<< "$issue" >/dev/null
 }
 
 # Resolve a release tracker and its subtasks (mark the whole release done).
@@ -1414,9 +1413,9 @@ $step_json
 
   _add_comment "$parent_key" "$comment" || true
 
-  # Resolve all still-open subtasks (any not already Resolved)
+  # Preserve all completed subtasks, including Closed/Obsolete history.
   local subtasks
-  subtasks=$(query_jira --jql "parent = $parent_key AND status != $JIRA_STATUS_RESOLVED" --fields "key,summary" 2>/dev/null) || true
+  subtasks=$(query_jira --jql "parent = $parent_key AND statusCategory != Done" --fields "key,summary" 2>/dev/null) || true
 
   if [ -n "$subtasks" ]; then
     local keys

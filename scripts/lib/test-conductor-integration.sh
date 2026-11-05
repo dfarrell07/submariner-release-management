@@ -312,12 +312,6 @@ eval "$_orig_update_step_it6"
 assert_eq "IT-6: unknown step rejected (exit 1)" "$_it6_rc" "1"
 assert_contains "IT-6: error message mentions step" "$_it6_err" "unknownStep"
 
-# NOTE: The STEP_ORDER guard at autorelease.sh ~lines 1453-1469 (fast-fail for
-# unknown --complete/--refresh keys) runs AFTER _resolve_version, which requires
-# Jira. It cannot be tested via subprocess without real Jira auth. IT-6 covers
-# handle_step_override (same rejection, same exit code) via the unit-test path.
-# The guard is correct; this gap is accepted as a known limitation.
-
 # ─────────────────────────────────────────────────────────────────────────────
 # IT-7: version labels against one fake GitHub. Repos in _GH_WRONG have stale
 # release branch Dockerfiles; repos in _GH_PR_REPOS (default: the wrong ones)
@@ -601,6 +595,68 @@ for _it9_case in comment-fails transition-fails success; do
     assert_contains "IT-9 $_it9_case: failed completion stops" "$_it9_out" 'Cannot verify'
   fi
   assert_eq "IT-9 $_it9_case: completion precedes one helper dispatch" "$(cat "$_IT_LOG")" $'completion\ntektonTasks'
+done
+
+echo "IT-10: Real CLI refuses unreliable or completed tracker selection before writes"
+_IT10_BIN="$_IT_TMPDIR/cli-bin"; mkdir -p "$_IT10_BIN"
+export _IT10_RESPONSE="$_IT_TMPDIR/cli-response" _IT10_WRITES="$_IT_TMPDIR/cli-writes"
+export _IT10_FALLBACK="$_IT_TMPDIR/cli-fallback"
+export _IT10_ROOT="$_IT_TMPDIR" _IT_LOG="$_IT10_WRITES"
+# Even a regression past the rejection boundary may only dispatch harmless stubs.
+for _it10_step in "${STEP_ORDER[@]}"; do
+  _it10_script="${STEP_SCRIPT[$_it10_step]:-}"
+  [ -z "$_it10_script" ] || _make_logging_stub "$_it10_script" "dispatch:$_it10_step"
+done
+cat > "$_IT10_BIN/acli" <<'MOCK'
+#!/usr/bin/env bash
+case "${0##*/}:$*" in
+  'acli:jira workitem search '*)
+    [ "$_IT10_CASE" != query-fails ] || exit 1
+    cat "$_IT10_RESPONSE" ;;
+  'acli:jira workitem comment list '*) echo '[]' ;;
+  'gh:api --paginate repos/submariner-io/releases/releases '*)
+    echo upstream >> "$_IT10_FALLBACK"; echo 'v0.99.1' ;;
+  'git:rev-parse --show-toplevel') echo "$_IT10_ROOT" ;;
+  *) printf '%s: %s\n' "${0##*/}" "$*" >> "$_IT10_WRITES"; exit 1 ;;
+esac
+MOCK
+chmod +x "$_IT10_BIN/acli"
+for _it10_tool in gh oc skopeo git; do cp "$_IT10_BIN/acli" "$_IT10_BIN/$_it10_tool"; done
+for _it10_case in query-fails malformed empty-summary concatenated abandoned-upstream open-preview; do
+  case "$_it10_case" in
+    query-fails) printf '[]' > "$_IT10_RESPONSE" ;;
+    malformed) printf '{}' > "$_IT10_RESPONSE" ;;
+    *)
+      _it10_category='done' _it10_status=Closed
+      _it10_title='Release Submariner 0.99.1'
+      if [ "$_it10_case" = open-preview ] || [ "$_it10_case" = empty-summary ]; then
+        _it10_category=indeterminate; _it10_status='In Progress'
+      fi
+      [ "$_it10_case" != empty-summary ] || _it10_title=''
+      jq -cn --arg category "$_it10_category" --arg status "$_it10_status" --arg title "$_it10_title" \
+        '[{key:"TEST-CLI",fields:{summary:$title,status:{name:$status,statusCategory:{key:$category}}}}]' \
+        > "$_IT10_RESPONSE"
+      [ "$_it10_case" != concatenated ] || printf '\n[]\n' >> "$_IT10_RESPONSE" ;;
+  esac
+  : > "$_IT10_WRITES"
+  : > "$_IT10_FALLBACK"
+  _it10_args=(0.99)
+  [ "$_it10_case" != open-preview ] || _it10_args+=(--dry-run)
+  _it10_rc=0
+  _it10_out=$(cd "$_IT10_ROOT" && env -u _AUTORELEASE_TESTING _IT10_CASE="$_it10_case" PATH="$_IT10_BIN:$PATH" \
+    bash "$_LIB_DIR/../autorelease.sh" "${_it10_args[@]}" 2>&1) || _it10_rc=$?
+  _it10_expected=1
+  [ "$_it10_case" != open-preview ] || _it10_expected=0
+  assert_eq "IT-10 $_it10_case: exit status" "$_it10_rc" "$_it10_expected"
+  assert_eq "IT-10 $_it10_case: no writes or release dispatch" "$(cat "$_IT10_WRITES")" ''
+  if [ "$_it10_case" != abandoned-upstream ]; then
+    assert_eq "IT-10 $_it10_case: no upstream fallback" "$(cat "$_IT10_FALLBACK")" ''
+  fi
+  if [ "$_it10_case" = open-preview ]; then
+    assert_contains 'IT-10: valid open tracker reaches preview' "$_it10_out" 'Dry run: Submariner 0.99.1'
+  else
+    assert_not_contains "IT-10 $_it10_case: no tracker creation" "$_it10_out" 'creating one now'
+  fi
 done
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
