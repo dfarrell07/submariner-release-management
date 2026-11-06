@@ -668,14 +668,14 @@ assert_eq "close: subtask ACM-101 resolved" "$(_has_transition 'ACM-101=>Resolve
 assert_eq "close: subtask ACM-102 resolved" "$(_has_transition 'ACM-102=>Resolved')" "yes"
 assert_eq "close: never transitions to Closed" "$(_has_transition 'Closed')" "no"
 
-# close_release_tracker: subtask query filters on "status != Resolved".
+# close_release_tracker: preserve every completed status, including Closed.
 # query_jira runs inside a $() subshell in the impl, so capture via a temp file
 # (a global var assignment would not survive the subshell).
 _CLOSE_JQL_FILE=$(mktemp)
 query_jira() { printf '%s' "$*" >"$_CLOSE_JQL_FILE"; echo '[]'; }
 close_release_tracker "0.24.0" "x" >/dev/null 2>&1 || true
-assert_eq "close: subtask query filters status != Resolved" \
-  "$(grep -q 'status != Resolved' "$_CLOSE_JQL_FILE" && echo yes || echo no)" "yes"
+assert_eq "close: subtask query excludes the Done category" \
+  "$(grep -q 'statusCategory != Done' "$_CLOSE_JQL_FILE" && echo yes || echo no)" "yes"
 rm -f "$_CLOSE_JQL_FILE"
 
 # close_release_tracker: no tracker found → returns 0, no transitions attempted
@@ -699,14 +699,29 @@ query_jira() { echo "[]"; }
 _add_comment() { return 0; }
 
 # tracker_is_open: gates auto-close so re-runs on a resolved release don't
-# re-probe / re-comment. Open only when it POSITIVELY reads a non-Resolved status.
+# re-probe / re-comment. Open only for a positively known nonterminal category.
 # (Capture rc via `&& ... || ...` so a returned 1 doesn't set -e abort the run.)
-query_jira() { echo '[{"key":"ACM-99","fields":{"summary":"Release Submariner 0.24.0","status":{"name":"In Progress"}}}]'; }
+query_jira() { echo '[{"key":"ACM-99","fields":{"summary":"Release Submariner 0.24.0","status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}}}}]'; }
 tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
 assert_eq "tracker_is_open: In Progress → open (0)" "$rc" "0"
-query_jira() { echo '[{"key":"ACM-99","fields":{"summary":"Release Submariner 0.24.0","status":{"name":"Resolved"}}}]'; }
+query_jira() { echo '[{"key":"ACM-99","fields":{"summary":"Release Submariner 0.24.0","status":{"name":"Resolved","statusCategory":{"key":"done"}}}}]'; }
 tracker_is_open "0.24.0" >/dev/null 2>&1 && rc=0 || rc=$?
 assert_eq "tracker_is_open: Resolved → not open (1)" "$rc" "1"
+for resolution in Done Obsolete; do
+  query_jira() {
+    jq -cn --arg resolution "$resolution" '[{key:"ACM-99",fields:{
+      summary:"Release Submariner 0.24.0",status:{name:"Closed",statusCategory:{key:"done"}},
+      resolution:{name:$resolution}}}]'
+  }
+  tracker_is_open 0.24.0 >/dev/null 2>&1 && rc=0 || rc=$?
+  assert_eq "tracker_is_open: Closed/$resolution → not open" "$rc" "1"
+done
+query_jira() { echo '[{"key":"ACM-99","fields":{"summary":"Release Submariner 0.24.0","status":{"name":"Backlog","statusCategory":{"key":"new"}}}}]'; }
+tracker_is_open 0.24.0 >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq "tracker_is_open: Backlog → open" "$rc" "0"
+query_jira() { echo '[{"key":"ACM-99","fields":{"summary":"Release Submariner 0.24.0","status":{"name":"In Progress"}}}]'; }
+tracker_is_open 0.24.0 >/dev/null 2>&1 && rc=0 || rc=$?
+assert_eq "tracker_is_open: missing category → unverified" "$rc" "1"
 for open_case in open-clone resolved-clone duplicates; do
   query_jira() {
     local canonical=Resolved clone='In Progress'
@@ -714,8 +729,9 @@ for open_case in open-clone resolved-clone duplicates; do
     local clone_title='Release Submariner 0.24.0 copy'
     [ "$open_case" != duplicates ] || clone_title='Release Submariner 0.24.0'
     jq -cn --arg canonical "$canonical" --arg clone "$clone" --arg clone_title "$clone_title" \
-      '[{key:"ACM-CLONE",fields:{summary:$clone_title,status:{name:$clone}}},
-        {key:"ACM-ACTUAL",fields:{summary:"Release Submariner 0.24.0",status:{name:$canonical}}}]'
+      'def status($name): {name:$name,statusCategory:{key:(if $name == "Resolved" then "done" else "indeterminate" end)}};
+       [{key:"ACM-CLONE",fields:{summary:$clone_title,status:status($clone)}},
+        {key:"ACM-ACTUAL",fields:{summary:"Release Submariner 0.24.0",status:status($canonical)}}]'
   }
   tracker_is_open 0.24.0 >/dev/null 2>&1 && rc=0 || rc=$?
   expected_rc=1

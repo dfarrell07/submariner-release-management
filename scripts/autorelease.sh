@@ -53,25 +53,48 @@ usage() {
 _resolve_version() {
   local major_minor="$1"
 
-  # Strategy 1: latest tracked patch in Jira (status filter excludes resolved)
+  # Keep terminal history so fallback cannot select a completed/abandoned attempt.
+  # An outage is not evidence that no open tracker exists.
   local tracker_result
-  tracker_result=$(query_jira --jql "project = ACM AND labels = release-tracking AND labels = submariner AND issuetype = Task AND status != Resolved" --fields "key,summary" 2>/dev/null) || tracker_result=""
+  tracker_result=$(query_jira --jql "project = ACM AND labels = release-tracking AND labels = submariner AND issuetype = Task" --fields "summary,status" 2>/dev/null) || {
+    echo "ERROR: Could not read Jira release trackers; refusing to infer a release version." >&2
+    return 1
+  }
+  if ! jq -es 'length == 1 and (.[0] | type == "array" and all(.[];
+    (.fields.summary | type == "string" and length > 0) and
+    (.fields.status.statusCategory.key | . == "new" or . == "indeterminate" or . == "done")))' \
+      <<< "$tracker_result" >/dev/null 2>&1; then
+    echo "ERROR: Invalid Jira release tracker response; refusing to infer a release version." >&2
+    return 1
+  fi
 
-  if [ -n "$tracker_result" ]; then
-    local tracked
-    tracked=$(echo "$tracker_result" | jq -r --arg mm "$major_minor" '
-      [.[] | .fields.summary // "" |
-       select(startswith("Release Submariner " + $mm + ".")) |
-       capture("^Release Submariner (?<ver>[0-9]+\\.[0-9]+\\.[0-9]+)\\z") |
-       .ver] |
-      sort_by(split(".") | map(tonumber)) |
-      last // empty
-    ' 2>/dev/null || true)
+  local candidate
+  candidate=$(_resolve_version_candidate "$major_minor" "$tracker_result") || return 1
+  if ! jq -e --arg title "Release Submariner ${candidate%%:*}" '
+    all(.[]; .fields.summary != $title or .fields.status.statusCategory.key != "done")' \
+      <<< "$tracker_result" >/dev/null; then
+    echo "ERROR: Cannot safely select ${candidate%%:*}: completed/abandoned tracker or failed state check. Choose the full release version explicitly." >&2
+    return 1
+  fi
+  printf '%s\n' "$candidate"
+}
 
-    if [ -n "$tracked" ]; then
-      echo "${tracked}:tracker"
-      return 0
-    fi
+# Resolve from validated Jira data and read-only downstream/upstream sources.
+_resolve_version_candidate() {
+  local major_minor="$1" tracker_result="$2"
+  local tracked
+  tracked=$(jq -r --arg mm "$major_minor" '
+    [.[] | select(.fields.status.statusCategory.key != "done") | .fields.summary |
+     select(startswith("Release Submariner " + $mm + ".")) |
+     capture("^Release Submariner (?<ver>[0-9]+\\.[0-9]+\\.[0-9]+)\\z") |
+     .ver] |
+    sort_by(split(".") | map(tonumber)) |
+    last // empty
+  ' <<< "$tracker_result") || return 1
+
+  if [ -n "$tracked" ]; then
+    echo "${tracked}:tracker"
+    return 0
   fi
 
   # Strategy 2: downstream in-progress (stage YAML exists, no matching prod)

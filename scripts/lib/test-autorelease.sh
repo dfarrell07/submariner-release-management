@@ -48,13 +48,15 @@ query_jira() {
     {"fields":{"summary":"Release Submariner 0.24.0"}},
     {"fields":{"summary":"Release Submariner 0.24.2"}},
     {"fields":{"summary":"Release Submariner 0.24.1"}},
-    {"fields":{"summary":"Release Submariner 0.25.0"}}
-  ]'
+    {"fields":{"summary":"Release Submariner 0.25.0"}},
+    {"fields":{"summary":"Release Submariner 0.24.3","status":{"name":"Closed","statusCategory":{"key":"done"}},"resolution":{"name":"Done"}}},
+    {"fields":{"summary":"Release Submariner 0.24.4","status":{"name":"Closed","statusCategory":{"key":"done"}},"resolution":{"name":"Obsolete"}}}
+  ]' | jq 'map(.fields.status //= {name:"In Progress", statusCategory:{key:"indeterminate"}})'
 }
 _latest_downstream_version() { :; }
 _latest_upstream_release() { :; }
 resolved=$(_resolve_version "0.24")
-assert_eq "tracker: picks latest patch" "${resolved%%:*}" "0.24.2"
+assert_eq "tracker: picks latest open patch before newer terminal trackers" "${resolved%%:*}" "0.24.2"
 assert_eq "tracker: source is tracker" "${resolved#*:}" "tracker"
 
 # Renamed clones may retain the tracker labels. Only an exact canonical title
@@ -67,24 +69,54 @@ query_jira() {
     {"fields":{"summary":"Release Submariner 0.24.97-rc1"}},
     {"fields":{"summary":"Copy of Release Submariner 0.24.96"}},
     {"fields":{"summary":"Release Submariner 0.25.99"}}
-  ]'
+  ]' | jq 'map(.fields.status = {name:"In Progress", statusCategory:{key:"indeterminate"}})'
 }
 assert_eq "tracker: renamed clones cannot select a newer patch" "$(_resolve_version "0.24")" "0.24.1:tracker"
-query_jira() { printf '%s' '[{"fields":{"summary":"Release Submariner 0.24.99 backup copy"}}]'; }
+query_jira() { printf '%s' '[{"fields":{"summary":"Release Submariner 0.24.99 backup copy","status":{"statusCategory":{"key":"indeterminate"}}}}]'; }
 assert_eq "tracker: only a renamed clone falls back to default" "$(_resolve_version "0.24")" "0.24.0:default"
 
-# 1b: Resolved tracker → falls through to Strategy 2/3 (next patch computed).
-# The new JQL (AND status != Resolved) returns empty for a resolved tracker, so
-# stub query_jira to return [] to simulate the server-side filter.
+# Completed trackers must never be selected, including Closed/Obsolete attempts.
 _ldv_1b=$(declare -f _latest_downstream_version)
 _lus_1b=$(declare -f _latest_upstream_release)
 _qj_1b=$(declare -f query_jira)
-query_jira() { echo '[]'; }
+query_jira() {
+  echo '[
+    {"fields":{"summary":"Release Submariner 0.24.97","status":{"name":"Closed","statusCategory":{"key":"done"}},"resolution":{"name":"Obsolete"}}},
+    {"fields":{"summary":"Release Submariner 0.24.98","status":{"name":"Closed","statusCategory":{"key":"done"}},"resolution":{"name":"Done"}}},
+    {"fields":{"summary":"Release Submariner 0.24.99","status":{"name":"Resolved","statusCategory":{"key":"done"}}}}
+  ]'
+}
 _latest_downstream_version() { echo "0.24.2:complete"; }
 _latest_upstream_release() { echo "0.24.2"; }
 resolved=$(_resolve_version "0.24")
 assert_eq "resolved tracker: falls through to next patch" "${resolved%%:*}" "0.24.3"
 assert_eq "resolved tracker: source is released" "${resolved#*:}" "released"
+# An unshipped upstream tag must not bring an abandoned attempt back via fallback.
+query_jira() { echo '[{"fields":{"summary":"Release Submariner 0.24.3","status":{"name":"Closed","statusCategory":{"key":"done"}},"resolution":{"name":"Obsolete"}}}]'; }
+_latest_downstream_version() { echo '0.24.2:complete'; }
+_latest_upstream_release() { echo '0.24.3'; }
+resolved=$(_resolve_version 0.24 2>/dev/null) && rc=0 || rc=$?
+assert_eq "abandoned upstream fallback: refuses version selection" "$rc" "1"
+assert_eq "abandoned upstream fallback: no inferred version" "$resolved" ""
+_latest_downstream_version() { echo '0.24.3:in-progress'; }
+resolved=$(_resolve_version 0.24 2>/dev/null) && rc=0 || rc=$?
+assert_eq "abandoned stage fallback: refuses version selection" "$rc" "1"
+assert_eq "abandoned stage fallback: no inferred version" "$resolved" ""
+_state_check_marker=$(mktemp)
+resolved=$(
+  jq() {
+    if [[ "$*" == *'--arg title '* ]]; then
+      echo failed > "$_state_check_marker"
+      return 2
+    fi
+    command jq "$@"
+  }
+  _resolve_version 0.24 2>/dev/null
+) && rc=0 || rc=$?
+assert_eq "tracker state check: injected processing failure" "$(cat "$_state_check_marker")" failed
+assert_eq "tracker state check: failure refuses selection" "$rc" "1"
+assert_eq "tracker state check: failure emits no inferred version" "$resolved" ""
+rm -f "$_state_check_marker"
 eval "$_qj_1b"
 eval "$_ldv_1b"; eval "$_lus_1b"
 
@@ -148,16 +180,21 @@ resolved=$(_resolve_version "0.99")
 assert_eq "fallback: defaults to .0" "${resolved%%:*}" "0.99.0"
 assert_eq "fallback: source is default" "${resolved#*:}" "default"
 
-# Strategy 1 degrades gracefully on a Jira outage: query_jira non-zero →
-# tracker_result="" (line 50 `|| tracker_result=""`) → skip tracker, fall through
-# to the downstream/upstream strategies rather than aborting. All the cases above
-# feed query_jira valid output, so this failure path was never exercised.
+# An unreadable tracker list must not select a different release via fallback.
 query_jira() { return 1; }
 _latest_downstream_version() { echo "0.24.1:in-progress"; }
 _latest_upstream_release() { :; }
-resolved=$(_resolve_version "0.24")
-assert_eq "jira outage: falls back to downstream" "${resolved%%:*}" "0.24.1"
-assert_eq "jira outage: source is downstream" "${resolved#*:}" "in-progress"
+resolved=$(_resolve_version "0.24" 2>/dev/null) && rc=0 || rc=$?
+assert_eq "jira outage: refuses version selection" "$rc" "1"
+assert_eq "jira outage: no inferred version" "$resolved" ""
+for bad_tracker in '' null '{}' 'not-json' '[{}]' $'[]\n[]' \
+  '[{"fields":{"summary":"","status":{"statusCategory":{"key":"indeterminate"}}}}]' \
+  '[{"fields":{"summary":"Release Submariner 0.24.9","status":{"name":"In Progress"}}}]'; do
+  query_jira() { printf '%s' "$bad_tracker"; }
+  resolved=$(_resolve_version "0.24" 2>/dev/null) && rc=0 || rc=$?
+  assert_eq "invalid tracker response: refuses version selection ($bad_tracker)" "$rc" "1"
+  assert_eq "invalid tracker response: no inferred version ($bad_tracker)" "$resolved" ""
+done
 
 # Restore original stubs
 eval "$_orig_query_jira"
