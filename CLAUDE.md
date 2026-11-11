@@ -55,7 +55,7 @@ isn't needed once the tag exists.
 
 @/rpm-lockfile-update
 
-**Alternative:** `make rpm-lockfile-update VERSION=<version>`
+**Alternative:** `make rpm-lockfile-update BRANCH=<version>`
 
 Automated step: updates RPM lockfiles across Submariner component repos. Runs after
 Tekton task updates, before CVE scanning.
